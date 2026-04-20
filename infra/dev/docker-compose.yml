@@ -1,0 +1,81 @@
+name: cortex-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cortex
+      POSTGRES_PASSWORD: cortex
+      POSTGRES_DB: cortex_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - cortex_postgres_data:/var/lib/postgresql/data
+      - ./init-postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cortex -d cortex_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    restart: unless-stopped
+    command: >
+      gcloud beta emulators pubsub start
+      --host-port=0.0.0.0:8085
+      --project=cortex-dev-local
+    ports:
+      - '8085:8085'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:8085/ || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  fake-gcs:
+    image: fsouza/fake-gcs-server:latest
+    restart: unless-stopped
+    command: -scheme http -public-host localhost:4443 -port 4443
+    ports:
+      - '4443:4443'
+    volumes:
+      - cortex_gcs_data:/storage
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:4443/storage/v1/b || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - cortex_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:4
+    restart: unless-stopped
+    ports:
+      - '18080:8080'
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  cortex_postgres_data:
+  cortex_redis_data:
+  cortex_gcs_data:

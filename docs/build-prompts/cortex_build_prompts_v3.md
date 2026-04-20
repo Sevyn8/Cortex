@@ -1,12 +1,18 @@
-# Cortex Build Prompts for Claude Code — v3 Consolidated
+# Cortex Build Prompts for Claude Code — v3.1 Consolidated
 
-**Companion document to:** Sevyn8 Cortex Complete System Specification v2.0
+**Companion document to:** Sevyn8 Cortex Complete System Specification v2.2
 **Scope:** Every prompt needed to build Cortex, ordered by execution sequence
 **Audience:** Seema + engineering team driving Claude Code sessions
 **Status:** CONFIDENTIAL — Sevyn8 Private Limited
-**Version:** 3.0 (v2 prompts + ROOS external + Kafka-at-edges architecture decisions)
+**Version:** 3.1 (v3.0 + P0.8 expanded for protocol-agnostic tool platform per ADR-MCP-001)
 
 ---
+
+## What's new in v3.1 vs v3.0
+
+- **P0.8 (MCP server scaffolding) expanded from ~30 lines to a full tool-platform scaffold.** The v3.0 P0.8 was a minimal three-server skeleton; v3.1 reflects the decision in ADR-MCP-001 that Cortex is MCP-native with a protocol-agnostic tool platform. The expanded prompt adds capability-layer packages (`@cortex/cortex-tools-{core,edge,admin,shared}`), the shared tool registry (`@cortex/tool-registry`), and per-server trust-model ADR stubs (ADR-MCP-002/003/004). Tool implementations live in packages; MCP servers are thin adapters. Protocol migration, should MCP be superseded, is bounded to the adapter layer.
+- **Spec companion updated to v2.2** to close the "Case for MCP" section reference. ADR-MCP-001 is the decision of record; spec §Part VII-b summarizes it; this prompts file references both.
+- **No changes to any other prompt.** P0.1 through P0.7, P0.9, P0.10, and all of P1 through P15 are untouched. If you already ran P0.1–P0.7 on v3.0, v3.1 is a drop-in replacement that affects only what you run at P0.8.
 
 ## What's new in v3 vs v2
 
@@ -45,34 +51,40 @@ Everything else — prompt ordering, meta-prompts, P0 through P3, P5 through P15
 Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = you're ready.
 
 ### Account & tooling
+
 - [ ] Claude Code installed and logged in (`claude --version` works)
 - [ ] Paid Claude plan active (Pro or Max) — Claude Code is not on free tier
 - [ ] GitHub org `sevyn8` set up with branch protection rules drafted
 - [ ] Repository `sevyn8/cortex` created (private)
 
 ### Repo prerequisites
+
 - [ ] v2 spec docx at `/docs/spec/cortex_v2.docx`
 - [ ] Sevyn8 skill at `/docs/skills/sevyn8-workflow/SKILL.md`
 - [ ] This prompts file at `/docs/build-prompts/cortex_build_prompts_v3.md`
 - [ ] Empty progress tracker at `/docs/progress/status.md` (template in Appendix C)
 
 ### GCP foundations
+
 - [ ] GCP organization set up (not personal Google account)
 - [ ] Billing account attached, spending alerts configured
 - [ ] Projects planned: cortex-dev, cortex-staging, cortex-production
 - [ ] Region decided: asia-south1 primary, asia-south2 DR
 
 ### Third-party providers
+
 - [ ] WorkOS account created (or accept deferred setup for Week 4)
 - [ ] Anthropic API key procured for A05 LLM Gateway usage
 - [ ] Email provider chosen (Resend recommended for Phase 1)
 - [ ] Artifact storage plan — Google Artifact Registry (same GCP project)
 
 ### Architectural decisions — confirm defaults below
+
 - [ ] Decisions reviewed and defaults accepted (see next section)
 - [ ] Deviations from defaults captured in ADR before P0.1
 
 ### Display Data coordination
+
 - [ ] Ithina named contact for HHT app integration
 - [ ] Ithina named contact for POS file format + access
 - [ ] Training data plan for YOLO fine-tune (access, labeling quality, quantity)
@@ -80,6 +92,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 - [ ] Display Data custom domain chosen (e.g., insights.ithina.com)
 
 ### Legal / compliance
+
 - [ ] DPA between Sevyn8 and Display Data drafted (can sign during build, MUST sign before production)
 - [ ] Sub-processor list at T-0 documented (GCP, Anthropic, WorkOS, Resend, etc.)
 - [ ] DPDP compliance posture documented
@@ -94,39 +107,39 @@ The v1 prompts left several choices open ("Auth0 or WorkOS"). This v2 bakes in s
 
 ### Stack
 
-| Decision | Default | Rationale |
-|---|---|---|
-| **Auth provider** | WorkOS | B2B multi-tenant focus; Enterprise SSO first-class; simpler DX than Auth0 |
-| **Monorepo tool** | Turborepo | Faster, less ceremony; re-evaluate Nx at Phase 2 if repo complexity grows |
-| **ORM** | Drizzle | TypeScript-first, bi-temporal column friendly, avoids Prisma's migration friction |
-| **CSS framework** | Tailwind 4 | Pin to v4.x; use CSS vars exclusively for tenant theming |
-| **Migration tool** | drizzle-kit | TypeScript-native; co-located with ORM |
-| **RSC strategy** | Server-rendered app shell; Client Components for screens | Admin screens are interactive; analytical screens mix of both |
-| **Frontend testing** | Vitest + RTL + Playwright + axe-core + Lighthouse CI | See P15.4 |
+| Decision             | Default                                                  | Rationale                                                                         |
+| -------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **Auth provider**    | WorkOS                                                   | B2B multi-tenant focus; Enterprise SSO first-class; simpler DX than Auth0         |
+| **Monorepo tool**    | Turborepo                                                | Faster, less ceremony; re-evaluate Nx at Phase 2 if repo complexity grows         |
+| **ORM**              | Drizzle                                                  | TypeScript-first, bi-temporal column friendly, avoids Prisma's migration friction |
+| **CSS framework**    | Tailwind 4                                               | Pin to v4.x; use CSS vars exclusively for tenant theming                          |
+| **Migration tool**   | drizzle-kit                                              | TypeScript-native; co-located with ORM                                            |
+| **RSC strategy**     | Server-rendered app shell; Client Components for screens | Admin screens are interactive; analytical screens mix of both                     |
+| **Frontend testing** | Vitest + RTL + Playwright + axe-core + Lighthouse CI     | See P15.4                                                                         |
 
 ### Scope
 
-| Decision | Phase 1 | Phase 2+ |
-|---|---|---|
-| **I03 Multi-Source Conflict Resolution** | Deferred | Phase 2 (Body Shop drives demand) |
-| **I02 Knowledge Graph** | Phase 1 cut (Postgres recursive CTEs) | Full graph DB Phase 3 |
-| **ED01 Edge-Cloud Orchestrator** | Deferred | Phase 2 (no edge devices in Display Data Phase 1) |
-| **Mobile UX** | Tablet responsiveness (768px+) | Mobile phone (375-767px) Phase 2 |
-| **Workspace isolation** | Strict data isolation | Tenant Admin aggregate rollup for billing/ops only |
-| **Dashboard Builder UI** | Parked | Phase 3; Sevyn8 authors all dashboards in Phase 1-2 |
-| **SCR-24 Platform Ops** | Minimal cut (provisioning wizard only) | Full capability Phase 2 |
+| Decision                                 | Phase 1                                | Phase 2+                                            |
+| ---------------------------------------- | -------------------------------------- | --------------------------------------------------- |
+| **I03 Multi-Source Conflict Resolution** | Deferred                               | Phase 2 (Body Shop drives demand)                   |
+| **I02 Knowledge Graph**                  | Phase 1 cut (Postgres recursive CTEs)  | Full graph DB Phase 3                               |
+| **ED01 Edge-Cloud Orchestrator**         | Deferred                               | Phase 2 (no edge devices in Display Data Phase 1)   |
+| **Mobile UX**                            | Tablet responsiveness (768px+)         | Mobile phone (375-767px) Phase 2                    |
+| **Workspace isolation**                  | Strict data isolation                  | Tenant Admin aggregate rollup for billing/ops only  |
+| **Dashboard Builder UI**                 | Parked                                 | Phase 3; Sevyn8 authors all dashboards in Phase 1-2 |
+| **SCR-24 Platform Ops**                  | Minimal cut (provisioning wizard only) | Full capability Phase 2                             |
 
 ### Non-functional targets
 
-| Target | Value |
-|---|---|
-| **Enterprise tier RPO** | 1 hour |
-| **Enterprise tier RTO** | 2 hours |
-| **Authz decision p99** | < 5ms cached |
-| **Alert rule propagation** | < 30s |
-| **Unit test coverage** | 80% line / 70% branch |
-| **Accessibility** | WCAG 2.1 AA on every screen |
-| **Performance budget** | LCP < 2.5s, TBT < 300ms, CLS < 0.1 |
+| Target                     | Value                              |
+| -------------------------- | ---------------------------------- |
+| **Enterprise tier RPO**    | 1 hour                             |
+| **Enterprise tier RTO**    | 2 hours                            |
+| **Authz decision p99**     | < 5ms cached                       |
+| **Alert rule propagation** | < 30s                              |
+| **Unit test coverage**     | 80% line / 70% branch              |
+| **Accessibility**          | WCAG 2.1 AA on every screen        |
+| **Performance budget**     | LCP < 2.5s, TBT < 300ms, CLS < 0.1 |
 
 ---
 
@@ -304,12 +317,14 @@ The following must be the content of `/CLAUDE.md` after P0.1 completes:
 # Cortex — Claude Code instructions
 
 ## Spec-first workflow
+
 - Read `/docs/spec/cortex_v2.docx` before implementing any module or screen
 - Every functional requirement (FR-NNN) in a spec section has at least one test
 - Spec drift: update the spec OR update the code, never leave drift uncommented
 - Significant divergence → ADR in `/docs/architecture/decisions/`
 
 ## Coding conventions
+
 - TypeScript strict. No implicit any. No @ts-ignore without ADR reference.
 - Functions < 40 lines; files < 400 lines (soft limits — flag violations in PR review)
 - No business logic in controllers/routes. Thin HTTP handlers → service layer → repository
@@ -317,33 +332,39 @@ The following must be the content of `/CLAUDE.md` after P0.1 completes:
 - No `console.log`; use `@cortex/observability` logger
 
 ## Commit conventions
+
 - Conventional commits. Types: feat, fix, docs, refactor, test, chore, ops
 - Scope = module ID (lowercase): `feat(f01): ...`
 - Include prompt ID in commit body: `Prompt: P1.1`
 - Reference spec section: `Spec: §F01-FR-003`
 
 ## Branching & PR
+
 - Trunk-based. Main is always deployable
 - Short-lived branches: `{prompt-id}-{short-desc}` (e.g., `p1.1-f01-multi-tenancy`)
 - PR required to merge to main. At least one human review for non-trivial PRs
 - Solo dev OK to self-review, but use M4 Code Review meta-prompt between sessions
 
 ## Audit events
+
 - Follow `/docs/architecture/audit-event-convention.md`
 - Every mutating service method emits an audit event via `@cortex/audit-events`
 
 ## Error responses
+
 - Standard shape: `{ code, message, correlation_id, details? }`
 - HTTP status alignment: 400 VALIDATION, 401 UNAUTH, 403 FORBIDDEN, 404 NOT_FOUND, 409 CONFLICT, 422 BUSINESS_RULE, 429 RATE_LIMIT, 500 INTERNAL
 - Use `@cortex/http-errors` package
 
 ## Testing
+
 - Unit test coverage: 80% line / 70% branch minimum
 - Every acceptance criterion from spec → at least one test
 - Regression tests required for bug fixes
 - Every widget and screen passes axe-core (WCAG 2.1 AA)
 
 ## Stack constraints
+
 - Auth: WorkOS (not Auth0, not self-hosted)
 - ORM: Drizzle (not Prisma, not raw pg)
 - Monorepo: Turborepo (not Nx)
@@ -352,6 +373,7 @@ The following must be the content of `/CLAUDE.md` after P0.1 completes:
 - Package manager: pnpm
 
 ## Feature flags
+
 - All new capabilities roll out behind a feature flag (`@cortex/feature-flags`)
 - Flags tracked in F04; retire within 6 months of stability
 ```
@@ -603,7 +625,7 @@ Acceptance:
 **Dependencies:** P0.3
 **Output:** Per-tenant KMS key helpers + Secret Manager access patterns
 
-```
+````
 Wire Secret Manager and KMS into the monorepo so services can retrieve secrets safely.
 
 /packages/secrets/
@@ -624,52 +646,200 @@ Caller pattern:
 import { secrets, envelope } from '@cortex/secrets';
 const apiKey = await secrets.get('sendgrid-api-key', { tenantId });
 const encrypted = await envelope.encrypt(tenantId, plaintext);
-```
+````
 
 Do NOT implement secret rotation logic yet — that's part of F02. Just the retrieval and envelope encryption.
 
 Acceptance:
+
 - Unit tests with a mocked KMS client verify envelope encrypt/decrypt round-trips
 - Integration test against dev GCP KMS confirms real keys work
 - Commit as `feat(secrets): secret-manager + per-tenant kms helpers`
+
 ```
 
 ---
 
-## P0.8: MCP server scaffolding
+## P0.8: MCP server scaffolding + protocol-agnostic tool platform (EXPANDED in v3.1)
 
-**Spec reference:** §"The Case for MCP" (Cortex Core, Edge, Admin/Ops), UX01 note on MCP-native architecture
-**Dependencies:** P0.1
-**Output:** Three MCP server skeletons, no tools yet
+**Spec reference:** §Part VII-b "The Case for MCP" (Cortex v2.2), UX01 note on MCP-native architecture
+**ADR reference:** ADR-MCP-001 (Cortex is MCP-Native — Three-Server Decomposition with Protocol-Agnostic Tool Platform) — **MUST READ before executing this prompt**
+**Dependencies:** P0.1 (monorepo), P0.6 (observability), P0.7 (secrets)
+**Output:** Three MCP server skeletons + four capability-layer packages + shared tool registry + three per-server trust-model ADR stubs, no tools yet
 
 ```
-Scaffold the three MCP servers specified in Cortex architecture. Do not implement any tools yet — just the servers that pass MCP protocol handshake and register as discoverable.
+
+Scaffold the MCP integration layer for Cortex per ADR-MCP-001. This is a protocol-agnostic tool platform that exposes capabilities over MCP today; MCP is the adapter, not the architecture. Before writing any code, read ADR-MCP-001 in full — the implementation pattern diagram is authoritative. Also re-read spec §Part VII-b in /docs/spec/cortex_v2.docx.
+
+Scope has four parts: (A) capability-layer packages, (B) shared tool registry, (C) three MCP server apps, (D) per-server trust-model ADR stubs. All four land in the same prompt execution because they form a coherent system.
+
+## Part A: Capability-layer packages
+
+Four new packages under /packages/ holding tool implementations and shared helpers. All tools live here, not in the servers.
+
+/packages/cortex-tools-core/ @cortex/cortex-tools-core
+
+- Tools exposed by mcp-cortex-core (tenant-scoped operations)
+- Empty shell at P0.8; modules register their tools here as they land
+
+/packages/cortex-tools-edge/ @cortex/cortex-tools-edge
+
+- Tools exposed by mcp-edge (edge zone operations)
+- Empty shell at P0.8; S15 and edge modules register tools here
+
+/packages/cortex-tools-admin/ @cortex/cortex-tools-admin
+
+- Tools exposed by mcp-admin-ops (Sevyn8-only cross-tenant operations)
+- Empty shell at P0.8; admin/ops modules register tools here
+
+/packages/cortex-tools-shared/ @cortex/cortex-tools-shared
+
+- Shared helpers: auth middleware abstractions, audit emitters, tool-schema base types, tenant-context extractors
+- Non-empty at P0.8: contains the tool definition base types (see below)
+
+Each capability-layer package:
+
+- TypeScript, strict mode (inherits tsconfig.base.json)
+- Zod as the schema library (matches rest of repo)
+- Exports tool definitions with the @cortex/tool-registry type `ToolDefinition<TInput, TOutput>`
+- Depends on @cortex/observability (logging), @cortex/tenant-context (request scoping), @cortex/audit-events (audit emission — stub package allowed if not yet built)
+
+## Part B: Shared tool registry
+
+One new package:
+
+/packages/tool-registry/ @cortex/tool-registry
+
+This package defines:
+
+1. `ToolDefinition<TInput, TOutput>` — the canonical tool shape:
+   {
+   name: string, // e.g., "query-canonical-entity"
+   description: string, // for agent discovery
+   inputSchema: ZodType<TInput>,
+   outputSchema: ZodType<TOutput>,
+   servers: Array<'mcp-cortex-core' | 'mcp-edge' | 'mcp-admin-ops'>,
+   auth: Record<ServerName, AuthProfile>,
+   implementation: (input: TInput, ctx: ToolContext) => Promise<TOutput>,
+   audit: { category: 'read' | 'write' | 'admin', severity: 'info' | 'warn' | 'error' },
+   }
+
+2. `ToolRegistry` class with:
+   - `register(tool: ToolDefinition): void` — modules call this at initialization
+   - `toolsFor(serverName: ServerName): ToolDefinition[]` — servers query this at startup
+   - `findTool(name: string): ToolDefinition | undefined`
+   - Idempotent registration (re-registering is a no-op with warning logged)
+   - In-process singleton for Phase 1 (all servers run in same workspace); distributed registry is a Phase 2 concern
+
+3. `ToolContext` — passed to tool implementations, contains:
+   - tenantId (string | undefined — undefined only for mcp-admin-ops cross-tenant tools)
+   - userId (string)
+   - correlationId (string)
+   - audit emitter
+   - logger
+
+4. `AuthProfile` — the declarative auth requirement per server:
+   - mode: 'tenant-scoped' | 'device-scoped' | 'cross-tenant-with-audit-gate' | 'super-admin-only'
+   - required_scopes?: string[]
+   - requires_justification?: boolean (for audit-gated tools)
+
+The registry has zero tools at P0.8. A trivial health tool may be registered per-server for protocol handshake testing, but no business logic.
+
+## Part C: Three MCP server apps
+
+Three apps under /apps/ — previously scaffolded as .gitkeep in P0.1, now populated:
 
 /apps/mcp-cortex-core/
-  — Data plane MCP server. Will expose tools for: query canonical entities, write to Silver/Gold layers, trigger algorithms, manage feature store. Consumed by tenant users and agents.
+— Public MCP server, tenant-scoped
+— Consumers: tenant users, their AI agents, Cortex internal agents, third-party integrations
+— Auth: OAuth2 via AC01 (stub until AC01 lands in P2.1); reject unauth requests
+— Trust model: ADR-MCP-002 (stub at P0.8, fleshed out before first tool lands)
 
 /apps/mcp-edge/
-  — Edge MCP server. Will expose tools for: register device, push model pack, query device health, consent cascade. Consumed by edge devices and S15 Edge Device Manager.
+— Edge zone MCP server, device-scoped with tenant attribution
+— Consumers: edge devices, edge agents, third-party edge integrators
+— Auth: device credentials (stub until S15 lands) + AC01 delegation for tenant attribution
+— Trust model: ADR-MCP-003 (stub at P0.8)
 
 /apps/mcp-admin-ops/
-  — Super Admin MCP server. Will expose tools for: provision tenant, cross-tenant query (audit-gated), incident response. Consumed only by Sevyn8 staff via SCR-24.
+— Sevyn8-only MCP server, cross-tenant capable, privileged
+— Consumers: Sevyn8 CSMs + engineers (via Claude Code or similar)
+— Auth: WorkOS SSO + Super Admin role enforcement (stub until AC01 lands)
+— Trust model: ADR-MCP-004 (stub at P0.8)
+— CRITICAL: Network ingress restricted to Sevyn8 VPC; no public endpoint
 
 Each server:
-- Uses the official TypeScript MCP SDK
-- Exposes HTTPS + SSE transport
-- Has OAuth2 authentication via AC01 (placeholder stub until AC01 exists)
-- Uses /packages/observability for logging
-- Uses /packages/tenant-context for request scoping
-- Has a health endpoint
-- Has a Dockerfile and can be deployed via Cloud Run
 
-/docs/architecture/decisions/ADR-003-mcp-server-split.md explains why three servers and what lives where.
+- Uses @modelcontextprotocol/sdk (current TypeScript MCP SDK, pinned version)
+- Exposes HTTPS + SSE transport on a distinct port
+- Pulls its tool catalog from @cortex/tool-registry at startup via `toolsFor('<server-name>')`
+- Applies its server-specific auth middleware before invoking any tool
+- Emits audit events for every tool invocation via @cortex/audit-events (per CLAUDE.md convention)
+- Logs via @cortex/observability with correlation ID propagation
+- Uses @cortex/tenant-context for per-request scoping (for cortex-core and edge)
+- Has a /health endpoint that returns {status, tool_count, server, version, uptime_s}
+- Has a Dockerfile for Cloud Run deployment (Cloud Run config lands in P0.3 Terraform)
+- Is a thin adapter — no business logic in the server itself
 
-Acceptance:
-- Each server builds and runs locally
-- `curl /health` returns 200 for each
-- Connecting a generic MCP client can list the (empty) tool catalog for each server
-- Commit as `feat(mcp): cortex-core + edge + admin-ops server skeletons`
+Adapter implementation pattern (applies to all three servers):
+
+1. Import registry, lookup tools for this server name
+2. For each tool, register with the MCP SDK's server.tool() API using the tool's schemas
+3. In the handler, apply server-specific auth middleware, extract ToolContext from the request, call tool.implementation(input, ctx), propagate the typed output, emit audit event
+4. Expose /health endpoint outside the MCP transport
+
+## Part D: Per-server trust-model ADR stubs
+
+Three new ADRs under /docs/architecture/decisions/:
+
+/docs/architecture/decisions/ADR-MCP-002-mcp-cortex-core-trust-model.md
+/docs/architecture/decisions/ADR-MCP-003-mcp-edge-trust-model.md
+/docs/architecture/decisions/ADR-MCP-004-mcp-admin-ops-trust-model.md
+
+At P0.8, each ADR is a STUB containing:
+
+- Status: Draft (to be finalized before first tool lands)
+- Context: which server this governs, which consumers, what trust boundary applies
+- Decision: placeholder — "trust model to be specified before first tool lands in this server"
+- References: ADR-MCP-001, relevant spec sections
+
+When the first tool is added to a server (typically in the first module prompt that registers one), the corresponding ADR is fleshed out with:
+
+- Specific auth requirements
+- Forbidden operations
+- Audit requirements specific to that server
+- Rate-limit profile
+- Compliance integration points
+
+Flesh-out is tracked as a blocker for the first-tool prompt, not for P0.8 itself.
+
+## Dependencies on other P0 prompts
+
+- P0.1 already scaffolded /apps/mcp-cortex-core, /apps/mcp-edge, /apps/mcp-admin-ops as .gitkeep stubs. P0.8 populates them. Remove the .gitkeep files per the repo convention.
+- P0.6 @cortex/observability must exist — used by all three servers. If P0.6 hasn't run yet, re-order so P0.6 lands first.
+- P0.7 @cortex/secrets must exist — used for MCP SDK config, OAuth client secrets. If P0.7 hasn't run, re-order.
+- @cortex/audit-events lands in P0.10. If P0.10 hasn't run yet at P0.8 time, use a stub that logs to console + flags "audit events not yet wired" — replaced when P0.10 lands.
+- @cortex/tenant-context already exists from P0.1 stubs.
+
+## Acceptance
+
+- All four capability-layer packages build (`pnpm --filter @cortex/cortex-tools-* build`)
+- Tool registry package builds and its ToolDefinition type is exported cleanly
+- All three MCP servers build and run locally (`pnpm --filter mcp-* dev`)
+- `curl /health` returns 200 with correct shape on all three servers
+- Each server, when connected via a generic MCP client (e.g., `npx @modelcontextprotocol/inspector`), lists its tool catalog (empty at P0.8, or containing only the test health tool)
+- Three ADR stubs present at the specified paths
+- .gitkeep files removed from /apps/mcp-\* directories (cleanup rule)
+- Commit as `feat(mcp): protocol-agnostic tool platform + three server scaffolds per ADR-MCP-001`
+
+## What's explicitly out of scope at P0.8
+
+- Real tool implementations (modules add their tools in their own prompts)
+- Real AC01 OAuth integration (AC01 lands in P2.1; use a signing-key stub until then)
+- Cloud Run deployment (P0.3 Terraform; P0.8 only builds + runs locally)
+- Distributed tool registry (Phase 2 concern; Phase 1 is in-process singleton)
+- MCP SDK upgrades (pin the current version; bumps are housekeeping commits)
+
 ```
 
 ---
@@ -681,26 +851,30 @@ Acceptance:
 **Output:** Bootstrap script + documented procedure
 
 ```
+
 Create the Super Admin bootstrap procedure.
 
 AC01 will not be built yet, but we need a documented, repeatable way to create the first Super Admin account in each environment (dev, staging, production) so that once AC01 is built in P2.1, we can immediately log in as Super Admin.
 
 /scripts/bootstrap/
-  create-super-admin.ts
-  — Prompts for email, name, initial password (dev/staging only; production uses WorkOS SSO from day one)
-  — Writes to a bootstrap_admin table (migration created here)
-  — Once AC01 is built, this row is promoted to a real users row via migration
-  — Idempotent (safe to re-run)
+create-super-admin.ts
+— Prompts for email, name, initial password (dev/staging only; production uses WorkOS SSO from day one)
+— Writes to a bootstrap_admin table (migration created here)
+— Once AC01 is built, this row is promoted to a real users row via migration
+— Idempotent (safe to re-run)
 
 Also:
+
 - Document the production Super Admin process: WorkOS SSO with an initial user specified via environment variable, validated on AC01 first run
 - Document emergency break-glass procedure at /docs/runbooks/super-admin-bootstrap.md
 
 Acceptance:
+
 - `pnpm bootstrap:super-admin --env=dev` creates a super admin
 - Attempting to create a second super admin via the script is blocked with guidance
 - Production bootstrap procedure documented
 - Commit as `feat(bootstrap): super admin bootstrap procedure`
+
 ```
 
 ---
@@ -712,6 +886,7 @@ Acceptance:
 **Output:** Audit event library + convention doc + lint rule
 
 ```
+
 Establish the audit event emission convention every module must follow.
 
 Create /packages/audit-events:
@@ -722,6 +897,7 @@ Create /packages/audit-events:
 - Typed event catalogs per module (each module declares its event types)
 
 Convention document at /docs/architecture/audit-event-convention.md specifying:
+
 - Every mutating operation emits an audit event
 - Every sensitive read (PII access, cross-tenant query, credential access) emits an audit event
 - before_state and after_state required for UPDATE actions
@@ -729,14 +905,17 @@ Convention document at /docs/architecture/audit-event-convention.md specifying:
 - Events are immutable post-emit
 
 ESLint plugin at /packages/eslint-plugin-cortex/:
+
 - Rule audit-on-mutation: warn if a function marked @Mutating() doesn't call emit()
 
 Every subsequent module prompt references this convention. CLAUDE.md already declares compliance is required.
 
 Acceptance:
+
 - emit() works, writes to topic, structured log shows event
 - Lint rule fires on violations
 - Commit as `feat(audit): audit event emission convention`
+
 ```
 
 ---
@@ -754,11 +933,13 @@ Acceptance:
 **Output:** Full F01 module — tenant context, database isolation, compute isolation, encryption, blob isolation, quotas
 
 ```
+
 Implement F01 Multi-Tenancy Infrastructure in full per spec §F01 (starts around §1.1 Purpose).
 
 Read the full F01 spec before writing code. This is the load-bearing module everything else depends on. Get it right.
 
 Scope (per F01-FR-001 through F01-FR-006):
+
 1. Tenant context propagation
    - Request middleware that extracts tenant_id from JWT or header, validates, injects into async-local context
    - Database session variable `app.current_tenant_id` set on every connection from pool
@@ -798,11 +979,13 @@ Data model: F01 §1.4 Control Plane Tables. Create tenant, tenant_config_version
 API surface: F01 §1.5. Expose via /packages/tenant-context.
 
 Acceptance (each must pass):
+
 - Two tenants' data is provably inaccessible across the boundary (RLS + CMEK)
 - Tenant quota exceedance returns 429 within 50ms
 - Integration test: provision 10 tenants, make 1000 concurrent requests across them, verify zero data leakage
 - Tenant context propagates through HTTP → gRPC → Pub/Sub → HTTP chain
 - Commit as `feat(F01): multi-tenancy infrastructure (foundation layer)`
+
 ```
 
 ---
@@ -814,9 +997,11 @@ Acceptance (each must pass):
 **Output:** Tenant provisioning / suspension / offboarding / export
 
 ```
+
 Implement F02 Tenant Lifecycle Manager per §F02.
 
 Scope (per F02-FR-NNN):
+
 1. Tenant Provisioning Pipeline
    - Provisioning state machine: REQUESTED → PROVISIONING → READY → (optionally) SUSPENDED / OFFBOARDING / TERMINATED
    - Steps: allocate tenant_id, create KMS key, create GCS prefix, if Enterprise allocate dedicated Cloud SQL, run control-plane inserts, run tenant-scoped migrations, seed default config from IC01 vertical package, create initial admin invite, emit provisioning.completed event
@@ -838,6 +1023,7 @@ Scope (per F02-FR-NNN):
    - Legal hold: if any retention.legal_hold flag is set on tenant data, block termination with explicit Super Admin override workflow
 
 F02 must integrate with:
+
 - SCR-24 Platform Ops Dashboard (provisioning wizard UI)
 - W01 Tenant Onboarding Wizard (provisioning trigger)
 - SCR-20 Audit Log (every lifecycle event logged)
@@ -847,11 +1033,13 @@ Key rotation is implemented here too (F02-FR-NNN key rotation): scheduled rotati
 Data model per spec §2.3.
 
 Acceptance:
+
 - Provision a new Standard tenant end-to-end in under 5 minutes
 - Provision an Enterprise tenant in under 30 minutes including dedicated Cloud SQL
 - Rollback from a failed provisioning leaves no orphaned resources
 - Termination after grace period deletes every trace; post-termination queries return tenant-not-found consistently
 - Commit as `feat(F02): tenant lifecycle manager`
+
 ```
 
 ---
@@ -863,9 +1051,11 @@ Acceptance:
 **Output:** Bi-temporal column enforcement, SCD policies, temporal query library, late-arriving handling
 
 ```
+
 Implement F03 Temporal Data Engine per §F03.
 
 Scope (per F03-FR-NNN):
+
 1. Bi-Temporal Column Standard
    - Every tenant-scoped domain table MUST carry: valid_from, valid_to, txn_from, txn_to (tstzrange-backed)
    - Provide a TypeScript decorator / drizzle-kit plugin that generates migrations with these columns automatically
@@ -887,10 +1077,12 @@ Scope (per F03-FR-NNN):
    - Incremental re-materialization of affected Gold layer windows (S01 integration)
 
 Acceptance:
+
 - Create a retail.Product, update its price, query "as of last week" — returns last week's price
 - An event arriving 2 hours late (grace = 1 hour) is flagged and appears in the review queue
 - Gold layer KPIs re-materialize correctly when affected windows receive late data
 - Commit as `feat(F03): temporal data engine with bi-temporal + SCD`
+
 ```
 
 ---
@@ -902,14 +1094,16 @@ Acceptance:
 **Output:** Tenant config store, draft/validate/promote/rollback, impact analysis, config-as-code sync
 
 ```
+
 Implement F04 Configuration Plane per §F04.
 
 This is the tenant-facing config layer. Every tenant-scoped setting lives here. Every configuration change goes through F04.
 
 Scope (per F04-FR-NNN):
+
 1. Configuration Store
    - Hierarchical key-value store per tenant in Postgres JSONB
-   - Namespaces: platform.*, tenant.*, workspace.*
+   - Namespaces: platform._, tenant._, workspace.\*
    - Versioned — every change creates a new config_version row with parent pointer
    - Schema per namespace defined via Zod schemas, validated on write
 
@@ -928,6 +1122,7 @@ Scope (per F04-FR-NNN):
    - Skeleton for bidirectional YAML export/import
 
 Core configs managed via F04:
+
 - Theme tokens (consumed by UX01)
 - Locale and i18n (consumed by IC02)
 - Feature flags
@@ -940,10 +1135,12 @@ Core configs managed via F04:
 Do NOT build the UI for F04 yet — that's SCR-04 Tenant Configuration & Theme, coming later. Just the engine + API.
 
 Acceptance:
+
 - draft → validate → promote → rollback round-trip works and produces correct audit trail entries
 - Impact analysis identifies all downstream consumers before a breaking change
 - Config reads are sub-10ms p99 (cached)
 - Commit as `feat(F04): configuration plane`
+
 ```
 
 ---
@@ -955,9 +1152,11 @@ Acceptance:
 **Output:** Schema change classification, versioning, feature store integration
 
 ```
+
 Implement F05 Schema Evolution Engine per §F05.
 
 Scope:
+
 1. Change Classification
    - Classify every schema change as ADDITIVE (backward-compatible), BREAKING, or DEPRECATION
    - CI check: any migration must declare its classification; breaking changes require Super Admin approval in non-dev environments
@@ -973,10 +1172,12 @@ Scope:
    - Deferred — stub the hook; full A01 integration is Phase 2
 
 Acceptance:
+
 - Adding a new optional column is auto-classified ADDITIVE and deploys without approval in dev
 - Renaming a required column is classified BREAKING and blocked in staging without approval
 - Historical schema version is retrievable for any entity as of any date
 - Commit as `feat(F05): schema evolution engine`
+
 ```
 
 ---
@@ -988,30 +1189,36 @@ Acceptance:
 **Output:** Feature flag service + UX hooks
 
 ```
+
 Build a feature flags service on top of F04.
 
 /packages/feature-flags/
-  - Flag definition: { key, description, default_value, tenant_overrides, user_overrides, rollout_percentage }
-  - Evaluation: flag.isEnabled(tenantId, userId)
-  - Cache: sub-ms p99
-  - Server-side and client-side helpers (React hook for client)
-  - Admin UI stub for Phase 1 (full UI is part of SCR-04 Configuration later)
+
+- Flag definition: { key, description, default_value, tenant_overrides, user_overrides, rollout_percentage }
+- Evaluation: flag.isEnabled(tenantId, userId)
+- Cache: sub-ms p99
+- Server-side and client-side helpers (React hook for client)
+- Admin UI stub for Phase 1 (full UI is part of SCR-04 Configuration later)
 
 Conventions documented at /docs/architecture/feature-flags.md:
+
 - Flag lifecycle: experimental → stable → retired (clean up code when retired)
 - No flag older than 6 months stays without explicit renewal
 - All flag evaluations logged for auditability via audit events
 
 Initial flags to define:
+
 - admin-console.display-data-workspace-switcher (gradual rollout)
 - analytical.cx-dd-01-beta (start as beta for Display Data workspaces, promote when ready)
 - agents.planogram.v2-model (model version rollout)
 - ingestion.csv-agent-v2 (CSV agent version control)
 
 Acceptance:
+
 - Flag changes propagate to clients within 30s
 - Admin UI stub exists
 - Commit as `feat(feature-flags): feature flag service on F04`
+
 ```
 
 ---
@@ -1029,11 +1236,13 @@ Acceptance:
 **Output:** Platform roles, tenant custom roles, attribute-based policies, authentication, authorization enforcement
 
 ```
+
 Implement AC01 ABAC + RBAC Engine per §AC01.
 
 This is the second-most load-bearing module after F01. Every read, every write, every action is gated through AC01.
 
 Scope per AC01-FR-001 through AC01-FR-NNN:
+
 1. Role Model
    - Platform roles (immutable, created at deployment): SUPER_ADMIN, TENANT_ADMIN, SUB_TENANT_ADMIN, DATA_STEWARD, ALGORITHM_MANAGER, END_USER
    - Tenant-custom roles derived from platform roles with overrides
@@ -1060,19 +1269,23 @@ Scope per AC01-FR-001 through AC01-FR-NNN:
 5. Data Model per AC01 §1.3: platform_role, tenant_role, role_permission, user_role_assignment, abac_policy, policy_version
 
 Performance targets:
+
 - Authorization decision p99 < 5ms for cached policies
 - Policy change propagation to active sessions < 30 seconds
 
 Integration hooks for later:
+
 - SCR-06 Role & Permission Manager will consume AC01's policy authoring API
 - SCR-02 Users will consume AC01's role-assignment API
 - SCR-20 Audit Log records every authz decision for sensitive resources
 
 Acceptance per AC01 §1.4:
+
 - Tenant Admin can create a custom role "Regional Analyst" with hierarchy scope, PII masking, aggregation-only below city level in under 5 minutes
 - Authorization decision benchmarks pass
 - Policy simulator (skeleton) returns correct allow/deny with trace
 - Commit as `feat(AC01): abac + rbac engine`
+
 ```
 
 ---
@@ -1084,9 +1297,11 @@ Acceptance per AC01 §1.4:
 **Output:** Hierarchy CRUD, versioning, multi-hierarchy, cross-hierarchy mapping
 
 ```
+
 Implement AC02 Hierarchy Engine per §AC02.
 
 Scope:
+
 1. Hierarchy data model supporting arbitrary depth DAG (not just tree — cross-hierarchy mappings require DAG)
 2. Node types configurable per vertical (retail default: Chain → Region → City → Store → Zone)
 3. Bi-temporal versioning via F03 — hierarchy at any past date is queryable
@@ -1095,6 +1310,7 @@ Scope:
 6. Rollup queries: given a node, compute sum of child metrics; respect bi-temporal context
 
 Operations:
+
 - add(parent, node)
 - move(node, newParent, effectiveDate)
 - archive(node, effectiveDate)
@@ -1103,15 +1319,18 @@ Operations:
 - rollup(rootNode, metric, asOf)
 
 Integration:
+
 - AC01 uses hierarchy for role scoping
 - CX-01 and CX-02 use rollups
 - SCR-05 Hierarchy Manager is the UI
 
 Acceptance:
+
 - A reorg of 30 stores drafts-validates-commits in under 1 minute
 - As-of queries against historical hierarchy return correct structure
 - Rollup query across 500 stores completes in <200ms
 - Commit as `feat(AC02): hierarchy engine`
+
 ```
 
 ---
@@ -1123,9 +1342,11 @@ Acceptance:
 **Output:** Consent state machine, purpose registry integration, withdrawal cascade
 
 ```
+
 Implement AC03 Consent & Privacy Manager per §AC03.
 
 Scope:
+
 1. Consent state machine per entity × purpose: NOT_CAPTURED → GRANTED → WITHDRAWN → EXPIRED → RE_GRANTED
 2. Per-purpose consent storage: entity_id, tenant_id, purpose_id (from PR01), state, granted_at, withdrawn_at, source (which touchpoint captured it), template_version
 3. Withdrawal cascade state machine:
@@ -1139,10 +1360,12 @@ Scope:
 Integration: PR01 (purposes), S01 (streaming filter), ED01 (edge cascade), A03 (decision filter), O04 (outbound gate), SCR-16 (admin UI), CX-03 (per-entity consent view)
 
 Acceptance:
+
 - Consent withdrawal cascade hits all four SLAs with measurable telemetry
 - Acknowledgement-pending state visible in SCR-16
 - Cascade failure raises CRITICAL alert to SCR-22
 - Commit as `feat(AC03): consent & privacy manager`
+
 ```
 
 ---
@@ -1154,9 +1377,11 @@ Acceptance:
 **Output:** Declarative compliance rules, policy library, compliance score
 
 ```
+
 Implement AC04 Compliance-as-Code Policy Engine per §AC04.
 
 Scope:
+
 1. Declarative policy authoring reusing AC01's policy engine — but for regulatory rules (DPDP, GDPR, PCI-DSS, HIPAA, Solvency II, FINMA, IRDAI)
 2. Policy bundles per vertical: retail includes DPDP + PCI-DSS; reinsurance adds Solvency II + FINMA
 3. Enforcement modes per rule: BLOCK / AUDIT / INFO
@@ -1167,10 +1392,12 @@ Scope:
 Integration: SCR-22 Compliance Operations (UI), S20 (audit), AC01 (policy engine), every data-plane module reads compliance decisions
 
 Acceptance per AC04 §4.3:
+
 - Feature Exclusion policy correctly blocks a feature store query
 - Cross-border policy blocks a query with clear error
 - Policy inheritance: insurance vertical tenant auto-inherits IRDAI rules
 - Commit as `feat(AC04): compliance-as-code policy engine`
+
 ```
 
 ---
@@ -1188,9 +1415,11 @@ Acceptance per AC04 §4.3:
 **Output:** Core ontology + retail extension ontology + Gold-layer KPI definitions
 
 ```
+
 Implement D01 Canonical Data Model per §D01. This is the universal language — every other module speaks it.
 
 Scope:
+
 1. Three-tier ontology:
    - Tier 1 Core: Entity, Event, Asset, Location, Relationship, Observation, Programme
    - Tier 2 Retail Extension: retail.Customer, retail.Store, retail.Product, retail.Transaction, retail.TransactionLineItem, retail.LoyaltyAccount, retail.StockLevel, retail.OnlineSession, retail.Shelf, retail.Planogram, retail.Promotion
@@ -1211,15 +1440,17 @@ Scope:
    - Customer Lifecycle Funnel: acquisition → activation → retention → loyalty → CLV
    - Each KPI: formula, grain, dimensions, freshness SLO, owner
 
-5. Canonical namespace: retail.* prefix for all retail entities
+5. Canonical namespace: retail.\* prefix for all retail entities
 
 Migration approach: one migration file per entity type, chained via F05 version control.
 
 Acceptance per D01 §1.7:
+
 - Every entity has a one-sentence semantic description (no 'TBD' anywhere)
 - Graph queries: given a Transaction, traverse to Customer, to LoyaltyAccount, to past Transactions — <100ms
 - KPI formulas compile against the schema and produce numbers for the demo tenant
 - Commit as `feat(D01): canonical data model + retail ontology`
+
 ```
 
 ---
@@ -1231,9 +1462,11 @@ Acceptance per D01 §1.7:
 **Output:** Mapping rule engine + auto-mapping + execution pipeline
 
 ```
+
 Implement D02 Canonical Mapping Engine per §D02.
 
 Scope:
+
 1. Mapping rule model: source_schema × canonical_entity × transformation_expression → canonical rows
 2. Transformation language: restricted sandboxed subset (no I/O, deterministic). Common utilities: date parsing, string normalization, phone E.164, GTIN validation, currency conversion via IC02, lookup tables, hash
 3. Auto-mapping engine: given a source schema (from CSV headers, JDBC metadata, JSON sample), propose mappings with confidence scores. Use:
@@ -1245,10 +1478,12 @@ Scope:
 5. Versioned as D03 contracts
 
 Acceptance:
+
 - Auto-map a 30-column retail POS export with >90% field-level accuracy
 - Map execution processes 10K records/second
 - Rule commit triggers retroactive validation against last 1K records, blocks commit if failure >1%
 - Commit as `feat(D02): canonical mapping engine`
+
 ```
 
 ---
@@ -1260,18 +1495,22 @@ Acceptance:
 **Output:** Contract versioning, breaking change detection, deployment
 
 ```
+
 Implement D03 Data Contracts Framework per §D03.
 
 Scope:
+
 1. A contract = a frozen combination of source_schema + mapping_rules + quality_rules + SLAs
 2. Versioned with semver; breaking changes require explicit approval
 3. Contract deployment triggers: mapping execution uses the active version; old records stay on their historical version
 4. Contract testing harness: run a contract against a sample batch, output pass/fail report with diffs
 
 Acceptance:
+
 - Two versions of a contract can coexist during transition; readers specify version
 - Breaking contract change blocked at commit with diff shown
 - Commit as `feat(D03): data contracts framework`
+
 ```
 
 ---
@@ -1283,9 +1522,11 @@ Acceptance:
 **Output:** Rule library, incident stream, quality scoring, promotion gates
 
 ```
+
 Implement D04 Data Quality Engine per §D04.
 
 Scope per D04 key FRs:
+
 1. Rule types: not-null, unique, range, regex, referential-integrity, custom-SQL, statistical-anomaly
 2. Severity: INFO / WARN / ERROR / BLOCK — controls medallion promotion behaviour
 3. Rule execution: on every record on ingest (streaming) + scheduled batch checks
@@ -1294,10 +1535,12 @@ Scope per D04 key FRs:
 6. Promotion gates Bronze → Silver → Gold controlled by configurable thresholds per dataset
 
 Acceptance:
+
 - Every dataset has a quality score in near-real-time
 - Held records enumerable and explainable
 - Force-promotion requires justification and audit log
 - Commit as `feat(D04): data quality engine`
+
 ```
 
 ---
@@ -1309,18 +1552,22 @@ Acceptance:
 **Output:** Per-record lineage, DAG visualization API, impact analysis
 
 ```
+
 Implement D05 Data Lineage & Provenance per §D05.
 
 Scope:
+
 1. Lineage capture: every transformation records input record IDs, transformation type, output record IDs, timestamp. OpenLineage compatible.
 2. Lineage graph stored in a graph-suitable store (PostgreSQL with recursive CTEs acceptable for Phase 1; defer graph DB to Phase 3)
 3. Lineage query API: upstream(recordId), downstream(recordId), impact(field, table)
 4. Surfaces in SCR-20 Audit Log and SCR-08 Data Source Wizard
 
 Acceptance:
+
 - Traversal from Gold KPI to originating source record completes in <3s at 50-node DAG depth
 - Impact analysis before schema change enumerates every downstream consumer
 - Commit as `feat(D05): data lineage & provenance`
+
 ```
 
 ---
@@ -1332,9 +1579,11 @@ Acceptance:
 **Output:** Storage abstraction, engine mapping, query planner
 
 ```
+
 Implement D06 Polyglot Storage Layer per §D06.
 
 Scope:
+
 1. Storage engine mapping per data class:
    - Operational records → Postgres (Cloud SQL)
    - Analytical aggregates → BigQuery
@@ -1346,9 +1595,11 @@ Scope:
 3. Query planner: route queries to the engine most suited; cross-engine joins via pipeline
 
 Acceptance:
+
 - A single service can read a retail.Customer from Postgres and their historical transactions from BigQuery via one API call
 - Query latency routing is observable
 - Commit as `feat(D06): polyglot storage layer`
+
 ```
 
 ---
@@ -1366,9 +1617,11 @@ Acceptance:
 **Output:** Identity signal framework, match scoring, merge/split, performance
 
 ```
+
 Implement I01 Probabilistic Identity Registry per §I01.
 
 Scope per I01-FR-NNN:
+
 1. Identity signal framework: every source contributes signals (email, phone, loyalty ID, face embedding from ArcFace, device fingerprint) with per-signal weights
 2. Match scoring algorithm: weighted probabilistic score [0,1]; auto-merge above threshold (default 0.95); quarantine below (default 0.7 < x < 0.95); non-match below (<0.7). Configurable per tenant via F04.
 3. Identity graph: node = resolved entity (UEID); edges = signals linking entities
@@ -1377,10 +1630,12 @@ Scope per I01-FR-NNN:
 6. Cross-channel resolution: the same customer across POS, CRM, e-commerce, edge recognition, loyalty
 
 Acceptance per I01 §1.3:
+
 - Steward merges two quarantined entities in <30s
 - 10K signal batch resolves in <5s
 - Merge preserves lineage — historical decisions still attribute correctly
 - Commit as `feat(I01): probabilistic identity registry`
+
 ```
 
 ---
@@ -1392,16 +1647,20 @@ Acceptance per I01 §1.3:
 **Output:** Graph store, traversal API, query surface
 
 ```
+
 Implement I02 Knowledge Graph per §I02. Minimal Phase 1 scope — full graph DB is Phase 3.
 
 Scope:
+
 1. Graph storage: PostgreSQL with recursive CTEs + materialized views for common traversals; interfaces isolated so we can swap to a graph DB later
 2. Query API: traverse(startNode, relationshipTypes, maxDepth)
 3. Correlated Event Groups storage (from S02 later)
 
 Acceptance:
+
 - Traversal from customer to their last 10 transactions to their 5 most-bought product categories returns in <200ms
 - Commit as `feat(I02): knowledge graph (phase 1 scope)`
+
 ```
 
 ---
@@ -1419,18 +1678,22 @@ Acceptance:
 **Output:** Conflict detection + resolution strategies + conflict dashboard
 
 ```
+
 Implement I03 Multi-Source Conflict Resolution per §I03.
 
 Scope:
+
 1. Detect attribute-level conflicts across sources (customer.phone from POS says X, from CRM says Y)
 2. Resolution strategies per attribute: most-recent, highest-trust-source, source-priority, manual
 3. Conflict dashboard feeds SCR-11 Entity Resolution Console
 4. Exception rules: for edge cases, steward can pin a resolution
 
 Acceptance:
+
 - Conflicting attributes surface within 1 minute of ingestion
 - Resolution strategy per attribute is configurable without code change
 - Commit as `feat(I03): multi-source conflict resolution`
+
 ```
 
 ---
@@ -1443,9 +1706,11 @@ Acceptance:
 **Governing ADRs:** ADR-INFRA-001 (event bus), ADR-SCOPE-009 (ROOS external)
 
 ```
+
 Implement G01 Universal Ingestion Gateway per /docs/spec/cortex_v2.docx §G01.
 
 Before coding:
+
 - Read /docs/architecture/decisions/ADR-INFRA-001-event-bus-choice.md — governs event bus architecture (Pub/Sub internal, Kafka at edges)
 - Read /docs/architecture/decisions/ADR-SCOPE-009-roos-external.md — governs the ROOS boundary
 - Read /docs/integrations/roos-interface.md — the contract with Ithina (may be stubbed; read what exists)
@@ -1529,7 +1794,7 @@ Build the ROOS connector as a specialized configuration of the generic Kafka con
 
 1. Location: /services/ingestion/g01/connectors/kafka/sources/roos/
 
-2. Subscribes to dis.golden.roos — the canonical output topic Ithina publishes to. Do NOT subscribe to dis.ingest.* — those are Ithina's internal topics and are not part of the integration contract.
+2. Subscribes to dis.golden.roos — the canonical output topic Ithina publishes to. Do NOT subscribe to dis.ingest.\* — those are Ithina's internal topics and are not part of the integration contract.
 
 3. Authentication: Ithina provides broker endpoint, SASL mechanism, credentials. Stored in Secret Manager path `roos/display-data/kafka-creds`. Rotated quarterly per agreement with Ithina ops.
 
@@ -1537,7 +1802,7 @@ Build the ROOS connector as a specialized configuration of the generic Kafka con
 
 5. Tenant extraction: ROOS multiplexes multiple Ithina downstream clients on the same topic. The tenant identifier lives in message header `ithina_tenant_id` which maps to Cortex workspace id (per the multi-workspace Display Data configuration). Connector filters or splits by this field; events for unrecognized tenants route to DLQ with reason=UNRECOGNIZED_TENANT.
 
-6. Schema translation: ROOS canonical ≠ Cortex canonical. D02 mapping rules translate ROOS events to Cortex retail.* entities. Initial mapping provided as a starter D03 data contract; refined over first 30 days of integration.
+6. Schema translation: ROOS canonical ≠ Cortex canonical. D02 mapping rules translate ROOS events to Cortex retail.\* entities. Initial mapping provided as a starter D03 data contract; refined over first 30 days of integration.
 
 7. Error handling:
    - If ROOS topic unreachable > 15 min: CRITICAL alert, paged to Sevyn8 on-call + escalate to Ithina ops (runbook: /docs/runbooks/roos-outage.md)
@@ -1565,6 +1830,7 @@ Each connector has its own directory under /services/ingestion/g01/connectors/ w
 ## The @cortex/event-bus integration (critical)
 
 Per ADR-INFRA-001:
+
 - G01 is the ONLY part of Cortex that touches external protocols (Kafka, webhook, etc.)
 - Once validated and enveloped, events go onto internal Pub/Sub via @cortex/event-bus
 - Every other Cortex service subscribes via @cortex/event-bus, not directly to Pub/Sub
@@ -1575,6 +1841,7 @@ This is the seam that makes Cortex portable in the future. Honor it strictly.
 ## Data model per G01 §4.3
 
 Control-plane tables:
+
 - source_config (tenant-scoped, F01 RLS): source_id, tenant_id, source_type, name, connector_config JSONB, schema_registry_ref, dedup_window_hours, is_active, created_at, updated_at
 - source_health: source_id, last_successful_poll, last_failure_at, consecutive_failures, lag_seconds, state enum
 - source_auth_secret: source_id, secret_ref (points to Secret Manager path)
@@ -1592,6 +1859,7 @@ All schemas and migrations use Drizzle per stack decisions in CLAUDE.md.
 - E2E test: ROOS event → G02 → Silver layer retail.Transaction in <5 seconds p95
 
 Integrate with:
+
 - F01 tenant context (every event has tenant_id)
 - AC03 consent check — for events involving PII, verify consent before emit to ingest.raw; if consent missing, route to quarantine
 - @cortex/observability for logging/metrics/tracing
@@ -1604,6 +1872,7 @@ Commit as `feat(G01): universal ingestion gateway with kafka+ROOS`
 Prompt: P4.4
 Spec: §G01
 ADRs: ADR-INFRA-001, ADR-SCOPE-009
+
 ```
 
 **Fallback if Claude Code hits context window limits during P4.4:**
@@ -1625,18 +1894,22 @@ Execute in order. Each session starts with M1 + a re-read of commits from the pr
 **Output:** Pipeline stages + DLQ management + line-item handling
 
 ```
+
 Implement G02 Structured Data Pipeline per §G02.
 
 Scope:
+
 1. Pipeline stages: Envelope-validated → D02-mapped → D04-quality-checked → Silver-layer-written → canonical topic emitted
 2. Dead-letter queue per stage with reason codes
 3. Line-item handling for complex entities (retail.Transaction with TransactionLineItem children) — atomic write
 4. Surfaces DLQ entries in SCR-08
 
 Acceptance per G02 §5.3:
+
 - 10K records / second sustained throughput
 - DLQ re-ingestion (after fix) succeeds for 100% of previously-rejected records that now pass
 - Commit as `feat(G02): structured data pipeline`
+
 ```
 
 ---
@@ -1652,6 +1925,7 @@ Acceptance per G02 §5.3:
 For each cross-cutting module in P5.1 through P5.15, use this template as the base prompt:
 
 ```
+
 For [MODULE ID] ([MODULE NAME]):
 
 1. Read /docs/spec/cortex_v2.docx section for this module in full
@@ -1663,6 +1937,7 @@ For [MODULE ID] ([MODULE NAME]):
 7. Expose API surface via tRPC (internal) and O01 (external)
 8. Update /docs/progress/status.md
 9. Commit as `feat([MODULE_ID]): [short description]`
+
 ```
 
 Execute this template for each module below. Module-specific notes are noted where relevant.
@@ -1815,9 +2090,11 @@ Use the template. Module-specific notes:
 **Output:** RPO/RTO targets, backup automation, DR drill runbook
 
 ```
+
 Implement RE01 Disaster Recovery & Business Continuity per spec §RE01.
 
 Scope:
+
 1. RPO/RTO targets per tier:
    - Standard tier: RPO 24h, RTO 8h
    - Professional: RPO 4h, RTO 4h
@@ -1836,10 +2113,12 @@ Display Data is Enterprise tier — Enterprise RPO/RTO targets apply.
 Integration: SCR-24 Platform Ops Dashboard (DR status widget, Phase 2), O02 (backup failure alerts)
 
 Acceptance:
+
 - Restore a test tenant from 24-hour-old backup in under 2 hours
 - Backup verification test runs green weekly in CI-managed job
 - DR drill playbook reviewed and signed off
 - Commit as `feat(RE01): disaster recovery & business continuity`
+
 ```
 
 ---
@@ -1851,14 +2130,16 @@ Acceptance:
 **Output:** Full retail vertical package content
 
 ```
+
 Author the retail vertical package as the first concrete instance of IC01.
 
 Location: /services/industry/ic01/packages/retail/
 
 Contents:
+
 1. package.yaml — manifest with name, version, vertical_id, depends_on
 2. screens.yaml — which SCR-xx and CX-xx screens are available in retail (per v2 spec §"Screen Registry — Retail Vertical Default Configuration")
-3. entities.yaml — retail.* entity extensions (links to D01 definitions in Part II)
+3. entities.yaml — retail.\* entity extensions (links to D01 definitions in Part II)
 4. kpis.yaml — the 2 funnels (Store Performance, Customer Lifecycle) with formulas and grains
 5. hierarchy-template.yaml — the 5-level hierarchy (Chain → Region → City → Store → Zone)
 6. alert-rules.yaml — retail default alert rules (OOS, basket drop, conversion drop, etc.)
@@ -1869,10 +2150,12 @@ Contents:
 This package is loaded by IC01 when a tenant provisions with vertical=retail.
 
 Acceptance:
+
 - Package loads cleanly via IC01 loader
 - A newly provisioned retail tenant has all defaults applied
 - Modifications to the package propagate via version bump + tenant acceptance flow
 - Commit as `feat(IC01): retail vertical package content`
+
 ```
 
 ---
@@ -1884,11 +2167,13 @@ Acceptance:
 **Output:** Display Data extension on top of retail package
 
 ```
+
 Author the Display Data vertical extension package.
 
 Location: /services/industry/ic01/packages/display-data-extension/
 
 Extends the retail package. Adds:
+
 1. Additional screen: CX-DD-01 Shelf & Planogram Intelligence
 2. Additional entities: retail.PlanogramCompliance, retail.ShelfObservation, retail.PromotionExecution
 3. Additional KPIs: Planogram Compliance Score, OOS Facings, Promotion Execution Rate, Perishable Waste Rate, Assortment Completeness
@@ -1901,10 +2186,12 @@ Package manifest declares: extends=retail, version=0.1.0.
 Loaded by IC01 when a tenant provisions with vertical=retail AND extension=display-data.
 
 Acceptance:
+
 - Package loads after retail package
 - Display Data tenant has CX-DD-01 visible alongside CX-01, CX-02, CX-04
 - Agent pipelines registered and runnable
 - Commit as `feat(IC01): display data vertical extension package`
+
 ```
 
 ---
@@ -1916,6 +2203,7 @@ Acceptance:
 **Output:** @cortex/http-errors package + middleware
 
 ```
+
 Implement the standard error response format every API must use.
 
 Create /packages/http-errors:
@@ -1934,10 +2222,12 @@ Every backend service imports and uses this.
 Convention documented at /docs/architecture/error-responses.md.
 
 Acceptance:
+
 - All error paths return the standard shape
 - correlation_id in response matches trace ID in Cloud Trace
 - Unit tests verify every error class serializes correctly
 - Commit as `feat(http-errors): standard error response format`
+
 ```
 
 ---
@@ -1949,16 +2239,19 @@ Acceptance:
 **Output:** Template system + Phase 1 templates
 
 ```
+
 Build the transactional email template system on top of O04.
 
 /packages/email-templates/
-  - MJML-based templates with variable interpolation
-  - Tenant-themed (uses F04 brand tokens)
-  - Locale-aware (uses IC02)
-  - Versioned with semver
-  - Preview endpoint for admin UI
+
+- MJML-based templates with variable interpolation
+- Tenant-themed (uses F04 brand tokens)
+- Locale-aware (uses IC02)
+- Versioned with semver
+- Preview endpoint for admin UI
 
 Phase 1 templates required:
+
 - user.invite — sent from SCR-02 when a user is invited
 - user.password-reset — sent by AC01 forgot-password flow (or skipped if pure SSO)
 - user.mfa-reset — sent by AC01 MFA reset flow
@@ -1971,10 +2264,12 @@ Each template has: subject, body (MJML → HTML + plaintext), preview text.
 Resend as email provider for Phase 1.
 
 Acceptance:
+
 - All 6 templates render correctly with Display Data branding
 - Locale switch re-renders with translated strings (en-IN baseline; framework-ready for hi-IN)
 - Test emails sent and delivery verified
 - Commit as `feat(email-templates): phase 1 transactional templates`
+
 ```
 
 ---
@@ -1992,9 +2287,11 @@ Acceptance:
 **Output:** Both apps scaffolded with shared shell
 
 ```
+
 Initialize /apps/admin-console and /apps/analytical as Next.js 15 (App Router) apps. Critical: both apps share the shell, the design system, the widget library, the auth flow, the tenant context. UX01 §1.1 calls this "a single Next.js application with two sections" — we'll implement it as two apps that share 90%+ code via packages.
 
 Each app:
+
 - Next.js 15 App Router
 - TypeScript strict
 - Tailwind consuming tokens from /packages/design-system
@@ -2002,6 +2299,7 @@ Each app:
 - next-auth or auth middleware calling into AC01
 
 Create /packages/ui-shell containing:
+
 - AppShell component (sidebar + topbar + content area)
 - Navigation (filtered by SCR registry per UX01-FR-002)
 - TenantSwitcher, WorkspaceSwitcher
@@ -2013,10 +2311,12 @@ Create /packages/ui-shell containing:
 Do NOT build any screens yet — only the shell, the routing skeleton, and a placeholder home page per app that says "Cortex admin-console (or analytical) — no screens registered yet."
 
 Acceptance:
+
 - Both apps build and run, serving their placeholder home with navigation shell
 - Logging in as a dev user routes correctly
 - Tenant switch propagates — URL query, context, API client all update
 - Commit as `feat(ui-shell): admin + analytical app shells`
+
 ```
 
 ---
@@ -2028,11 +2328,13 @@ Acceptance:
 **Output:** /packages/design-system with tokens, typography, density modes
 
 ```
+
 Build /packages/design-system.
 
 Must be driven by CSS custom properties sourced from F04 per tenant — so any tenant rebrand (SCR-04) changes everything without code deploy.
 
 Tokens:
+
 - Colors: primary, accent, neutral-0 through neutral-1000, semantic (success, warning, danger, info)
 - Typography: font family, scale (12/14/16/18/20/24/30/36/48), weights, line-heights
 - Spacing: 4/8/12/16/24/32/48/64
@@ -2048,6 +2350,7 @@ Include typography components: Display, Heading, Subheading, Body, Label, Captio
 Include a Storybook or Ladle instance at /packages/design-system/stories/ showing every token combination in every density mode and theme.
 
 Acceptance:
+
 - Switch theme in one tenant; every downstream widget reflects the change without rebuild
 - Switch density mode; entire UI re-densifies
 - Dark mode works out of the box
@@ -2056,6 +2359,7 @@ Acceptance:
 - Visual regression baseline captured (Chromatic or Percy); PR diffs against baseline
 - Every component passes axe-core with zero WCAG 2.1 AA violations
 - Commit as `feat(design-system): tokens + typography + density + storybook`
+
 ```
 
 **Storybook convention (established here, required for all P7.x widgets):**
@@ -2074,23 +2378,26 @@ Acceptance:
 **Output:** Registry API consumer + navigation generator
 
 ```
+
 Implement the Screen Registry consumer that drives navigation and routing per UX01-FR-002.
 
 /packages/screen-registry/
-  src/
-    api.ts          — fetches registry from F04
-    resolver.ts     — intersects (vertical, tier, data sources, tenant overrides) → visible screens
-    navigation.ts   — converts visible screens into grouped nav items
-    guards.ts       — route guards: user navigates to a hidden screen → 403
+src/
+api.ts — fetches registry from F04
+resolver.ts — intersects (vertical, tier, data sources, tenant overrides) → visible screens
+navigation.ts — converts visible screens into grouped nav items
+guards.ts — route guards: user navigates to a hidden screen → 403
 
 Navigation sections: Home | Operate | Analyze | Configure | Govern | Admin (Sevyn8 only)
 
 The resolver is the source of truth. Both the navigation component AND the route guards MUST consume the same resolver — UX01-FR-008 bans direct-URL access to hidden screens.
 
 Acceptance:
+
 - New tenant without an inventory source connected sees no "Inventory Intelligence" in the sidebar AND cannot reach /inventory via URL
 - Connecting the inventory source makes the screen appear in the nav within 5 seconds (no page reload needed)
 - Commit as `feat(screen-registry): ux01 screen registry consumer`
+
 ```
 
 ---
@@ -2102,18 +2409,20 @@ Acceptance:
 **Output:** Layout renderer, 12-col grid, refresh modes
 
 ```
+
 Implement the Layout Engine that renders a JSON layout configuration into a 12-column responsive grid of widgets.
 
 Layout JSON schema (UX01-FR-020):
 {
-  screen_id, tenant_id, layout: { rows: [{ columns: [{ widget_id, widget_config, col_span }] }] },
-  filters: [{ filter_widget_id, position, cross_widget_binding }],
-  default_time_range, refresh_interval_seconds
+screen_id, tenant_id, layout: { rows: [{ columns: [{ widget_id, widget_config, col_span }] }] },
+filters: [{ filter_widget_id, position, cross_widget_binding }],
+default_time_range, refresh_interval_seconds
 }
 
 Grid: 12 columns; widget col_span in {3, 4, 6, 12}; mobile stacks to 12.
 
 Refresh modes (UX01-FR-023):
+
 - Manual: user clicks refresh
 - Interval: configurable (60s, 5min, 15min, 1hr)
 - Event-driven: subscribe to Pub/Sub via WebSocket proxy
@@ -2121,10 +2430,12 @@ Refresh modes (UX01-FR-023):
 The Layout Engine does NOT know what widgets are — it just calls /packages/widgets with the widget_id and config. This decoupling is essential for UX01's "one codebase many products" goal.
 
 Acceptance:
+
 - Given a layout JSON and a widget library, the page renders
 - Changing refresh mode triggers proper lifecycle
 - Cross-widget filter binding: changing a date range filter updates all widgets on the page within 500ms
 - Commit as `feat(layout-engine): ux01 12-col grid + refresh modes`
+
 ```
 
 ---
@@ -2136,9 +2447,11 @@ Acceptance:
 **Output:** Widget base class, registration pattern, empty library
 
 ```
+
 Scaffold /packages/widgets.
 
 Every widget is a self-contained React component meeting UX01-FR-010:
+
 - Accepts typed configuration object (Zod-validated)
 - Fetches its own data from API gateway (O01)
 - Respects tenant context, theme, locale, hierarchy scope, RBAC masking
@@ -2147,6 +2460,7 @@ Every widget is a self-contained React component meeting UX01-FR-010:
 - Carries a Data Quality Indicator per UX01-FR-013
 
 Create base abstractions:
+
 - <WidgetContainer> — wrapper that provides layout cell, loading/error boundaries, refresh control
 - useWidgetConfig(schema) — validates config against Zod schema
 - useWidgetData(queryKey, fetcher) — tanstack query wrapper with tenant/scope injection
@@ -2159,9 +2473,11 @@ Widget registration: each widget exports a manifest { id, name, category, config
 Do NOT build individual widgets yet — that's P7.
 
 Acceptance:
+
 - Base abstractions compile and have unit tests
 - A stub widget "Hello World" renders via the Layout Engine given a layout JSON
 - Commit as `feat(widgets): library scaffolding`
+
 ```
 
 ---
@@ -2179,9 +2495,11 @@ Acceptance:
 **Output:** Single metric, metric+trend, metric+sparkline, metric+comparison, traffic-light variants
 
 ```
+
 Build the KPI card widget family.
 
 Variants per spec:
+
 - <SingleMetric config={ query, format }>
 - <MetricWithTrend config={ query, trendPeriod, format }>
 - <MetricWithSparkline config={ query, sparklinePeriod, format }>
@@ -2193,9 +2511,11 @@ All respect theme, locale formatting (IC02 — ₹1,00,000 not $100,000), data q
 Storybook coverage: every variant, every format (currency/percentage/count/duration), every state (loading/loaded/error/empty/low-confidence/masked).
 
 Acceptance:
+
 - Passes a visual regression test
 - Renders correctly in Indian vs US locale
 - Commit as `feat(widgets/kpi): kpi card family`
+
 ```
 
 ---
@@ -2206,13 +2526,16 @@ Acceptance:
 **Output:** Line, bar, stacked bar, area widgets using Recharts
 
 ```
+
 Build chart widgets:
+
 - <LineChart>
 - <BarChart>
 - <StackedBarChart>
 - <AreaChart>
 
 Each:
+
 - Configurable axes, series, colors from theme tokens
 - Click-to-drill action
 - Time range selector
@@ -2223,6 +2546,7 @@ Each:
 Use Recharts as the underlying library.
 
 Acceptance: Commit as `feat(widgets/charts): phase 1 chart widgets`
+
 ```
 
 ---
@@ -2233,9 +2557,11 @@ Acceptance: Commit as `feat(widgets/charts): phase 1 chart widgets`
 **Output:** Sortable, paginated, expandable-row table
 
 ```
+
 Build <DataTable> widget per UX01-FR-011 Tables row.
 
 Features:
+
 - Columns from canonical schema
 - Sort per column, filter per column
 - Row click action
@@ -2248,6 +2574,7 @@ Features:
 Use TanStack Table (React Table v8).
 
 Acceptance: Commit as `feat(widgets/table): data table widget`
+
 ```
 
 ---
@@ -2258,7 +2585,9 @@ Acceptance: Commit as `feat(widgets/table): data table widget`
 **Output:** Date range, hierarchy picker, multi-select, search bar, toggle
 
 ```
+
 Build filter widget family per UX01-FR-011 Input/Filter row:
+
 - <DateRangePicker> — presets (today/yesterday/MTD/QTD/YTD/last N days) + custom range
 - <HierarchyPicker> — consumes AC02, respects scope, multi-level navigation
 - <MultiSelect> — type-ahead with server-side options if >50 items
@@ -2268,6 +2597,7 @@ Build filter widget family per UX01-FR-011 Input/Filter row:
 All filters bind to cross-widget context per UX01-FR-020 filters clause.
 
 Acceptance: Commit as `feat(widgets/filters): phase 1 filter widgets`
+
 ```
 
 ---
@@ -2278,7 +2608,9 @@ Acceptance: Commit as `feat(widgets/filters): phase 1 filter widgets`
 **Output:** Customer, store, product, alert, decision cards
 
 ```
+
 Build entity card widgets per UX01-FR-011 Entity Cards row:
+
 - <CustomerCard config={ entityId }> — loyalty tier badge, CLV, segment, last interaction
 - <StoreCard>
 - <ProductCard>
@@ -2288,6 +2620,7 @@ Build entity card widgets per UX01-FR-011 Entity Cards row:
 Each fetches entity via canonical schema, respects PII masking, links to full detail screen (e.g., CustomerCard clicks to CX-03).
 
 Acceptance: Commit as `feat(widgets/entity): entity card family`
+
 ```
 
 ---
@@ -2298,9 +2631,11 @@ Acceptance: Commit as `feat(widgets/entity): entity card family`
 **Output:** Chronological alert list with actions
 
 ```
+
 Build <AlertsFeed config={ source, priorityFilter }> per UX01-FR-011 Alerts & Actions row.
 
 Features:
+
 - Chronological list, deduplication (repeated alerts show count, not duplicate entries)
 - Severity badge, type icon, title, timestamp, recommended action button
 - Click row → focus in CX-04 Alert Centre
@@ -2308,6 +2643,7 @@ Features:
 - Dismiss with reason
 
 Acceptance: Commit as `feat(widgets/alerts): alerts feed widget`
+
 ```
 
 ---
@@ -2318,7 +2654,9 @@ Acceptance: Commit as `feat(widgets/alerts): alerts feed widget`
 **Output:** NL input + response card + explanation card
 
 ```
+
 Build conversational widget family per UX01-FR-011 Conversational row:
+
 - <NLQueryInput config={ llmModel, systemPrompt, schemaContext }>
 - <AIResponseCard> — renders text + structured chart if applicable
 - <ExplanationCard> — SHAP-style explanation rendering
@@ -2328,6 +2666,7 @@ Response UI must stream tokens (SSE) and fall back gracefully to non-stream if n
 Include a "copy prompt" and "save as widget" affordance (the latter saves the generated query as a new widget via UX01 Dashboard Builder — stub if Dashboard Builder not yet built).
 
 Acceptance: Commit as `feat(widgets/conversational): nl query family`
+
 ```
 
 ---
@@ -2338,11 +2677,13 @@ Acceptance: Commit as `feat(widgets/conversational): nl query family`
 **Output:** Reusable approval-flow component for agent-generated proposals
 
 ```
-*** Before writing code: conduct a design spike. ***
+
+**_ Before writing code: conduct a design spike. _**
 
 The Proposal Inbox widget is consumed by SCR-09, SCR-10, SCR-11, SCR-12, SCR-16, CX-DD-01 for approving agent-generated proposals (mappings, DQ rules, identity merges, pipeline changes, purpose suggestions, agent findings). Getting the UX right ONCE here prevents six divergent approval UXs later.
 
 Design spike:
+
 1. Read the six consumer screen specs for their Proposal/Approval sections
 2. Enumerate the common elements: proposal card → diff view → approve / reject / edit / defer → reason capture → audit log
 3. Enumerate the divergent elements: what content renders in the diff per consumer
@@ -2350,6 +2691,7 @@ Design spike:
 5. Only then implement
 
 Implementation:
+
 - <ProposalInbox consumerType="mapping" | "dq_rule" | "identity_merge" | "pipeline" | "purpose" | "agent_finding" source={fetcher}>
 - Standard approval actions; pluggable content area (the "diff" panel) per consumer type
 - Bulk actions (approve all, reject all)
@@ -2357,9 +2699,11 @@ Implementation:
 - Audit log entry per action
 
 Acceptance:
+
 - ADR committed
 - Widget handles all 6 consumer types without if-ladders
 - Commit as `feat(widgets/proposal-inbox): reusable agent proposal approval`
+
 ```
 
 ---
@@ -2370,11 +2714,13 @@ Acceptance:
 **Output:** Top-N / bottom-N variant of data table
 
 ```
+
 Build <Leaderboard config={ query, topN, bottomN, rankBy }> per UX01-FR-011 Tables row ranked variant.
 
 Used by CX-01 (top/bottom 10 stores), CX-08 (top products).
 
 Acceptance: Commit as `feat(widgets/leaderboard): ranked table widget`
+
 ```
 
 ---
@@ -2392,11 +2738,13 @@ Acceptance: Commit as `feat(widgets/leaderboard): ranked table widget`
 **Output:** Landing screen with health scorecard + activity feed + attention panel + quick links
 
 ```
+
 Build SCR-01 per spec §SCR-01.
 
 Read the spec section fully. Implement every FR-NNN requirement. Test against every acceptance criterion.
 
 Layout:
+
 - Row 1: Filters (tenant context — usually locked)
 - Row 2: Health Scorecard — 5 cards (Platform / Ingestion / Quality / Consent / Usage) using <TrafficLightMetric>
 - Row 3: Activity Feed (left 8-col) + Attention Panel (right 4-col)
@@ -2405,6 +2753,7 @@ Layout:
 Health scores derived in near-real-time via WebSocket subscriptions to relevant Pub/Sub topics.
 
 Cross-screen links per SCR-01-FR-002:
+
 - Platform card → SCR-24
 - Ingestion card → SCR-08 filtered to lagging source
 - Quality card → SCR-10 filtered to failing dataset
@@ -2414,6 +2763,7 @@ Cross-screen links per SCR-01-FR-002:
 Register the screen in the Screen Registry so it appears as default home for Tenant Admins.
 
 Acceptance: every SCR-01 acceptance criterion verified by an E2E test (Playwright). Commit as `feat(SCR-01): tenant overview & health`
+
 ```
 
 ---
@@ -2425,9 +2775,11 @@ Acceptance: every SCR-01 acceptance criterion verified by an E2E test (Playwrigh
 **Output:** User directory + invite flow + teams + workspaces + SCIM + SSO
 
 ```
+
 Build SCR-02 per spec §SCR-02.
 
 Scope:
+
 - User directory with status, roles, hierarchy scope, MFA, workspaces, last-login
 - Invite flow with branded email (using SCR-04 brand tokens)
 - Bulk CSV import with validation
@@ -2438,6 +2790,7 @@ Scope:
 - Disable/delete with DSAR routing
 
 Acceptance: every SCR-02 acceptance criterion verified. Commit as `feat(SCR-02): users, teams & workspaces`
+
 ```
 
 ---
@@ -2449,11 +2802,13 @@ Acceptance: every SCR-02 acceptance criterion verified. Commit as `feat(SCR-02):
 **Output:** Brand editor, locale/region, custom domain (Enterprise), screen toggles, feature flags
 
 ```
+
 Build SCR-04 per spec §SCR-04.
 
 CRITICAL feature for Display Data: custom domain configuration must work end-to-end. Display Data will launch on a custom domain at go-live.
 
 Scope:
+
 - Brand editor with live preview (re-renders SCR-01 as preview target)
 - Accessibility validator (WCAG 2.1 AA contrast check on save)
 - Locale editor (en-IN default, framework-ready for hi-IN/ta-IN)
@@ -2464,6 +2819,7 @@ Scope:
 - Draft → validate → promote → rollback flow
 
 Acceptance: every SCR-04 acceptance criterion; custom domain for a test tenant provisions end-to-end in <15 min. Commit as `feat(SCR-04): tenant config & theme`
+
 ```
 
 ---
@@ -2475,9 +2831,11 @@ Acceptance: every SCR-04 acceptance criterion; custom domain for a test tenant p
 **Output:** Interactive tree + bulk CSV + reorg scheduling + multi-hierarchy
 
 ```
+
 Build SCR-05 per spec §SCR-05.
 
 Scope:
+
 - Interactive hierarchy tree (expand/collapse, drag-to-reparent, inline rename, right-click actions)
 - Bulk CSV import with cycle/orphan/type validation
 - Search (name, code, metadata, breadcrumb results)
@@ -2487,6 +2845,7 @@ Scope:
 - Cross-hierarchy mapping overlay
 
 Acceptance: every SCR-05 acceptance criterion — 500-store bulk import in <1hr; reorg of 30 stores in <1 minute; historical hierarchy queries correct. Commit as `feat(SCR-05): hierarchy manager`
+
 ```
 
 ---
@@ -2498,9 +2857,11 @@ Acceptance: every SCR-05 acceptance criterion — 500-store bulk import in <1hr;
 **Output:** Platform role view + custom role authoring + permission matrix + simulator + impact
 
 ```
+
 Build SCR-06 per spec §SCR-06. Scope per FR-NNN. Include the Policy Simulator (SCR-06-FR-005) — it's the debugging tool admins will rely on.
 
 Acceptance: every criterion. Commit as `feat(SCR-06): role & permission manager`
+
 ```
 
 ---
@@ -2512,9 +2873,11 @@ Acceptance: every criterion. Commit as `feat(SCR-06): role & permission manager`
 **Output:** Three-tier ontology browser, relationship graph, KPI glossary, schema evolution timeline
 
 ```
+
 Build SCR-07 per spec §SCR-07.
 
 Scope per FR-NNN:
+
 - Navigable tree across Core → Vertical → Tenant Extension tiers
 - Entity detail page with attributes table, relationships diagram, source mappings, downstream usage
 - Search (attribute, entity, description, tag, semantic)
@@ -2524,6 +2887,7 @@ Scope per FR-NNN:
 - Tenant extension draft/approve flow (Enterprise)
 
 Acceptance: every criterion. Commit as `feat(SCR-07): canonical schema browser`
+
 ```
 
 ---
@@ -2535,11 +2899,13 @@ Acceptance: every criterion. Commit as `feat(SCR-07): canonical schema browser`
 **Output:** Full operational cockpit — catalog + wizard + source detail + runs + inspector + DLQ + replay + live tail + drift
 
 ```
+
 Build SCR-08 per spec §SCR-08.
 
 **This is the most-used screen for Display Data operators. Quality matters most here.**
 
 Scope (every FR):
+
 - Source catalog with live health cards
 - Add Source Wizard (7-step per FR-003): type → connection → schema preview → ingestion policy → consent → PII classification → activation
 - 11 connector types supported at launch
@@ -2554,12 +2920,14 @@ Scope (every FR):
 - Schema Drift Alerts
 
 Special attention for Display Data use cases:
+
 - ROOS connector works end-to-end
 - ScanLink connector works end-to-end
 - Manual CSV upload via Universal CSV Ingestion Agent works (integrate existing agent_011Ca2AxDuF5UDLWSAac5tGM — see /docs/progress for Phase 1 integration notes)
 - Shelf imagery ingestion from HHT app works (the Ithina React Native HHT app produces image uploads; SCR-08 surfaces these as a source)
 
 Acceptance: every SCR-08 acceptance criterion. Commit as `feat(SCR-08): data source wizard & ingestion health`
+
 ```
 
 ---
@@ -2571,9 +2939,11 @@ Acceptance: every SCR-08 acceptance criterion. Commit as `feat(SCR-08): data sou
 **Output:** Mapping workspace + transformation language + agent proposals + versioning
 
 ```
+
 Build SCR-09 per spec §SCR-09.
 
 Scope per every FR:
+
 - Mapping workspace: source schema (left) + canonical schema (right) + rules canvas (middle)
 - Rule types: rename, coerce, transform (expression), conditional, split, combine, constant, enum, pass-through
 - Transformation language: restricted sandboxed JS-like; standard library (date, string, phone, email, GTIN, currency via IC02, hash, lookup)
@@ -2584,6 +2954,7 @@ Scope per every FR:
 - One-click rollback
 
 Acceptance: every SCR-09 acceptance criterion including <15 min mapping time for 30-column CSV with agent assist, and >90% auto-propose accuracy at HIGH/MEDIUM confidence. Commit as `feat(SCR-09): mapping studio`
+
 ```
 
 ---
@@ -2595,11 +2966,13 @@ Acceptance: every SCR-09 acceptance criterion including <15 min mapping time for
 **Output:** Quality scorecard + rules library + incident stream + DQ agent proposals + promotion gates
 
 ```
+
 Build SCR-10 per spec §SCR-10.
 
 Every FR. Uses Proposal Inbox widget for DQ Agent rule proposals.
 
 Acceptance: every criterion including deterministic incident → root-cause navigation in ≤3 clicks. Commit as `feat(SCR-10): data quality console`
+
 ```
 
 ---
@@ -2611,6 +2984,7 @@ Acceptance: every criterion including deterministic incident → root-cause navi
 **Output:** Purpose registry + consent state overview + per-entity consent + collection config + withdrawal cascade
 
 ```
+
 Build SCR-16 per spec §SCR-16.
 
 Phase 1 cut: Purpose Registry, Consent State Overview, Per-Entity Consent, Consent Collection Configuration (templates), Withdrawal Cascade Monitor, Retention Dashboard.
@@ -2620,6 +2994,7 @@ Defer to Phase 2: DPIA workflow UI (PR04), Consent Reporting exports.
 Body Shop two-touchpoint model MUST work in Phase 1 since they go live on it.
 
 Acceptance: every criterion that applies to Phase 1 scope. Commit as `feat(SCR-16): consent manager (phase 1 cut)`
+
 ```
 
 ---
@@ -2631,9 +3006,11 @@ Acceptance: every criterion that applies to Phase 1 scope. Commit as `feat(SCR-1
 **Output:** Rule authoring + routing + escalation + digest/quiet hours + analytics
 
 ```
+
 Build SCR-19 per spec §SCR-19.
 
 Acceptance: every criterion. Commit as `feat(SCR-19): notification & alert rules`
+
 ```
 
 ---
@@ -2645,11 +3022,13 @@ Acceptance: every criterion. Commit as `feat(SCR-19): notification & alert rules
 **Output:** Unified audit feed + lineage explorer + decision log + integrity proofs + sensitive event highlighting
 
 ```
+
 Build SCR-20 per spec §SCR-20.
 
 **Critical compliance screen — regulator-visible. Get the integrity guarantees right (SHA-chain, signed exports).**
 
 Acceptance: every criterion including <5s from admin action to appearance in S20; SHA-chain tamper detection within 5 min. Commit as `feat(SCR-20): audit & activity log`
+
 ```
 
 ---
@@ -2661,11 +3040,13 @@ Acceptance: every criterion including <5s from admin action to appearance in S20
 **Output:** Minimal SCR-24 covering what CSM needs for Display Data rollout
 
 ```
+
 Build a minimal Phase 1 cut of SCR-24 Platform Ops Dashboard.
 
 Full SCR-24 is Phase 2 (P12.12). The Phase 1 cut covers ONLY what's needed for Display Data CSM to provision and operate the tenant:
 
 Phase 1 scope:
+
 - Tenant list table (every tenant, status, tier, vertical, created date, last activity)
 - Tenant provisioning wizard (triggers F02 provisioning, pre-configures vertical + extension + tier + region)
 - Tenant detail view (read-only) showing current status and the tenant's W01 progress
@@ -2673,6 +3054,7 @@ Phase 1 scope:
 - SSO provider configuration per Enterprise tenant (hands to AC01 SSO config)
 
 Deferred to Phase 2 (stubs only):
+
 - Cross-tenant query tools
 - Incident response tools
 - Platform-wide health dashboard
@@ -2682,6 +3064,7 @@ Deferred to Phase 2 (stubs only):
 Only Sevyn8 Super Admins have access (AC01 policy).
 
 Provisioning wizard flow:
+
 1. Tenant basics (name, primary contact email, tier, region)
 2. Vertical + extension (retail, retail+display-data, reinsurance, etc.)
 3. Custom domain (Enterprise) — validates CNAME + provisions TLS
@@ -2689,10 +3072,12 @@ Provisioning wizard flow:
 5. Confirm → F02 provisioning kicks off asynchronously with progress events
 
 Acceptance:
+
 - CSM can provision Display Data via wizard in <10 min
 - Tenant list supports sort/filter/search
 - Suspension cascades correctly (revokes sessions, halts ingestion)
 - Commit as `feat(SCR-24): platform ops dashboard (phase 1 cut)`
+
 ```
 
 ---
@@ -2704,11 +3089,13 @@ Acceptance:
 **Output:** 10-step onboarding flow, re-entrant, multi-workspace support from day one
 
 ```
+
 Build W01 per spec §W01.
 
 **CRITICAL for Display Data — this is the FIRST thing Display Data's Tenant Admin will experience at go-live.**
 
 Scope per every FR:
+
 - Step 1: Welcome & Tenant Context (vertical pre-selected by CSM via SCR-24)
 - Step 2: Brand & Theme (hands to SCR-04)
 - Step 3: Custom Domain (Enterprise) — **Display Data will use this**
@@ -2725,6 +3112,7 @@ W01 is re-entrant — admin can revisit any step anytime via direct nav.
 Wizard telemetry feeds SCR-24 with step durations, drop-offs, friction points (anonymized across tenants).
 
 Acceptance: Standard-tier tenant completes E2E in <2hr; Enterprise in <4hr; Display Data's configuration goes through without manual CSM intervention. Commit as `feat(W01): tenant onboarding wizard`
+
 ```
 
 ---
@@ -2742,9 +3130,11 @@ Acceptance: Standard-tier tenant completes E2E in <2hr; Enterprise in <4hr; Disp
 **Output:** Home screen for CEO/VP/Regional/Store Manager
 
 ```
+
 Build CX-01 per spec §CX-01.
 
 Layout per spec:
+
 - Row 1: Global filters (date range + hierarchy picker + comparison toggle)
 - Row 2: 4 KPI cards (Revenue, Transactions, Avg Basket Value, Conversion Rate)
 - Row 3: Revenue trend line (6-col) + Store leaderboard (6-col)
@@ -2756,6 +3146,7 @@ Interactions per spec (click-through to CX-02, CX-06, CX-04 etc.).
 Hierarchy scope from AC02 auto-applied — CEO sees chain, store manager sees store.
 
 Acceptance: p95 load <1.5s with 100-store tenant. Commit as `feat(CX-01): executive dashboard`
+
 ```
 
 ---
@@ -2767,11 +3158,13 @@ Acceptance: p95 load <1.5s with 100-store tenant. Commit as `feat(CX-01): execut
 **Output:** Store funnel + hourly heatmap + zone analytics + store comparison
 
 ```
+
 Build CX-02 per spec §CX-02.
 
 Layout per spec with graceful fallback when G04 video not available (funnel starts at Transactions instead of Footfall, floor plan view replaced by department performance table).
 
 Commit as `feat(CX-02): store performance`
+
 ```
 
 ---
@@ -2783,9 +3176,11 @@ Commit as `feat(CX-02): store performance`
 **Output:** Alert summary + feed + trends + resolution metrics
 
 ```
+
 Build CX-04 per spec §CX-04.
 
 Commit as `feat(CX-04): alert centre`
+
 ```
 
 ---
@@ -2797,11 +3192,13 @@ Commit as `feat(CX-04): alert centre`
 **Output:** Display Data's primary screen — compliance heatmap + agent findings feed + execution trends + shelf image gallery + perishable tracking + Ask PAC
 
 ```
+
 Build CX-DD-01 per spec §CX-DD-01.
 
 **This is Display Data's flagship screen. It must be excellent.**
 
 Layout per spec:
+
 - Row 1: Filters (date, store, category, planogram version)
 - Row 2: 4 KPI cards (Planogram Compliance Score / OOS Facings / Misplaced SKUs / Promotion Execution Rate)
 - Row 3: Planogram Compliance Heatmap (full width, clickable cells)
@@ -2810,6 +3207,7 @@ Layout per spec:
 - Row 6: Perishable Waste Tracking (conditional — only if perishables in catalog)
 
 Critical integrations:
+
 - Agent Findings Feed is the live output of PAC, Promotion, Planogram, Perishable agents via their decision pipelines (SCR-12-based)
 - "Ask PAC" is a conversational widget with agent-specific system prompt (scoped A05 context)
 - Click-to-task from findings routes via O04 through SCR-17
@@ -2817,6 +3215,7 @@ Critical integrations:
 Register in the Display Data vertical extension package in IC01 so only Display Data and its downstream Ithina retail clients see this screen.
 
 Acceptance per spec: p95 <2s with 100 stores/10K SKUs; findings appear within 5min of capture. Commit as `feat(CX-DD-01): shelf & planogram intelligence`
+
 ```
 
 ---
@@ -2836,11 +3235,13 @@ Acceptance per spec: p95 <2s with 100 stores/10K SKUs; findings appear within 5m
 **Output:** Pipeline DAG executor + node type framework
 
 ```
+
 Build the agent runtime foundation at /services/ai/a03-decision-orchestration/.
 
 This is NOT the pipeline BUILDER UI (that's SCR-12, Phase 2). This is the RUNTIME that executes decision pipelines authored for Display Data's four agents.
 
 Scope:
+
 - DAG executor with typed node types:
   - Trigger (Pub/Sub subscription)
   - DataSourceLookup
@@ -2861,9 +3262,11 @@ Scope:
 Pipelines defined as YAML files in /agents/{agent_name}/pipelines/ initially (SCR-12 DAG editor will target these later).
 
 Acceptance:
+
 - A trivial "hello world" pipeline (Trigger → LLMNode → ActionEmit) runs end-to-end
 - Pipeline simulator runs a draft without production side effects
 - Commit as `feat(A03): agent runtime foundation (pipeline executor)`
+
 ```
 
 ---
@@ -2875,27 +3278,32 @@ Acceptance:
 **Output:** Minimal model registry until A04 Phase 2
 
 ```
+
 Build a lightweight model registry to serve Phase 1 agents until A04 Model Lifecycle Manager is built in Phase 2.
 
 /services/ai/model-registry-light/
-  - Model record: { model_id, agent_name, version, training_run_id, accuracy_baseline, storage_uri (GCS), status (STAGED/CHAMPION/RETIRED), promoted_at, promoted_by }
-  - GCS bucket for model artifacts (ONNX format preferred for portability)
-  - Simple API: register(), list(), getChampion(agent), promote(modelId), rollback(agent)
-  - Audit every promotion per P0.10 convention
-  - Integrates with @cortex/feature-flags for gradual rollout (champion/challenger)
+
+- Model record: { model_id, agent_name, version, training_run_id, accuracy_baseline, storage_uri (GCS), status (STAGED/CHAMPION/RETIRED), promoted_at, promoted_by }
+- GCS bucket for model artifacts (ONNX format preferred for portability)
+- Simple API: register(), list(), getChampion(agent), promote(modelId), rollback(agent)
+- Audit every promotion per P0.10 convention
+- Integrates with @cortex/feature-flags for gradual rollout (champion/challenger)
 
 Migration path: when A04 lands in Phase 2, these records migrate to A04 with no data loss.
 
 Model deployment pattern for agents:
+
 - Agent pipelines reference model by agent_name (not version)
 - Runtime resolves to current champion at execution time
 - Rollback by promoting the previous champion
 
 Acceptance:
+
 - Register a YOLO model for Planogram agent; it becomes champion
 - Register a new version; explicitly promote; Planogram agent uses new version within 1 minute
 - Rollback works; old version used again
 - Commit as `feat(model-registry-light): lightweight registry for phase 1 agents`
+
 ```
 
 ---
@@ -2907,6 +3315,7 @@ Acceptance:
 **Output:** Planogram compliance detection pipeline
 
 ```
+
 Build the Planogram Agent — start here because it's the most fundamental Display Data capability.
 
 Read /docs/clients/display-data/ for the full context on the planogram use case, what Ithina's clients expect, how the agent fits into the client workflow.
@@ -2923,15 +3332,18 @@ Trigger: new shelf image ingested (from HHT app or fixed camera) via G01 → G04
 Model: use Ultralytics YOLO variant trained on retail shelf data. Initial fine-tuning from Ithina's existing annotated data. Inference in ONNX Runtime for portability.
 
 Data model additions (extend D01):
+
 - retail.PlanogramCompliance (entity per (store, shelf, timestamp) with compliance_score, findings, image_ref)
 - retail.ShelfObservation (raw CV output per image)
 
 Per the Sevyn8 skill's voice: agent findings are direct, factual, with impact estimates in INR. No marketing fluff.
 
 Acceptance:
+
 - Given 10 annotated test images, agent produces correct compliance scores within 20% of human annotation
 - End-to-end latency (image upload → finding in CX-DD-01) <5 minutes
 - Commit as `feat(agents/planogram): planogram compliance agent`
+
 ```
 
 ---
@@ -2942,6 +3354,7 @@ Acceptance:
 **Output:** Assortment compliance pipeline
 
 ```
+
 Build the PAC Agent (Product/Assortment Compliance).
 
 Pipeline:
@@ -2953,8 +3366,10 @@ Trigger: daily schedule (or on-demand)
 → ActionEmit: write findings; publish to CX-DD-01 and O02 alerts
 
 Acceptance:
+
 - Correctly identifies 95% of assortment gaps in validation dataset
 - Commit as `feat(agents/pac): product/assortment compliance agent`
+
 ```
 
 ---
@@ -2965,6 +3380,7 @@ Acceptance:
 **Output:** Promotional display compliance pipeline
 
 ```
+
 Build the Promotion Agent.
 
 Pipeline:
@@ -2976,6 +3392,7 @@ Trigger: new shelf image OR start of new promotion period
 → ActionEmit: findings per promotion; ROI-at-risk estimate
 
 Acceptance: Commit as `feat(agents/promotion): promotion execution agent`
+
 ```
 
 ---
@@ -2986,6 +3403,7 @@ Acceptance: Commit as `feat(agents/promotion): promotion execution agent`
 **Output:** Perishable freshness + markdown suggestion pipeline
 
 ```
+
 Build the Perishable Agent.
 
 Pipeline:
@@ -2998,6 +3416,7 @@ Trigger: hourly schedule (perishables move fast)
 → ActionEmit: findings to CX-DD-01; alerts via O02 for urgent items
 
 Acceptance: Commit as `feat(agents/perishable): perishable freshness + markdown agent`
+
 ```
 
 ---
@@ -3008,15 +3427,18 @@ Acceptance: Commit as `feat(agents/perishable): perishable freshness + markdown 
 **Output:** Reproducible test fixtures + accuracy benchmarks per agent
 
 ```
+
 Build an agent testing harness.
 
 Scope:
+
 - Synthetic shelf image generator (annotated) for Planogram / PAC / Promotion agents
 - Synthetic POS + inventory data generator for Perishable agent
 - Baseline accuracy benchmarks: each agent runs against a fixed test set; accuracy tracked per commit in CI
 - Regression detection: if accuracy drops >3% from baseline, PR is blocked
 
 Acceptance: Running `make test-agents` produces a report showing accuracy per agent against the baseline. Commit as `feat(agents): testing harness + synthetic data`
+
 ```
 
 ---
@@ -3028,11 +3450,13 @@ Acceptance: Running `make test-agents` produces a report showing accuracy per ag
 **Output:** Self-hosted CSV agent on Cloud Run + SCR-08/09 plumbing
 
 ```
+
 Integrate the existing Universal CSV Ingestion Agent (agent_011Ca2AxDuF5UDLWSAac5tGM) into the Cortex platform.
 
 The agent was previously built on Anthropic's Managed Agents platform. For Phase 1, we want it self-hosted on Cloud Run so it's in the Cortex trust boundary.
 
 Work streams:
+
 1. Export agent definition from Managed Agents (tool definitions + prompt templates + agentic loop)
 2. Port to /services/ai/csv-ingestion-agent/ as a standalone Node service
 3. Expose HTTP endpoint: POST /agent/csv-ingest with { tenantId, fileRef, sourceHint }
@@ -3044,10 +3468,12 @@ Work streams:
 Versioning: agent version tagged; SCR-08 records which version produced a given proposal for reproducibility. Feature flag `ingestion.csv-agent-v2` controls which version is active.
 
 Acceptance:
+
 - Upload a messy CSV via SCR-08 → within 2 min, proposals appear in SCR-09 Mapping Studio Proposal Inbox
 - Agent version recorded per proposal
 - Data steward can approve/edit/reject proposals
 - Commit as `feat(agents/csv-ingestion): port + integrate universal csv agent`
+
 ```
 
 ---
@@ -3064,7 +3490,9 @@ Acceptance:
 **Output:** Live Display Data tenant with all agreed config
 
 ```
+
 Provision the Display Data tenant in the staging environment per the v2 spec commitment:
+
 - Enterprise tier (dedicated Cloud SQL)
 - Region asia-south1 primary, asia-south2 DR
 - Vertical: retail + Display Data extension package (IC01)
@@ -3074,10 +3502,12 @@ Provision the Display Data tenant in the staging environment per the v2 spec com
 Walk the provisioning through SCR-24 using the Super Admin wizard. Complete W01 to the end. Verify all 10 steps complete without manual intervention.
 
 Acceptance:
+
 - Display Data admin can log in, sees branded console, all configured screens visible
 - Workspaces list shows initial downstream clients
 - Audit log (SCR-20) shows all provisioning events
 - Commit as `ops(display-data): staging tenant provisioned`
+
 ```
 
 **Additional post-provisioning seed script (NEW in v2):**
@@ -3085,6 +3515,7 @@ Acceptance:
 After W01 completes, run /scripts/display-data/seed-defaults.ts to populate Display Data's operational defaults that W01 doesn't capture:
 
 ```
+
 /scripts/display-data/seed-defaults.ts seeds:
 
 1. Hierarchy placeholders:
@@ -3122,6 +3553,7 @@ After W01 completes, run /scripts/display-data/seed-defaults.ts to populate Disp
 Defaults captured in /docs/progress/display-data-defaults.md for reuse by future vertical tenants.
 
 Commit as `ops(display-data): default seeds for staging provisioning`
+
 ```
 
 ---
@@ -3132,9 +3564,11 @@ Commit as `ops(display-data): default seeds for staging provisioning`
 **Output:** Live shelf imagery ingestion → CX-DD-01
 
 ```
+
 Wire the Display Data tenant's first real data source: shelf imagery uploaded from the Ithina React Native HHT app.
 
 Configuration in SCR-08:
+
 - Source type: HTTPS webhook
 - Endpoint: provided to HHT app at config time
 - Auth: API key scoped to Display Data's first workspace
@@ -3143,6 +3577,7 @@ Configuration in SCR-08:
 Mapping in SCR-09: maps to retail.ShelfObservation entity + raw image in GCS.
 
 Verify end-to-end:
+
 1. HHT app (test harness if real app not ready) uploads a shelf image
 2. G01 ingests; image lands in Bronze
 3. G02 processes to Silver with metadata in Postgres
@@ -3150,9 +3585,11 @@ Verify end-to-end:
 5. Finding surfaces in CX-DD-01 within 5 minutes
 
 Acceptance:
+
 - E2E pipeline works with <5 min latency
 - Errors at any stage surface as DLQ entries in SCR-08 with actionable reason codes
 - Commit as `ops(display-data): shelf imagery pipeline live in staging`
+
 ```
 
 ---
@@ -3163,9 +3600,11 @@ Acceptance:
 **Output:** POS data ingestion → CX-01 + CX-02 + CX-DD-01 Perishable agent
 
 ```
+
 Wire POS data ingestion (SFTP drop folder pattern is common for retail POS).
 
 Configuration per SCR-08 + SCR-09. Validate:
+
 - Transactions land in retail.Transaction
 - Line items land in retail.TransactionLineItem
 - CX-01 Executive Dashboard shows numbers for Display Data's downstream client
@@ -3173,9 +3612,11 @@ Configuration per SCR-08 + SCR-09. Validate:
 - Perishable Agent receives inventory + POS signal, starts producing findings
 
 Acceptance:
+
 - Daily POS drop (sample file) processes in <30 minutes end-to-end
 - CX-01 populated with real numbers
 - Commit as `ops(display-data): POS ingestion live in staging`
+
 ```
 
 ---
@@ -3186,9 +3627,11 @@ Acceptance:
 **Output:** Full smoke test of Phase 1 deployment
 
 ```
+
 Conduct a full end-to-end validation of the Display Data Phase 1 deployment in staging.
 
 Validation checklist:
+
 1. Provisioning (W01 complete)
 2. All 13 Phase 1 admin screens reachable, RBAC correct per role
 3. All 4 Phase 1 analytical screens (CX-01, CX-02, CX-04, CX-DD-01) rendering with real data
@@ -3209,6 +3652,7 @@ Produce a validation report at /docs/progress/display-data-e2e-validation-[YYYY-
 Any failures block production rollout.
 
 Commit as `docs(display-data): phase 1 e2e validation report`
+
 ```
 
 ---
@@ -3220,9 +3664,11 @@ Commit as `docs(display-data): phase 1 e2e validation report`
 **Output:** Verified restoration of a real backup
 
 ```
+
 Before declaring Phase 1 ready for production, execute a backup restoration drill.
 
 Scenario:
+
 1. Take a point-in-time snapshot of the staging Display Data tenant
 2. Note key reference values:
    - A transaction total
@@ -3240,6 +3686,7 @@ Produce /docs/progress/backup-drill-[YYYY-MM-DD].md with timing, issues encounte
 If RTO exceeds 2h or RPO exceeds 1h, do not proceed to production rollout. Iterate on RE01 until drill passes.
 
 Commit as `ops(display-data): backup restoration drill executed`
+
 ```
 
 ---
@@ -3257,7 +3704,9 @@ These prompts follow the same templates as Phase 1. When you reach Phase 2, ask 
 Execute each using template:
 
 ```
+
 Build [SCR-ID] per spec §[SCR-ID]. Dependencies: [list from spec]. Use Proposal Inbox widget where applicable. Write acceptance tests for every criterion. Commit as `feat([SCR-ID]): [name]`.
+
 ```
 
 - **P12.1** SCR-03 Industry Vertical Builder (Sevyn8 internal — Super Admin only)
@@ -3280,7 +3729,9 @@ Build [SCR-ID] per spec §[SCR-ID]. Dependencies: [list from spec]. Use Proposal
 Execute each using template:
 
 ```
+
 Build [CX-ID] per spec §[CX-ID]. Dependencies: [from spec]. Commit as `feat([CX-ID]): [name]`.
+
 ```
 
 - **P13.1** CX-03 Customer 360
@@ -3346,7 +3797,9 @@ Execute each using the cross-cutting template from P5.x:
 ## P15.1: Unit test coverage baseline
 
 ```
+
 Audit unit test coverage across all modules. Enforce:
+
 - Every public function has a unit test
 - Every acceptance criterion from the spec has at least one corresponding test
 - Every bug fix adds a regression test
@@ -3357,6 +3810,7 @@ Tooling: vitest (packages/apps) + Go/Python equivalents if any service uses them
 Produce a coverage report at /docs/progress/coverage-[YYYY-MM-DD].md listing every module's current coverage with gaps.
 
 Commit as `test(platform): coverage baseline + gap report`.
+
 ```
 
 ---
@@ -3368,9 +3822,11 @@ Commit as `test(platform): coverage baseline + gap report`.
 **Output:** Full T01 testing framework (supersedes the narrower integration framework)
 
 ```
+
 Implement T01 Platform Testing Framework per §T01. This expands the earlier integration-only framework from v1 into the broader testing platform the spec calls for.
 
 Scope:
+
 1. Synthetic data generators:
    - Per-vertical realistic data generators (retail: customers, stores, products, transactions, loyalty accounts, stock levels)
    - Display Data specific: synthetic shelf images with controlled compliance characteristics (known OOS count, known misplaced SKUs) for deterministic agent testing
@@ -3406,10 +3862,12 @@ Scope:
    - Report: coverage per module against spec acceptance criteria
 
 Acceptance:
+
 - `make test:integration` spins ephemeral tenant, runs 50+ scenarios, tears down in <10 min
 - `make test:chaos` injects a failure, asserts recovery
 - `make test:benchmarks` produces a report comparing current to baseline
 - Commit as `feat(T01): platform testing framework`
+
 ```
 
 ---
@@ -3417,9 +3875,11 @@ Acceptance:
 ## P15.3: E2E test automation
 
 ```
+
 Build E2E test suite at /apps/admin-console/e2e/ and /apps/analytical/e2e/ using Playwright.
 
 Critical paths covered:
+
 - W01 tenant onboarding end-to-end
 - SCR-08 adding a data source and verifying ingestion
 - SCR-09 creating a mapping with agent proposal
@@ -3429,6 +3889,7 @@ Critical paths covered:
 E2E runs on every PR, against a fresh ephemeral tenant.
 
 Commit as `test(e2e): critical-path playwright suite`.
+
 ```
 
 ---
@@ -3440,6 +3901,7 @@ Commit as `test(e2e): critical-path playwright suite`.
 **Output:** Unit + visual + a11y + perf gates
 
 ```
+
 Establish frontend quality gates beyond the E2E Playwright suite.
 
 Add to /apps/admin-console and /apps/analytical:
@@ -3468,9 +3930,11 @@ Add to /apps/admin-console and /apps/analytical:
    - Alert if a route's JS > 300KB gzipped
 
 Acceptance:
+
 - All gates green on Phase 1 screens
 - PR that breaks any gate is blocked from merge
 - Commit as `feat(fe-quality): unit + visual + a11y + perf gates`
+
 ```
 
 ---
@@ -3478,9 +3942,11 @@ Acceptance:
 ## P15.5: Load testing baseline
 
 ```
+
 Build load test harness at /scripts/load-test/ using k6.
 
 Scenarios:
+
 - 1000 concurrent users, 10K events/min ingestion, 1 hour sustained
 - Burst: 10K concurrent, 100K events/min, 5 minutes
 - Failover: kill a replica during load; verify <30s recovery
@@ -3488,6 +3954,7 @@ Scenarios:
 Document target SLOs (from spec acceptance criteria) vs measured. Report at /docs/progress/load-test-[YYYY-MM-DD].md.
 
 Commit as `test(load): baseline load tests + SLO report`.
+
 ```
 
 ---
@@ -3495,7 +3962,9 @@ Commit as `test(load): baseline load tests + SLO report`.
 ## P15.6: Staging deployment runbook
 
 ```
+
 Author staging deployment runbook at /docs/runbooks/staging-deploy.md covering:
+
 - Pre-deploy checks (tests green, migrations validated, feature flags review)
 - Deploy command
 - Post-deploy smoke tests
@@ -3503,6 +3972,7 @@ Author staging deployment runbook at /docs/runbooks/staging-deploy.md covering:
 - Incident escalation paths
 
 Commit as `docs(runbooks): staging deploy runbook`.
+
 ```
 
 ---
@@ -3510,6 +3980,7 @@ Commit as `docs(runbooks): staging deploy runbook`.
 ## P15.7: Production deployment runbook — Display Data pilot
 
 ```
+
 Author production deployment runbook at /docs/runbooks/production-deploy-display-data.md covering the Display Data Phase 1 production rollout specifically:
 
 - Pre-flight: staging E2E validation (P11.4) must be GREEN
@@ -3522,6 +3993,7 @@ Author production deployment runbook at /docs/runbooks/production-deploy-display
 Involve: Seema (approve), engineering lead (execute), CSM (coordinate with client), DPO (compliance sign-off).
 
 Commit as `docs(runbooks): display-data production deploy plan`.
+
 ```
 
 ---
@@ -3529,6 +4001,7 @@ Commit as `docs(runbooks): display-data production deploy plan`.
 ## P15.8: Incident response runbook
 
 ```
+
 Author incident response runbook at /docs/runbooks/incident-response.md.
 
 Levels: P1 (production down), P2 (major feature broken), P3 (minor feature broken), P4 (bug, no user impact).
@@ -3538,6 +4011,7 @@ For each: detection path, escalation timeline, communication plan, post-mortem r
 Coordinate with RE01 Disaster Recovery (still to be built).
 
 Commit as `docs(runbooks): incident response`.
+
 ```
 
 ---
@@ -3549,11 +4023,13 @@ For any module or screen not covered above, use one of these templates.
 ## A.1: Template for a new backend module
 
 ```
+
 Implement [MODULE_ID] [MODULE_NAME] per /docs/spec/cortex_v2.docx section [SPEC_SECTION].
 
 Read the spec section fully before coding. Verify dependencies listed in the spec are implemented — check /docs/progress/status.md.
 
 Implement every FR-NNN requirement. Integrate with:
+
 - F01 tenant context
 - AC01 authorization
 - /packages/observability
@@ -3564,11 +4040,13 @@ Write tests for every acceptance criterion.
 Expose API surface internally via tRPC and externally via O01.
 
 Update /docs/progress/status.md. Commit as `feat([MODULE_ID]): [short description]`.
+
 ```
 
 ## A.2: Template for a new admin console screen
 
 ```
+
 Build [SCR-ID] per /docs/spec/cortex_v2.docx section [SCR-ID].
 
 Read the spec in full. Verify dependencies implemented.
@@ -3580,11 +4058,13 @@ Register in Screen Registry (F04).
 Write E2E test (Playwright) exercising every acceptance criterion.
 
 Commit as `feat([SCR-ID]): [name]`.
+
 ```
 
 ## A.3: Template for a new analytical screen
 
 ```
+
 Build [CX-ID] per /docs/spec/cortex_v2.docx section [CX-ID].
 
 Consume Gold-layer KPIs from D01. Register via IC01 vertical package if vertical-specific.
@@ -3592,11 +4072,13 @@ Consume Gold-layer KPIs from D01. Register via IC01 vertical package if vertical
 Layout per spec. Interactions per spec.
 
 Commit as `feat([CX-ID]): [name]`.
+
 ```
 
 ## A.4: Template for a new widget
 
 ```
+
 Build [WIDGET] per UX01-FR-010 requirements and /packages/widgets conventions.
 
 Respect theme, locale, RBAC masking, data quality badge. Handle loading/error/empty. Emit events.
@@ -3604,11 +4086,13 @@ Respect theme, locale, RBAC masking, data quality badge. Handle loading/error/em
 Add Storybook/Ladle coverage. Add visual regression test.
 
 Commit as `feat(widgets/[category]): [widget name]`.
+
 ```
 
 ## A.5: Template for a new agent pipeline
 
 ```
+
 Author a new decision pipeline under /agents/[agent-name]/pipelines/[pipeline-name].yaml.
 
 Nodes per A03 type catalog. Inputs / outputs typed. LLM prompts stored separately and version-controlled.
@@ -3616,11 +4100,13 @@ Nodes per A03 type catalog. Inputs / outputs typed. LLM prompts stored separatel
 Add pipeline-specific test fixtures to /agents/[agent-name]/test-fixtures/. Accuracy benchmark baseline set.
 
 Commit as `feat(agents/[agent]): [pipeline name] pipeline`.
+
 ```
 
 ## A.6: Template for debugging a specific module
 
 ```
+
 Something is wrong with [MODULE]. Before fixing anything:
 
 1. Read the last N commits touching the module
@@ -3632,6 +4118,7 @@ Something is wrong with [MODULE]. Before fixing anything:
 7. Apply fix
 
 Commit as `fix([MODULE]): [brief description]`.
+
 ```
 
 ---
@@ -3639,63 +4126,64 @@ Commit as `fix([MODULE]): [brief description]`.
 # APPENDIX B: REPO STRUCTURE REFERENCE
 
 ```
+
 cortex/
 ├── apps/
-│   ├── admin-console/              # Next.js — SCR-01 through SCR-24, W01
-│   ├── analytical/                 # Next.js — CX-01 through CX-DD-01
-│   ├── api-gateway/                # Node + Fastify — O01
-│   ├── mcp-cortex-core/            # MCP server
-│   ├── mcp-edge/                   # MCP server
-│   ├── mcp-admin-ops/              # MCP server
-│   ├── agents/
-│   │   ├── planogram/
-│   │   ├── pac/
-│   │   ├── promotion/
-│   │   └── perishable/
-│   └── dis-worker/                 # Data Ingestion Service workers
+│ ├── admin-console/ # Next.js — SCR-01 through SCR-24, W01
+│ ├── analytical/ # Next.js — CX-01 through CX-DD-01
+│ ├── api-gateway/ # Node + Fastify — O01
+│ ├── mcp-cortex-core/ # MCP server
+│ ├── mcp-edge/ # MCP server
+│ ├── mcp-admin-ops/ # MCP server
+│ ├── agents/
+│ │ ├── planogram/
+│ │ ├── pac/
+│ │ ├── promotion/
+│ │ └── perishable/
+│ └── dis-worker/ # Data Ingestion Service workers
 ├── packages/
-│   ├── widgets/                    # UX01 Widget Library
-│   ├── design-system/              # Theme, tokens, typography
-│   ├── ui-shell/                   # AppShell, navigation, tenant switcher
-│   ├── api-client/                 # Generated tRPC/OpenAPI clients
-│   ├── canonical-schema/           # D01 types + Zod
-│   ├── auth/                       # AC01 client helpers
-│   ├── tenant-context/             # F01 context provider
-│   ├── screen-registry/            # UX01 screen registry consumer
-│   ├── observability/              # Logging/metrics/tracing
-│   ├── secrets/                    # Secret Manager + KMS
-│   ├── temporal-query/             # F03 temporal query library
-│   └── cortex-sdk/                 # Public SDK (DX01)
+│ ├── widgets/ # UX01 Widget Library
+│ ├── design-system/ # Theme, tokens, typography
+│ ├── ui-shell/ # AppShell, navigation, tenant switcher
+│ ├── api-client/ # Generated tRPC/OpenAPI clients
+│ ├── canonical-schema/ # D01 types + Zod
+│ ├── auth/ # AC01 client helpers
+│ ├── tenant-context/ # F01 context provider
+│ ├── screen-registry/ # UX01 screen registry consumer
+│ ├── observability/ # Logging/metrics/tracing
+│ ├── secrets/ # Secret Manager + KMS
+│ ├── temporal-query/ # F03 temporal query library
+│ └── cortex-sdk/ # Public SDK (DX01)
 ├── services/
-│   ├── foundation/                 # F01–F05
-│   ├── data-platform/              # D01–D06
-│   ├── identity/                   # I01–I03
-│   ├── ingestion/                  # G01–G06
-│   ├── access/                     # AC01–AC04
-│   ├── streaming/                  # S01
-│   ├── industry/                   # IC01–IC02
-│   ├── ai/                         # A01–A08, E01–E02
-│   ├── orchestration/              # O01–O04
-│   ├── observability/              # OB01–OB03
-│   ├── privacy/                    # PR01–PR06
-│   ├── edge/                       # ED01–ED03
-│   ├── feedback/                   # FB01–FB03
-│   ├── resilience/                 # RE01
-│   └── testing/                    # T01
+│ ├── foundation/ # F01–F05
+│ ├── data-platform/ # D01–D06
+│ ├── identity/ # I01–I03
+│ ├── ingestion/ # G01–G06
+│ ├── access/ # AC01–AC04
+│ ├── streaming/ # S01
+│ ├── industry/ # IC01–IC02
+│ ├── ai/ # A01–A08, E01–E02
+│ ├── orchestration/ # O01–O04
+│ ├── observability/ # OB01–OB03
+│ ├── privacy/ # PR01–PR06
+│ ├── edge/ # ED01–ED03
+│ ├── feedback/ # FB01–FB03
+│ ├── resilience/ # RE01
+│ └── testing/ # T01
 ├── infra/
-│   ├── terraform/
-│   ├── k8s/
-│   ├── dev/                        # docker-compose for local
-│   └── ci/
+│ ├── terraform/
+│ ├── k8s/
+│ ├── dev/ # docker-compose for local
+│ └── ci/
 ├── docs/
-│   ├── spec/                       # cortex_v2.docx
-│   ├── skills/                     # sevyn8-workflow SKILL.md
-│   ├── architecture/decisions/     # ADRs
-│   ├── progress/
-│   │   ├── status.md
-│   │   └── handoff-YYYY-MM-DD.md
-│   ├── runbooks/
-│   └── onboarding.md
+│ ├── spec/ # cortex_v2.docx
+│ ├── skills/ # sevyn8-workflow SKILL.md
+│ ├── architecture/decisions/ # ADRs
+│ ├── progress/
+│ │ ├── status.md
+│ │ └── handoff-YYYY-MM-DD.md
+│ ├── runbooks/
+│ └── onboarding.md
 ├── scripts/
 ├── .github/workflows/
 ├── pnpm-workspace.yaml
@@ -3706,7 +4194,8 @@ cortex/
 ├── CLAUDE.md
 ├── CONTRIBUTING.md
 └── LICENSE
-```
+
+````
 
 ---
 
@@ -3876,7 +4365,7 @@ Before flipping the DNS to production, confirm:
 - [ ] Sub-processor list published
 - [ ] DPO compliance sign-off
 - [ ] First-48-hour monitoring plan staffed
-```
+````
 
 ---
 
@@ -3886,51 +4375,51 @@ Every decision below is baked into the v2 prompts. Override only with ADR captur
 
 ### Stack decisions
 
-| ID | Decision | Choice | Baked into prompt |
-|---|---|---|---|
-| ADR-STACK-001 | Auth provider | WorkOS | P2.1, CLAUDE.md |
-| ADR-STACK-002 | Monorepo tool | Turborepo | P0.1, CLAUDE.md |
-| ADR-STACK-003 | ORM | Drizzle | P0.4, CLAUDE.md |
-| ADR-STACK-004 | CSS framework | Tailwind 4 | P6.2 |
-| ADR-STACK-005 | Migration tool | drizzle-kit | P0.4 |
-| ADR-STACK-006 | i18n library | next-intl | P5.3 |
-| ADR-STACK-007 | Email provider | Resend | P5.20 — SendGrid killed its permanent free tier mid-2025 (60-day trial → $19.95/mo min); Resend has permanent 3K/mo free tier, better DX, React Email integration |
-| ADR-STACK-008 | Node runtime | 22 LTS | P0.1 |
-| ADR-STACK-009 | Package manager | pnpm | P0.1 |
-| ADR-STACK-010 | RSC strategy | Server shell, Client screens | P6.1 |
+| ID            | Decision        | Choice                       | Baked into prompt                                                                                                                                                 |
+| ------------- | --------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-STACK-001 | Auth provider   | WorkOS                       | P2.1, CLAUDE.md                                                                                                                                                   |
+| ADR-STACK-002 | Monorepo tool   | Turborepo                    | P0.1, CLAUDE.md                                                                                                                                                   |
+| ADR-STACK-003 | ORM             | Drizzle                      | P0.4, CLAUDE.md                                                                                                                                                   |
+| ADR-STACK-004 | CSS framework   | Tailwind 4                   | P6.2                                                                                                                                                              |
+| ADR-STACK-005 | Migration tool  | drizzle-kit                  | P0.4                                                                                                                                                              |
+| ADR-STACK-006 | i18n library    | next-intl                    | P5.3                                                                                                                                                              |
+| ADR-STACK-007 | Email provider  | Resend                       | P5.20 — SendGrid killed its permanent free tier mid-2025 (60-day trial → $19.95/mo min); Resend has permanent 3K/mo free tier, better DX, React Email integration |
+| ADR-STACK-008 | Node runtime    | 22 LTS                       | P0.1                                                                                                                                                              |
+| ADR-STACK-009 | Package manager | pnpm                         | P0.1                                                                                                                                                              |
+| ADR-STACK-010 | RSC strategy    | Server shell, Client screens | P6.1                                                                                                                                                              |
 
 ### Scope decisions (Phase 1 boundaries)
 
-| ID | Decision | Choice | Rationale |
-|---|---|---|---|
-| ADR-SCOPE-001 | I03 Multi-Source Conflict Resolution | Deferred to Phase 2 | Display Data Phase 1 focuses on store/product/transaction; Body Shop drives I03 demand |
-| ADR-SCOPE-002 | I02 Knowledge Graph | Phase 1 cut via Postgres recursive CTEs | Abstraction interface ready for Phase 3 graph DB migration |
-| ADR-SCOPE-003 | ED01 Edge-Cloud Orchestrator | Deferred to Phase 2 | No edge inference devices in Display Data Phase 1 |
-| ADR-SCOPE-004 | Mobile UX | Tablet (768px+) Phase 1; phone Phase 2 | Admin users on desktop/tablet primarily |
-| ADR-SCOPE-005 | Workspace isolation | Strict per-workspace; Tenant Admin rollup for billing only | Display Data multi-workspace requirement |
-| ADR-SCOPE-006 | Dashboard Builder UI | Parked to Phase 3 | Sevyn8 authors dashboards in Phase 1-2 |
-| ADR-SCOPE-007 | SCR-24 Platform Ops | Minimal cut (provisioning wizard) Phase 1 | CSM needs provisioning UI for Display Data rollout |
-| ADR-SCOPE-008 | O02 Alert Engine | Moved from Phase 2 → Phase 1 | SCR-19 is Phase 1 and requires O02 |
-| ADR-SCOPE-009 | ROOS boundary | External to Cortex | Ithina operates ROOS; Cortex consumes `dis.golden.roos` via G01 Kafka connector; Cortex builds no POS-specific listeners; Ithina's existing agents stay on ROOS |
+| ID            | Decision                             | Choice                                                     | Rationale                                                                                                                                                       |
+| ------------- | ------------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-SCOPE-001 | I03 Multi-Source Conflict Resolution | Deferred to Phase 2                                        | Display Data Phase 1 focuses on store/product/transaction; Body Shop drives I03 demand                                                                          |
+| ADR-SCOPE-002 | I02 Knowledge Graph                  | Phase 1 cut via Postgres recursive CTEs                    | Abstraction interface ready for Phase 3 graph DB migration                                                                                                      |
+| ADR-SCOPE-003 | ED01 Edge-Cloud Orchestrator         | Deferred to Phase 2                                        | No edge inference devices in Display Data Phase 1                                                                                                               |
+| ADR-SCOPE-004 | Mobile UX                            | Tablet (768px+) Phase 1; phone Phase 2                     | Admin users on desktop/tablet primarily                                                                                                                         |
+| ADR-SCOPE-005 | Workspace isolation                  | Strict per-workspace; Tenant Admin rollup for billing only | Display Data multi-workspace requirement                                                                                                                        |
+| ADR-SCOPE-006 | Dashboard Builder UI                 | Parked to Phase 3                                          | Sevyn8 authors dashboards in Phase 1-2                                                                                                                          |
+| ADR-SCOPE-007 | SCR-24 Platform Ops                  | Minimal cut (provisioning wizard) Phase 1                  | CSM needs provisioning UI for Display Data rollout                                                                                                              |
+| ADR-SCOPE-008 | O02 Alert Engine                     | Moved from Phase 2 → Phase 1                               | SCR-19 is Phase 1 and requires O02                                                                                                                              |
+| ADR-SCOPE-009 | ROOS boundary                        | External to Cortex                                         | Ithina operates ROOS; Cortex consumes `dis.golden.roos` via G01 Kafka connector; Cortex builds no POS-specific listeners; Ithina's existing agents stay on ROOS |
 
 ### Infrastructure decisions
 
-| ID | Decision | Choice | Rationale |
-|---|---|---|---|
+| ID            | Decision  | Choice                                       | Rationale                                                                                                                                                                                                                                                             |
+| ------------- | --------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ADR-INFRA-001 | Event bus | Pub/Sub internal, Kafka at integration edges | Operational simplicity for small team at Phase 1; GCP-native integrations (Dataflow, Eventarc) work out of the box; external Kafka via G01 covers ROOS + any future Kafka-speaking partner; `@cortex/event-bus` package abstracts internal bus for future optionality |
 
 ### Non-functional targets
 
-| ID | Decision | Value |
-|---|---|---|
-| ADR-NFR-001 | Enterprise tier RPO | 1 hour |
-| ADR-NFR-002 | Enterprise tier RTO | 2 hours |
-| ADR-NFR-003 | Authz decision latency (cached) | p99 < 5ms |
-| ADR-NFR-004 | Alert rule propagation | < 30s |
-| ADR-NFR-005 | Unit test coverage | 80% line / 70% branch |
-| ADR-NFR-006 | Accessibility standard | WCAG 2.1 AA |
-| ADR-NFR-007 | Performance budget | LCP < 2.5s, TBT < 300ms, CLS < 0.1 |
-| ADR-NFR-008 | Per-route bundle size | < 300KB gzipped |
+| ID          | Decision                        | Value                              |
+| ----------- | ------------------------------- | ---------------------------------- |
+| ADR-NFR-001 | Enterprise tier RPO             | 1 hour                             |
+| ADR-NFR-002 | Enterprise tier RTO             | 2 hours                            |
+| ADR-NFR-003 | Authz decision latency (cached) | p99 < 5ms                          |
+| ADR-NFR-004 | Alert rule propagation          | < 30s                              |
+| ADR-NFR-005 | Unit test coverage              | 80% line / 70% branch              |
+| ADR-NFR-006 | Accessibility standard          | WCAG 2.1 AA                        |
+| ADR-NFR-007 | Performance budget              | LCP < 2.5s, TBT < 300ms, CLS < 0.1 |
+| ADR-NFR-008 | Per-route bundle size           | < 300KB gzipped                    |
 
 ---
 

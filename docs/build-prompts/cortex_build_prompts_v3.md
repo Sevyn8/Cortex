@@ -53,7 +53,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 ### Repo prerequisites
 - [ ] v2 spec docx at `/docs/spec/cortex_v2.docx`
 - [ ] Sevyn8 skill at `/docs/skills/sevyn8-workflow/SKILL.md`
-- [ ] This prompts file at `/docs/build-prompts/cortex_build_prompts_v2.md`
+- [ ] This prompts file at `/docs/build-prompts/cortex_build_prompts_v3.md`
 - [ ] Empty progress tracker at `/docs/progress/status.md` (template in Appendix C)
 
 ### GCP foundations
@@ -65,7 +65,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 ### Third-party providers
 - [ ] WorkOS account created (or accept deferred setup for Week 4)
 - [ ] Anthropic API key procured for A05 LLM Gateway usage
-- [ ] Email provider chosen (SendGrid recommended for Phase 1)
+- [ ] Email provider chosen (Resend recommended for Phase 1)
 - [ ] Artifact storage plan — Google Artifact Registry (same GCP project)
 
 ### Architectural decisions — confirm defaults below
@@ -81,7 +81,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 
 ### Legal / compliance
 - [ ] DPA between Sevyn8 and Display Data drafted (can sign during build, MUST sign before production)
-- [ ] Sub-processor list at T-0 documented (GCP, Anthropic, WorkOS, SendGrid, etc.)
+- [ ] Sub-processor list at T-0 documented (GCP, Anthropic, WorkOS, Resend, etc.)
 - [ ] DPDP compliance posture documented
 
 Once every box is ticked, paste M1 into Claude Code, then P0.1.
@@ -1743,7 +1743,7 @@ Use the template. Module-specific notes:
 - Action dispatcher receiving ActionRequest events from A03/O02
 - Consent gate (AC03) BEFORE every outbound action — no override
 - Channel registry: tenant-configurable enabled channels
-- Phase 1 connectors: Webhook, Email (SendGrid), CRM (Salesforce/HubSpot)
+- Phase 1 connectors: Webhook, Email (Resend), CRM (Salesforce/HubSpot)
 - Phase 2 connectors (deferred): WhatsApp Business, SMS, Dialer, Marketing Automation push
 - Template engine consuming F04 templates
 - Priority queue with dead-letter topic
@@ -1968,7 +1968,7 @@ Phase 1 templates required:
 
 Each template has: subject, body (MJML → HTML + plaintext), preview text.
 
-SendGrid as email provider for Phase 1.
+Resend as email provider for Phase 1.
 
 Acceptance:
 - All 6 templates render correctly with Display Data branding
@@ -3725,7 +3725,7 @@ Last updated: [YYYY-MM-DD]
 - [ ] GitHub org + repo set up
 - [ ] GCP org + billing + projects
 - [ ] WorkOS account created
-- [ ] SendGrid account created
+- [ ] Resend account created
 - [ ] Anthropic API key for A05 procured
 - [ ] Ithina contacts confirmed (HHT, POS, training data)
 - [ ] Architectural decisions reviewed (Appendix D)
@@ -3894,7 +3894,7 @@ Every decision below is baked into the v2 prompts. Override only with ADR captur
 | ADR-STACK-004 | CSS framework | Tailwind 4 | P6.2 |
 | ADR-STACK-005 | Migration tool | drizzle-kit | P0.4 |
 | ADR-STACK-006 | i18n library | next-intl | P5.3 |
-| ADR-STACK-007 | Email provider | SendGrid | P5.20 |
+| ADR-STACK-007 | Email provider | Resend | P5.20 — SendGrid killed its permanent free tier mid-2025 (60-day trial → $19.95/mo min); Resend has permanent 3K/mo free tier, better DX, React Email integration |
 | ADR-STACK-008 | Node runtime | 22 LTS | P0.1 |
 | ADR-STACK-009 | Package manager | pnpm | P0.1 |
 | ADR-STACK-010 | RSC strategy | Server shell, Client screens | P6.1 |

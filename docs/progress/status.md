@@ -12,9 +12,9 @@ Last updated: April 2026 (initial scaffold)
 - [x] Sevyn8 workflow SKILL.md committed
 - [x] Integration stubs committed (roos-interface.md, roos-agent-boundaries.md)
 - [ ] GCP org + billing + projects set up
-- [ ] WorkOS account created
-- [ ] Anthropic API key procured
-- [ ] SendGrid account created
+- [x] WorkOS account created
+- [x] Anthropic API key procured
+- [x] Resend account created
 - [ ] Ithina contacts confirmed (HHT, POS, training data)
 - [ ] Architectural decisions reviewed (Appendix D of build prompts)
 - [ ] DPA between Sevyn8 and Display Data drafted

@@ -39,3 +39,20 @@ temp/
 *.key
 credentials.json
 service-account*.json
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Next.js
+next-env.d.ts
+out/
+
+# Husky internals (keep our hook scripts; ignore husky's own cache)
+.husky/_/
+
+# Storybook
+storybook-static/
+
+# Playwright
+playwright-report/
+test-results/

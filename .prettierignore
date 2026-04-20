@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+coverage/
+out/
+storybook-static/
+playwright-report/
+test-results/
+pnpm-lock.yaml
+*.tsbuildinfo

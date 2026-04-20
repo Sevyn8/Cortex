@@ -3,6 +3,7 @@
 Last updated: April 2026 (initial scaffold)
 
 ## Pre-flight
+
 - [x] Claude Code installed + logged in
 - [x] GitHub org + repo set up (rahul-1974/Cortex)
 - [x] Repo cloned into WSL (~/projects/Cortex)
@@ -20,7 +21,8 @@ Last updated: April 2026 (initial scaffold)
 - [ ] DPA between Sevyn8 and Display Data drafted
 
 ## Phase 0 — Foundation
-- [ ] P0.1 Initialize monorepo
+
+- [x] P0.1 Initialize monorepo
 - [ ] P0.2 Dev environment
 - [ ] P0.3 GCP Terraform baseline
 - [ ] P0.4 Postgres + bi-temporal helpers
@@ -34,6 +36,7 @@ Last updated: April 2026 (initial scaffold)
 ## Phase 1 — Display Data Go-Live
 
 ### Foundation Layer
+
 - [ ] P1.1 F01 Multi-Tenancy
 - [ ] P1.2 F02 Tenant Lifecycle
 - [ ] P1.3 F03 Temporal Data Engine
@@ -42,12 +45,14 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P1.6 Feature Flags
 
 ### Access Control
+
 - [ ] P2.1 AC01 ABAC + RBAC
 - [ ] P2.2 AC02 Hierarchy
 - [ ] P2.3 AC03 Consent
 - [ ] P2.4 AC04 Compliance Policy
 
 ### Data Platform
+
 - [ ] P3.1 D01 Canonical Model
 - [ ] P3.2 D02 Mapping Engine
 - [ ] P3.3 D03 Data Contracts
@@ -56,6 +61,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P3.6 D06 Polyglot Storage
 
 ### Identity & Ingestion
+
 - [ ] P4.1 I01 SIR
 - [ ] P4.2 I02 Knowledge Graph
 - [ ] ~~P4.3 I03 Conflict Resolution~~ (deferred to Phase 2)
@@ -63,6 +69,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P4.5 G02 Structured Pipeline
 
 ### Cross-Cutting Platform
+
 - [ ] P5.1 S01 Streaming
 - [ ] P5.2 IC01 Industry Ontology
 - [ ] P5.3 IC02 Localization
@@ -85,6 +92,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P5.20 Email Templates
 
 ### Frontend Foundation
+
 - [ ] P6.1 Next.js apps + shell
 - [ ] P6.2 Design system + Storybook
 - [ ] P6.3 Screen Registry consumer
@@ -92,6 +100,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P6.5 Widget library scaffolding
 
 ### Widget Library
+
 - [ ] P7.1 KPI cards
 - [ ] P7.2 Charts
 - [ ] P7.3 Data table
@@ -103,6 +112,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P7.9 Leaderboard
 
 ### Admin Console
+
 - [ ] P8.1 SCR-01 Tenant Overview
 - [ ] P8.2 SCR-02 Users
 - [ ] P8.3 SCR-04 Tenant Config
@@ -119,12 +129,14 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P8.14 W01 Onboarding Wizard
 
 ### Analytical Screens
+
 - [ ] P9.1 CX-01 Executive Dashboard
 - [ ] P9.2 CX-02 Store Performance
 - [ ] P9.3 CX-04 Alert Centre
 - [ ] P9.4 CX-DD-01 Shelf & Planogram Intelligence
 
 ### Ithina Agents
+
 - [ ] P10.1 Agent runtime
 - [ ] P10.1a Model Registry Light
 - [ ] P10.2 Planogram Agent
@@ -135,6 +147,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P10.7 CSV Ingestion Agent
 
 ### Display Data Go-Live
+
 - [ ] P11.1 Staging tenant provisioned
 - [ ] P11.2 Shelf imagery ingestion live
 - [ ] P11.3 POS ingestion live via ROOS
@@ -142,6 +155,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P11.5 Backup restoration drill
 
 ## Testing & Production
+
 - [ ] P15.1 Unit coverage baseline
 - [ ] P15.2 T01 Testing Framework
 - [ ] P15.3 E2E automation
@@ -152,6 +166,7 @@ Last updated: April 2026 (initial scaffold)
 - [ ] P15.8 Incident response runbook
 
 ## Release criteria for Display Data production
+
 - [ ] All Phase 1 prompts checked
 - [ ] P11.4 E2E validation GREEN
 - [ ] P11.5 Backup drill GREEN (RTO <2h, RPO <1h)
@@ -161,4 +176,3 @@ Last updated: April 2026 (initial scaffold)
 - [ ] DPO compliance sign-off
 - [ ] First-48-hour monitoring plan staffed
 - [ ] ROOS interface contract fully filled in
-

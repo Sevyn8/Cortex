@@ -23,7 +23,7 @@ Last updated: April 2026 (initial scaffold)
 ## Phase 0 — Foundation
 
 - [x] P0.1 Initialize monorepo
-- [ ] P0.2 Dev environment
+- [x] P0.2 Dev environment
 - [ ] P0.3 GCP Terraform baseline
 - [ ] P0.4 Postgres + bi-temporal helpers
 - [ ] P0.5 CI/CD

@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: April 2026 (initial scaffold)
+Last updated: 2026-04-21 (P0.3 complete)
 
 ## Pre-flight
 
@@ -12,7 +12,7 @@ Last updated: April 2026 (initial scaffold)
 - [x] ADR-INFRA-001 + ADR-SCOPE-009 committed
 - [x] Sevyn8 workflow SKILL.md committed
 - [x] Integration stubs committed (roos-interface.md, roos-agent-boundaries.md)
-- [ ] GCP org + billing + projects set up
+- [x] GCP org + billing + projects set up
 - [x] WorkOS account created
 - [x] Anthropic API key procured
 - [x] Resend account created
@@ -24,7 +24,7 @@ Last updated: April 2026 (initial scaffold)
 
 - [x] P0.1 Initialize monorepo
 - [x] P0.2 Dev environment
-- [ ] P0.3 GCP Terraform baseline
+- [x] P0.3 GCP Terraform baseline
 - [ ] P0.4 Postgres + bi-temporal helpers
 - [ ] P0.5 CI/CD
 - [ ] P0.6 Observability baseline
@@ -176,3 +176,24 @@ Last updated: April 2026 (initial scaffold)
 - [ ] DPO compliance sign-off
 - [ ] First-48-hour monitoring plan staffed
 - [ ] ROOS interface contract fully filled in
+
+## Completion notes
+
+Per-prompt completion records for prompts that landed substantive work. Short summaries; detail lives in ADRs and commits.
+
+### P0.3 — GCP Terraform baseline (2026-04-21)
+
+- **Resources landed:** 168 Terraform-managed GCP resources — bootstrap 77, dev 25, shared 16, staging 25, prod 25, tfstate stub 0.
+- **Deliverables:** 3 ADRs (INFRA-002, -003, -004); Terraform bootstrap module + 5 shared modules (project-baseline, networking, kms, secret, artifact-registry) + 5 env roots (dev, staging, prod, shared, tfstate); 20 Makefile `tf-*` targets; infrastructure runbook; top-level `/infra/terraform/` orientation README; 6 new CLAUDE.md convention sections.
+- **Five quirks cataloged** for future reference (see ADR-INFRA-002 Implementation notes):
+  - `google_project_service_identity` returns null `.email` when agent pre-exists → use data source
+  - `google_service_networking_connection` first-apply race → retry is baseline
+  - `roles/owner` excludes IAM v2 permissions → grant v2-specific admin roles explicitly
+  - `roles/iam.denyAdmin` only grantable at org/folder → project-level bind fails
+  - Per-service CMEK service-agent grants live in consuming env modules (not bootstrap); email deterministic from project number
+- **Deferred items with follow-up prompts:**
+  - P0.5: CI-check for cortex-observer permission drift (compensating control for deny-policy deferral)
+  - P0.5/0.6: default VPC deletion across 5 projects (needs cleanup module pattern)
+  - P11.4: HSM key upgrade for prod (4-phase migration plan in ADR-INFRA-004 Implementation note 5)
+  - Phase 2+: org-level `roles/iam.denyAdmin` coordination to re-introduce env-level deny policies
+  - Phase 2+: per-tenant CMEK (D01 tenant_id-to-key binding)

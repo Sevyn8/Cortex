@@ -170,7 +170,7 @@ In the bootstrap module, the GCS service agent for the tfstate project needed a 
 
 **State cleanup:** `terraform state rm google_project_service_identity.gcs_tfstate` — the underlying service agent persists in GCP (agents cannot be deleted via API).
 
-**Pattern for future modules:** for any service-agent email lookup, prefer the service-specific data source (e.g., `google_storage_project_service_account`) or compute the email deterministically from project number (see Quirk 5). Avoid `google_project_service_identity` as a resource.
+**Pattern for future modules:** for any service-agent email _lookup_, prefer the service-specific data source (e.g., `google_storage_project_service_account`) or compute the email deterministically from project number (see Quirk 5). Avoid reading `.email` from `google_project_service_identity` — that output is unreliable when the agent pre-existed. Using the resource purely as a materialization trigger for services whose agent must be force-created in a fresh project — without consuming its outputs — is a separate, valid pattern (see ADR-INFRA-005 Quirk 1).
 
 ### Quirk 2 — `google_service_networking_connection` first-apply race
 
@@ -217,7 +217,7 @@ resource "google_kms_crypto_key_iam_member" "artifactregistry_cmek" {
 }
 ```
 
-Replicate for Cloud SQL (`sqladmin`), Pub/Sub (`pubsub`), Secret Manager (`secretmanager`), etc. **Do not use `google_project_service_identity`** due to the null-email quirk (see Quirk 1).
+Replicate for Cloud SQL (`sqladmin`), Pub/Sub (`pubsub`), Secret Manager (`secretmanager`), etc. **Do not read `.email` from `google_project_service_identity`** due to the null-email quirk (see Quirk 1); compute the member string deterministically from project number instead. The resource itself may still be used as a pure materialization trigger — see ADR-INFRA-005 Quirk 1 for the Cloud SQL example where the agent is not materialized at all until first use.
 
 ## Revisit triggers
 

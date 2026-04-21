@@ -47,3 +47,23 @@ output "observer_sa_email" {
   description = "Email of the cortex-observer SA (read-only, no Secret Manager access)."
   value       = google_service_account.observer.email
 }
+
+output "cloud_sql_instance_name" {
+  description = "Short name of the staging Cloud SQL instance (cortex-staging-postgres). Used by gcloud commands and Cloud SQL Auth Proxy config."
+  value       = module.cloud_sql.instance_name
+}
+
+output "cloud_sql_connection_name" {
+  description = "Cloud SQL connection name (project:region:instance) for the Auth Proxy."
+  value       = module.cloud_sql.connection_name
+}
+
+output "cloud_sql_private_ip" {
+  description = "Private IP of the staging Cloud SQL instance, allocated from the PSA range 10.20.240.0/20. Direct-IP consumers on the staging VPC use this."
+  value       = module.cloud_sql.private_ip_address
+}
+
+output "cloud_sql_database_name" {
+  description = "Default application database on the staging instance (cortex)."
+  value       = module.cloud_sql.database_name
+}

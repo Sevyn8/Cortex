@@ -40,6 +40,28 @@ temp/
 credentials.json
 service-account*.json
 
+# Terraform
+# Bootstrap uses local state (the GCS backend doesn't exist until bootstrap
+# creates it). Keep bootstrap state on operator's machine; recovery via
+# `terraform import` is documented in infra/terraform/bootstrap/README.md.
+# Glob catches terraform.tfstate, terraform.tfstate.backup, and
+# terraform.tfstate.<timestamp>.backup (Terraform's timestamped apply backups).
+infra/terraform/bootstrap/terraform.tfstate*
+infra/terraform/bootstrap/.terraform/
+infra/terraform/bootstrap/.terraform.lock.hcl.backup
+# Env root modules use GCS backend — local .terraform/ is plugin cache only.
+infra/terraform/**/.terraform/
+infra/terraform/**/crash.log
+infra/terraform/**/crash.*.log
+# Shared modules are called via source = "../../modules/..." from env roots.
+# Operators never run `terraform init` directly in modules/ — any lock file
+# there is a dev/test artifact, not something to version.
+infra/terraform/modules/**/.terraform.lock.hcl
+# Never commit .tfvars with secrets — env tfvars are safe (no secrets) so
+# they are checked in explicitly; .tfvars.local is the escape hatch.
+infra/terraform/**/*.tfvars.local
+infra/terraform/**/*.auto.tfvars.local
+
 # TypeScript incremental build info
 *.tsbuildinfo
 

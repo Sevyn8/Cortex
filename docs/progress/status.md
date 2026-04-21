@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-21 (P0.3 complete; spec bumped to v2.2)
+Last updated: 2026-04-21 (P0.4 Phase A complete)
 
 ## Pre-flight
 
@@ -26,7 +26,7 @@ Last updated: 2026-04-21 (P0.3 complete; spec bumped to v2.2)
 - [x] P0.1 Initialize monorepo
 - [x] P0.2 Dev environment
 - [x] P0.3 GCP Terraform baseline
-- [ ] P0.4 Postgres + bi-temporal helpers
+- [ ] P0.4 Postgres + bi-temporal helpers (Phase A complete; Phase B pending)
 - [ ] P0.5 CI/CD
 - [ ] P0.6 Observability baseline
 - [ ] P0.7 Secret Manager + KMS
@@ -198,3 +198,27 @@ Per-prompt completion records for prompts that landed substantive work. Short su
   - P11.4: HSM key upgrade for prod (4-phase migration plan in ADR-INFRA-004 Implementation note 5)
   - Phase 2+: org-level `roles/iam.denyAdmin` coordination to re-introduce env-level deny policies
   - Phase 2+: per-tenant CMEK (D01 tenant_id-to-key binding)
+
+### P0.4 Phase A — Cloud SQL provisioning (2026-04-21)
+
+- **Session duration:** ~13 hours from P0.4 kickoff to Phase A push (inclusive of the pre-P0.4 spec-version cleanup and two intermediate architectural decision rounds).
+- **Resources landed:** 15 new Terraform-managed resources — cloud-sql module instantiated per env (dev, staging, prod), each creating a Postgres 17 Enterprise instance + default `cortex` database + CMEK grant + service-agent materialization trigger + IAM-propagation wait.
+- **Deliverables:** 1 new ADR (INFRA-005); `cloud-sql` Terraform module (5 files); env additions across dev/staging/prod (9 file changes including `.terraform.lock.hcl` for the new `google-beta` and `hashicorp/time` providers); amended ADR-INFRA-002 Quirk 1 + Quirk 5 patterns; amended CLAUDE.md IAM gotchas (+1 bullet).
+- **Instance inventory:**
+
+  | Env     | Instance                | Private IP  | Tier              | HA       | Backups | PITR | max_conn |
+  | ------- | ----------------------- | ----------- | ----------------- | -------- | ------- | ---- | -------- |
+  | dev     | cortex-dev-postgres     | 10.10.240.3 | db-custom-2-8192  | ZONAL    | 7       | 1    | 100      |
+  | staging | cortex-staging-postgres | 10.20.240.3 | db-custom-2-8192  | ZONAL    | 7       | 3    | 100      |
+  | prod    | cortex-prod-postgres    | 10.30.240.2 | db-custom-4-16384 | REGIONAL | 14      | 7    | 200      |
+
+  All three Enterprise edition, POSTGRES_17 (maintenance `POSTGRES_17_9.R20260319.00_02`), CMEK-encrypted via each env's `cortex-cloudsql-key`, private IP only, IAM auth enabled, query insights on, `settings.deletion_protection_enabled = true`, maintenance window Sunday 22:00 UTC stable track.
+
+- **Two new quirks** documented in ADR-INFRA-005 Implementation Notes:
+  - Quirk 1 — Cloud SQL service-agent materialization + IAM propagation race (first-apply failure on fresh projects). Resolved via `google_project_service_identity` (google-beta) + `time_sleep(60s)` before the CMEK grant.
+  - Quirk 2 — Transient GCS-backend state write failure during prod apply (WSL2 DNS flake). Recovered via `terraform state push errored.tfstate`.
+- **Two observations** also documented: `deletion_protection` has two distinct fields (Terraform-side top-level + GCP-side `settings.deletion_protection_enabled`; module now sets both); Cloud SQL Postgres 17 Enterprise defaults to `CLOUD_STORAGE` for transaction logs (older docs said `DISK` for Enterprise).
+- **Phase B scope (pending, estimated 4–6 hours):**
+  - 4 migrations in `/services/foundation/migrations/`: bi-temporal helpers (tstzrange wrappers + SCD triggers + temporal query library), RLS baseline (`current_tenant_id()` + policy templates), audit event table with SHA chain (per Cortex v2.2 §SCR-20-FR-009), `pgvector 0.8.1` extension enablement.
+  - `@cortex/canonical-schema` package skeleton — TS types for `tstzrange`, bi-temporal envelope.
+  - 5 ADRs to create: ADR-STACK-003 (Drizzle ORM), ADR-STACK-005 (drizzle-kit migration tool), ADR-DB-001 (bi-temporal implementation), ADR-DB-002 (RLS session-variable contract), ADR-DB-003 (audit event SHA chain).

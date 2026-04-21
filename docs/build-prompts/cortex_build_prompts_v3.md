@@ -39,7 +39,7 @@ Everything else — prompt ordering, meta-prompts, P0 through P3, P5 through P15
 2. **One prompt = one Claude Code session.** Each prompt is scoped to roughly 1–3 hours of focused Claude Code work. Don't combine them.
 3. **Start every session with the kickoff meta-prompt** (§M1 below). It re-anchors Claude Code on the repo, the spec, and current progress.
 4. **End every session with the wrap-up meta-prompt** (§M2). It commits code, updates the progress tracker, and leaves clean handoff notes.
-5. **Keep `/docs/spec/cortex_v2.docx` in the repo root.** Most prompts reference a specific section. Claude Code reads it directly.
+5. **Keep `/docs/spec/cortex_v2.2.docx` in the repo root.** Most prompts reference a specific section. Claude Code reads it directly.
 6. **Keep `/docs/skills/sevyn8-workflow/SKILL.md` in the repo.** Any prompt generating customer-facing or brand-adjacent content follows this.
 7. **Commit after every prompt.** One prompt = one (or a few) atomic commits. Never leave uncommitted work across sessions.
 8. **Progress tracker lives at `/docs/progress/status.md`.** After each session, Claude Code updates which prompt IDs are complete, in-progress, blocked.
@@ -59,7 +59,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 
 ### Repo prerequisites
 
-- [ ] v2 spec docx at `/docs/spec/cortex_v2.docx`
+- [ ] v2 spec docx at `/docs/spec/cortex_v2.2.docx`
 - [ ] Sevyn8 skill at `/docs/skills/sevyn8-workflow/SKILL.md`
 - [ ] This prompts file at `/docs/build-prompts/cortex_build_prompts_v3.md`
 - [ ] Empty progress tracker at `/docs/progress/status.md` (template in Appendix C)
@@ -153,7 +153,7 @@ These are not build prompts — they're session-management prompts you reuse acr
 You are continuing work on Cortex — Sevyn8's edge AI and retail intelligence platform.
 
 Before doing anything else:
-1. Read /docs/spec/cortex_v2.docx if you haven't already in this session. It is the master specification — 167 pages, 61 backend modules, 24 admin console screens, 11 analytical screens, 1 onboarding wizard. Module IDs follow patterns: F0x (Foundation), D0x (Data Platform), I0x (Identity), G0x (Ingestion), AC0x (Access Control), S0x (Streaming — NOT admin screens), IC0x (Industry), A0x (Algorithms), E0x (Embeddings), O0x (Orchestration), OB0x (Observability), PR0x (Privacy), ED0x (Edge), FB0x (Feedback), UX01 (Screen Composition), SCR-0x (Admin Console screens 01–24), CX-0x (Analytical screens), W01 (Onboarding Wizard). IMPORTANT: "S01" and "S02" in the spec are backend modules (Stream Processing, Cross-Modal Correlation), NOT admin screens. Admin screens are prefixed SCR-.
+1. Read /docs/spec/cortex_v2.2.docx if you haven't already in this session. It is the master specification — 167 pages, 61 backend modules, 24 admin console screens, 11 analytical screens, 1 onboarding wizard. Module IDs follow patterns: F0x (Foundation), D0x (Data Platform), I0x (Identity), G0x (Ingestion), AC0x (Access Control), S0x (Streaming — NOT admin screens), IC0x (Industry), A0x (Algorithms), E0x (Embeddings), O0x (Orchestration), OB0x (Observability), PR0x (Privacy), ED0x (Edge), FB0x (Feedback), UX01 (Screen Composition), SCR-0x (Admin Console screens 01–24), CX-0x (Analytical screens), W01 (Onboarding Wizard). IMPORTANT: "S01" and "S02" in the spec are backend modules (Stream Processing, Cross-Modal Correlation), NOT admin screens. Admin screens are prefixed SCR-.
 
 2. Read /docs/skills/sevyn8-workflow/SKILL.md. This governs voice, tone, terminology, and branding for any user-visible text you generate (UI copy, docs, error messages).
 
@@ -187,7 +187,7 @@ Do not fabricate progress. If something isn't working, say so.
 ## M3: Spec Lookup (use when you need Claude Code to quote/summarize spec)
 
 ```
-Before you write any code, read /docs/spec/cortex_v2.docx sections [SECTION IDs]. Quote the specific Functional Requirements you will implement. If the spec is ambiguous or incomplete for what I've asked, list the gaps before proceeding.
+Before you write any code, read /docs/spec/cortex_v2.2.docx sections [SECTION IDs]. Quote the specific Functional Requirements you will implement. If the spec is ambiguous or incomplete for what I've asked, list the gaps before proceeding.
 ```
 
 ## M4: Code Review (use between sessions to verify quality)
@@ -277,7 +277,7 @@ Structure:
   /ci                  — GitHub Actions workflows
 
 /docs
-  /spec                — cortex_v2.docx lives here
+  /spec                — cortex_v2.2.docx lives here
   /skills              — sevyn8-workflow skill files
   /architecture        — Architecture Decision Records
   /progress            — Build progress tracker
@@ -318,7 +318,7 @@ The following must be the content of `/CLAUDE.md` after P0.1 completes:
 
 ## Spec-first workflow
 
-- Read `/docs/spec/cortex_v2.docx` before implementing any module or screen
+- Read `/docs/spec/cortex_v2.2.docx` before implementing any module or screen
 - Every functional requirement (FR-NNN) in a spec section has at least one test
 - Spec drift: update the spec OR update the code, never leave drift uncommented
 - Significant divergence → ADR in `/docs/architecture/decisions/`
@@ -669,7 +669,7 @@ Acceptance:
 
 ```
 
-Scaffold the MCP integration layer for Cortex per ADR-MCP-001. This is a protocol-agnostic tool platform that exposes capabilities over MCP today; MCP is the adapter, not the architecture. Before writing any code, read ADR-MCP-001 in full — the implementation pattern diagram is authoritative. Also re-read spec §Part VII-b in /docs/spec/cortex_v2.docx.
+Scaffold the MCP integration layer for Cortex per ADR-MCP-001. This is a protocol-agnostic tool platform that exposes capabilities over MCP today; MCP is the adapter, not the architecture. Before writing any code, read ADR-MCP-001 in full — the implementation pattern diagram is authoritative. Also re-read spec §Part VII-b in /docs/spec/cortex_v2.2.docx.
 
 Scope has four parts: (A) capability-layer packages, (B) shared tool registry, (C) three MCP server apps, (D) per-server trust-model ADR stubs. All four land in the same prompt execution because they form a coherent system.
 
@@ -1707,7 +1707,7 @@ Acceptance:
 
 ```
 
-Implement G01 Universal Ingestion Gateway per /docs/spec/cortex_v2.docx §G01.
+Implement G01 Universal Ingestion Gateway per /docs/spec/cortex_v2.2.docx §G01.
 
 Before coding:
 
@@ -1928,7 +1928,7 @@ For each cross-cutting module in P5.1 through P5.15, use this template as the ba
 
 For [MODULE ID] ([MODULE NAME]):
 
-1. Read /docs/spec/cortex_v2.docx section for this module in full
+1. Read /docs/spec/cortex_v2.2.docx section for this module in full
 2. Identify dependencies and verify they're already implemented (check /docs/progress/status.md)
 3. Implement all FR-NNN requirements
 4. Write tests for each acceptance criterion
@@ -4024,7 +4024,7 @@ For any module or screen not covered above, use one of these templates.
 
 ```
 
-Implement [MODULE_ID] [MODULE_NAME] per /docs/spec/cortex_v2.docx section [SPEC_SECTION].
+Implement [MODULE_ID] [MODULE_NAME] per /docs/spec/cortex_v2.2.docx section [SPEC_SECTION].
 
 Read the spec section fully before coding. Verify dependencies listed in the spec are implemented — check /docs/progress/status.md.
 
@@ -4047,7 +4047,7 @@ Update /docs/progress/status.md. Commit as `feat([MODULE_ID]): [short descriptio
 
 ```
 
-Build [SCR-ID] per /docs/spec/cortex_v2.docx section [SCR-ID].
+Build [SCR-ID] per /docs/spec/cortex_v2.2.docx section [SCR-ID].
 
 Read the spec in full. Verify dependencies implemented.
 
@@ -4065,7 +4065,7 @@ Commit as `feat([SCR-ID]): [name]`.
 
 ```
 
-Build [CX-ID] per /docs/spec/cortex_v2.docx section [CX-ID].
+Build [CX-ID] per /docs/spec/cortex_v2.2.docx section [CX-ID].
 
 Consume Gold-layer KPIs from D01. Register via IC01 vertical package if vertical-specific.
 
@@ -4176,7 +4176,7 @@ cortex/
 │ ├── dev/ # docker-compose for local
 │ └── ci/
 ├── docs/
-│ ├── spec/ # cortex_v2.docx
+│ ├── spec/ # cortex_v2.2.docx
 │ ├── skills/ # sevyn8-workflow SKILL.md
 │ ├── architecture/decisions/ # ADRs
 │ ├── progress/

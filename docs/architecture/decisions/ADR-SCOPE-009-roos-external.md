@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** April 2026
 **Deciders:** Neerj (Sevyn8 engineering)
-**Context documents:** Cortex v2 Spec §G01, §CX-DD-01; Ithina DIS (ROOS) Architecture v13 (April 2026)
+**Context documents:** Cortex v2.2 Spec §G01, §CX-DD-01; Ithina DIS (ROOS) Architecture v13 (April 2026)
 
 ---
 
@@ -109,6 +109,7 @@ The contract between ROOS and Cortex is codified in `/docs/integrations/roos-int
 Any change to the boundary requires updating that document AND this ADR.
 
 Specifically OUT of scope for Cortex:
+
 - POS-specific listener code (Square, Clover, Lightspeed, etc.)
 - Fat/skinny payload enrichment patterns
 - ROOS's Redis, Bronze tier, or internal Kafka topics
@@ -117,6 +118,7 @@ Specifically OUT of scope for Cortex:
 - Direct integration with POS provider APIs (unless an explicit future decision reverses this)
 
 Specifically IN scope for Cortex (relating to ROOS):
+
 - The ROOS Kafka connector within G01
 - Schema translation from ROOS canonical to Cortex canonical (D02 mapping rules)
 - Monitoring Cortex's consumer lag against ROOS
@@ -147,7 +149,7 @@ This decision should be revisited if any of the following happen:
 ## References
 
 - Ithina DIS (ROOS) Architecture v13, April 2026 (internal document)
-- Cortex v2 Complete System Specification, §G01, §CX-DD-01
+- Cortex v2.2 Complete System Specification, §G01, §CX-DD-01
 - `ADR-INFRA-001-event-bus-choice.md` — companion decision on Pub/Sub internal + Kafka at edges
 - `/docs/integrations/roos-interface.md` — the integration contract (to be created)
 - `/docs/integrations/roos-agent-boundaries.md` — agent responsibility boundaries (to be created)

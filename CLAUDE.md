@@ -2,7 +2,7 @@
 
 ## Spec-first workflow
 
-- Read `/docs/spec/cortex_v2.docx` before implementing any module or screen
+- Read `/docs/spec/cortex_v2.2.docx` before implementing any module or screen
 - Every functional requirement (FR-NNN) in a spec section has at least one test
 - Spec drift: update the spec OR update the code, never leave drift uncommented
 - Significant divergence → ADR in `/docs/architecture/decisions/`
@@ -84,7 +84,7 @@
 
 - Format with `terraform fmt -recursive` before commit.
 - 2-space indent. Align equals within a block where it improves readability.
-- Resource names: snake_case (`google_compute_network.cortex_vpc`). Resource-name _values_ follow GCP naming (hyphens).
+- Resource names: snake*case (`google_compute_network.cortex_vpc`). Resource-name \_values* follow GCP naming (hyphens).
 - File layout per root/module: `providers.tf`, `versions.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `locals.tf` (when 3+ locals).
 - Version pins: Terraform `~> 1.14.0`; `hashicorp/google ~> 6.0`, `hashicorp/google-beta ~> 6.0`, `hashicorp/random ~> 3.6`.
 - Every `variable` has `type` and `description`. `default` only when truly defaultable.

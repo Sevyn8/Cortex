@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** April 2026
 **Deciders:** Neerj (Sevyn8 engineering)
-**Context documents:** Cortex v2 Spec §F01, §G01, §S01; Ithina DIS (ROOS) architecture v13
+**Context documents:** Cortex v2.2 Spec §F01, §G01, §S01; Ithina DIS (ROOS) architecture v13
 
 ---
 
@@ -55,7 +55,7 @@ Specifically:
 - NOT a rejection of Kafka as a technology. Kafka is a first-class external-facing protocol in G01.
 - NOT a commitment to Pub/Sub forever. It's the right choice for Phase 1. Phase 3+ may revisit if real requirements emerge.
 - NOT a reason to avoid Kafka client code in the repo. G01 will have a robust Kafka consumer with auth, backpressure, schema validation, DLQ handling. Most engineers touching Cortex will be comfortable with both.
-- NOT applicable to customer data paths specifically — this is about the *event backbone*. Data plane storage (Cloud SQL, BigQuery, GCS) is a separate concern governed by D01/D06.
+- NOT applicable to customer data paths specifically — this is about the _event backbone_. Data plane storage (Cloud SQL, BigQuery, GCS) is a separate concern governed by D01/D06.
 
 ## Consequences
 
@@ -133,9 +133,13 @@ Public API (simplified):
 await eventBus.publish<OrderEvent>('decisions.emitted', event, { tenantId });
 
 // Subscribing (long-running worker)
-eventBus.subscribe<OrderEvent>('decisions.emitted', async (event, ctx) => {
-  // handle event
-}, { subscriberGroup: 'action-dispatcher' });
+eventBus.subscribe<OrderEvent>(
+  'decisions.emitted',
+  async (event, ctx) => {
+    // handle event
+  },
+  { subscriberGroup: 'action-dispatcher' },
+);
 
 // Request/reply pattern (for synchronous-style internal calls over async bus)
 const result = await eventBus.request<QueryRequest, QueryResponse>('queries.entity-lookup', req);
@@ -184,5 +188,5 @@ This decision should be revisited if any of the following happen:
 - GCP Pub/Sub documentation: https://cloud.google.com/pubsub/docs
 - Kafka documentation: https://kafka.apache.org/documentation/
 - Ithina DIS (ROOS) architecture v13, April 2026 (internal document)
-- Cortex v2 Complete System Specification, §F01, §G01, §S01
+- Cortex v2.2 Complete System Specification, §F01, §G01, §S01
 - `ADR-SCOPE-009-roos-external.md` — companion decision that ROOS stays Ithina-operated

@@ -95,10 +95,19 @@ resource "google_sql_database_instance" "this" {
     disk_autoresize       = var.disk_autoresize
     disk_autoresize_limit = var.disk_autoresize_limit_gb
 
-    # Private IP only. No ipv4 ever.
+    # Private IP is always attached. Public IPv4 is opt-in per env (dev only
+    # in Phase 1; staging/prod stay false per ADR-INFRA-005 Decision 11).
     ip_configuration {
-      ipv4_enabled    = false
+      ipv4_enabled    = var.public_ip_enabled
       private_network = var.private_network_id
+
+      dynamic "authorized_networks" {
+        for_each = var.authorized_networks
+        content {
+          name  = authorized_networks.value.name
+          value = authorized_networks.value.value
+        }
+      }
     }
 
     backup_configuration {

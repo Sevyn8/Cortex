@@ -149,3 +149,18 @@ variable "deletion_protection" {
   description = "Cloud SQL deletion protection. Defaults to true everywhere; prod apply rejects false. Separate from Terraform lifecycle prevent_destroy — both layers in place for prod."
   default     = true
 }
+
+variable "public_ip_enabled" {
+  type        = bool
+  description = "Whether the instance exposes a public IPv4 address in addition to its private IP. Phase 1 standard is false (private-only per ADR-INFRA-005 Decision 11). Dev may override to true for laptop-based operations during early prompts — see P0.4 Phase B migration workflow. Staging and prod remain false until P0.5 establishes VPC-internal migration runners."
+  default     = false
+}
+
+variable "authorized_networks" {
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  description = "CIDR allowlist applied when public_ip_enabled=true. Ignored by Cloud SQL when public_ip_enabled=false. Each entry needs a stable name (for audit traceability in Console) and a narrow CIDR. Do NOT widen to 0.0.0.0/0. Phase 1 use case: dev-only narrow allowlist for a single operator's home IP."
+  default     = []
+}

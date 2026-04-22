@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-21 (P0.4 Phase A complete)
+Last updated: 2026-04-22 (P0.4 Phase B complete)
 
 ## Pre-flight
 
@@ -26,7 +26,7 @@ Last updated: 2026-04-21 (P0.4 Phase A complete)
 - [x] P0.1 Initialize monorepo
 - [x] P0.2 Dev environment
 - [x] P0.3 GCP Terraform baseline
-- [ ] P0.4 Postgres + bi-temporal helpers (Phase A complete; Phase B pending)
+- [x] P0.4 Postgres + bi-temporal helpers
 - [ ] P0.5 CI/CD
 - [ ] P0.6 Observability baseline
 - [ ] P0.7 Secret Manager + KMS
@@ -222,3 +222,32 @@ Per-prompt completion records for prompts that landed substantive work. Short su
   - 4 migrations in `/services/foundation/migrations/`: bi-temporal helpers (tstzrange wrappers + SCD triggers + temporal query library), RLS baseline (`current_tenant_id()` + policy templates), audit event table with SHA chain (per Cortex v2.2 §SCR-20-FR-009), `pgvector 0.8.1` extension enablement.
   - `@cortex/canonical-schema` package skeleton — TS types for `tstzrange`, bi-temporal envelope.
   - 5 ADRs to create: ADR-STACK-003 (Drizzle ORM), ADR-STACK-005 (drizzle-kit migration tool), ADR-DB-001 (bi-temporal implementation), ADR-DB-002 (RLS session-variable contract), ADR-DB-003 (audit event SHA chain).
+
+### P0.4 Phase B — Bi-temporal helpers, RLS, audit chain (2026-04-22)
+
+- **Session duration:** ~1 day (scaffolding → 4 migrations → docs), with a mid-session detour to resolve laptop-to-Cloud-SQL connectivity.
+- **Resources landed:**
+  - 4 DB migrations applied to **dev only** (0001 extensions / cortex schema, 0002 bi-temporal helpers, 0003 RLS baseline, 0004 audit chain). Staging and prod deferred to P0.5 CI runner.
+  - 1 Terraform change: dev `cloud-sql` module now has `public_ip_enabled = true` + narrow `authorized_networks` allowlist (laptop IP only). In-place update, no instance recreate. Staging / prod unchanged.
+- **Deliverables:**
+  - 3 new ADRs: ADR-DB-001 (bi-temporal implementation), ADR-DB-002 (RLS session-variable contract), ADR-DB-003 (audit event SHA chain).
+  - ADR-INFRA-005 amended: "Dev exception to Decision 11" + 2 new observations (Cloud SQL Auth Proxy ADC separation; `--private-ip` flag requirement).
+  - `@cortex/canonical-schema` package (TstzRange / BiTemporalRow types, tstzrange Drizzle custom type, `withTenantContext` / `withoutTenantContext` RLS helpers, `createDrizzleClient` factory).
+  - `services/foundation` service (vitest harness, test helpers with proxy liveness check, 3 acceptance test suites — 22/22 green).
+  - `drizzle.config.ts` at repo root; Makefile targets `db-proxy-{dev,staging,prod}` + `db-migrate-{dev,staging,prod}`; `pnpm-workspace.yaml` catalog for drizzle-orm / drizzle-kit / pg / zod / vitest.
+  - New CLAUDE.md sections: "Workspace layout" + "Database conventions" (5 subsections).
+- **DB artifacts created in dev:**
+  - `cortex` schema hosting 3 functions — `current_tenant_id()`, `at_time_t()`, `cortex_scd_trigger()` — and the audit helpers `audit_canonical_hash()`, `audit_chain_trigger()`.
+  - `audit_event` table: 12 columns, PK + tenant_time index, RLS enabled, 2 policies (tenant_read / tenant_write), append-only trigger.
+  - 3 extensions installed: `pgcrypto`, `vector` (0.8.1), `btree_gist`.
+- **Six new observations** documented across ADRs (all cross-referenced from CLAUDE.md "Database conventions"):
+  - **ADR-INFRA-005:** Cloud SQL Auth Proxy ADC separate from `gcloud` CLI auth (RAPT expiration race); `--private-ip` flag required on private-only instances.
+  - **ADR-DB-001:** Drizzle journal timestamps act as a high-water mark (placeholder files silently block future fills).
+  - **ADR-DB-002:** `SET LOCAL` does not accept bind parameters — use `set_config()`.
+  - **ADR-DB-003:** `timestamptz` round-trips lose microsecond precision via JS Date (hash computations must be server-side); TRUNCATE bypasses ROW triggers (production role cannot hold TRUNCATE on audit_event).
+- **Scope reductions during execution:** (a) ADR-STACK-003/005 dropped — Drizzle conventions captured in CLAUDE.md instead; (b) staging/prod migration applies deferred — laptop cannot reach private-IP Cloud SQL, dev public-IP exception accepted until P0.5 Cloud Build runner lands.
+- **Deferred items with follow-up prompts:**
+  - P0.5: VPC-internal migration runner (Cloud Build) to replay 0001–0004 to staging + prod; removes the dev public-IP exception trigger.
+  - P0.5: CI pipeline wires `pnpm --filter @cortex/foundation test` into PR checks.
+  - First-consumer deferrals from ADR-DB-001/002/003: per-table `as_of_valid` wrappers, `verify_chain`, advisory locks / chain-tail / partial unique index (forks), `cortex_admin` role / admin-bypass policies.
+  - SCR-20 (audit log UI) when it lands → implement `verify_chain` and admin-bypass.

@@ -16,13 +16,15 @@
     "test": "turbo test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "husky"
+    "prepare": "husky",
+    "db:migrate": "drizzle-kit migrate"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
     "@eslint/js": "^9.15.0",
     "@types/node": "^22.9.0",
+    "drizzle-kit": "catalog:",
     "eslint": "^9.15.0",
     "eslint-config-prettier": "^9.1.0",
     "globals": "^15.12.0",

@@ -45,6 +45,20 @@ export default [
     },
   },
 
+  // Test files: relax type-aware no-unsafe-* rules. Tests consume dynamic DB
+  // results (pg.Pool returns QueryResult<any>); strict type narrowing here adds
+  // ceremony without improving test behavior. Production code stays strict.
+  {
+    files: ['**/*.spec.ts', '**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+    },
+  },
+
   // Root config files + scripts: ESM (.mjs / .js)
   {
     files: ['**/*.mjs', '**/*.js'],

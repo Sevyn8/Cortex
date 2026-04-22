@@ -5,7 +5,9 @@ COMPOSE := docker compose -f infra/dev/docker-compose.yml
 
 .PHONY: help \
         up down reset restart ps logs \
-        db\:shell db\:migrate db\:seed \
+        db\:shell db\:seed \
+        db-proxy-dev db-proxy-staging db-proxy-prod \
+        db-migrate-dev db-migrate-staging db-migrate-prod \
         install lint typecheck test format build clean \
         hooks\:verify \
         tf-fmt \
@@ -43,15 +45,44 @@ ps: ## Show service status
 logs: ## Tail all service logs (Ctrl-C to exit)
 	$(COMPOSE) logs -f --tail=100
 
-# --- Database ---
-db\:shell: ## Open psql shell in the postgres container
+# --- Database (local compose) ---
+db\:shell: ## Open psql shell in the postgres container (local compose)
 	$(COMPOSE) exec postgres psql -U cortex -d cortex_dev
-
-db\:migrate: ## Run all pending DB migrations (no-op until P0.4 lands)
-	@echo "No migrations registered yet — P0.4 adds the migration framework."
 
 db\:seed: ## Run all registered seed modules
 	pnpm tsx scripts/seed/index.ts
+
+# --- Cloud SQL migrations (via cloud-sql-proxy) ---
+# Start the matching db-proxy-<env> in a separate terminal, then run
+# db-migrate-<env>. Password comes from the per-env break-glass secret
+# (cortex-db-postgres-break-glass-<env>) in Secret Manager.
+#
+# NOTE: Dev uses public IP + authorized_networks allowlist (see Terraform).
+# Staging and prod remain private-IP only — --private-ip flag required.
+# When P0.5 Cloud Build lands, the dev public IP exception becomes
+# unnecessary and can be reverted.
+
+db-proxy-dev: ## Start cloud-sql-proxy → dev (public IP; authorized_networks: amit-wsl-dev-migrations)
+	cloud-sql-proxy sevyn8-cortex-dev:asia-south1:cortex-dev-postgres --port=5432
+
+db-proxy-staging: ## Start cloud-sql-proxy → staging (foreground)
+	cloud-sql-proxy sevyn8-cortex-staging:asia-south1:cortex-staging-postgres --private-ip --port=5432
+
+db-proxy-prod: ## Start cloud-sql-proxy → prod (foreground)
+	cloud-sql-proxy sevyn8-cortex-prod:asia-south1:cortex-prod-postgres --private-ip --port=5432
+
+db-migrate-dev: ## Apply pending migrations to dev (requires db-proxy-dev running)
+	PGPASSWORD=$$(gcloud secrets versions access latest --secret=cortex-db-postgres-break-glass-dev --project=sevyn8-cortex-dev) \
+		pnpm db:migrate
+
+db-migrate-staging: ## Apply pending migrations to staging (requires db-proxy-staging running)
+	PGPASSWORD=$$(gcloud secrets versions access latest --secret=cortex-db-postgres-break-glass-staging --project=sevyn8-cortex-staging) \
+		pnpm db:migrate
+
+db-migrate-prod: ## Apply pending migrations to prod (requires CONFIRM=yes + db-proxy-prod running)
+	@[ "$(CONFIRM)" = "yes" ] || (echo "Refusing: run 'make CONFIRM=yes db-migrate-prod'"; exit 1)
+	PGPASSWORD=$$(gcloud secrets versions access latest --secret=cortex-db-postgres-break-glass-prod --project=sevyn8-cortex-prod) \
+		pnpm db:migrate
 
 # --- Workspace ---
 install: ## pnpm install

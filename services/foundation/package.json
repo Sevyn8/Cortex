@@ -1,0 +1,20 @@
+{
+  "name": "@cortex/foundation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/canonical-schema": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

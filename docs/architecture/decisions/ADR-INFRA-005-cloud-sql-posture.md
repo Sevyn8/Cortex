@@ -70,6 +70,16 @@ Specifically:
 
 12. **One instance per env, no read replicas in Phase 1.** Single writeable primary per env. Read-replica topology is a Phase 2 capacity decision once traffic warrants it; premature replicas add maintenance surface without measurable benefit.
 
+### Dev exception to Decision 11 (P0.4 Phase B amendment, 2026-04-22)
+
+To unblock laptop-based migration operations during Phase 1 build, dev overrides Decision 11's `ipv4_enabled = false` posture. Narrow, time-bounded, with explicit reversion plan.
+
+- **What changes.** Dev: `ipv4_enabled = true` + `authorized_networks = [{ name = "amit-wsl-dev-migrations", value = "43.230.65.5/32" }]`. Staging and prod unchanged — both remain private-IP only per Decision 11.
+- **Why.** Laptop → Cloud SQL private IP is not routable without VPN, IAP tunnel, or a VPC-resident bastion. Phase B scope did not include provisioning any of those. Cloud Shell was considered (runs inside Google's network, reaches private IPs natively) but rejected for developer-ergonomics reasons.
+- **Safety.** Single authorized CIDR (/32) pinned to one operator's IP. Cloud SQL's default `ssl_mode = ENCRYPTED_ONLY` still applies; clients use `sslmode=require`. Private IP remains attached; future in-VPC services use it unchanged.
+- **Reversion trigger.** When P0.5 Cloud Build lands a VPC-internal migration runner, the dev public IP becomes unnecessary. The `cloud-sql` module's `public_ip_enabled` defaults to `false`; reversion is a one-line edit in `environments/dev/main.tf` to drop the override.
+- **Terraform shape.** Module gains two defaulted variables: `public_ip_enabled` (bool, default `false`) and `authorized_networks` (list of `{name,value}` objects, default `[]`). Added to `infra/terraform/modules/cloud-sql/{variables,main}.tf`. Dev env overrides both in `environments/dev/main.tf`. Staging and prod continue to call the module without overriding — defaults preserve original posture.
+
 ## Rationale
 
 - **Enterprise edition vs Enterprise Plus.** The pricing delta (~2.5×) is material at a pre-revenue stage. Enterprise Plus's headline features — Data Cache, Near-Zero Downtime planned maintenance, 24/7/365 Premium Support — are infrastructure conveniences, not go-live blockers for a retail analytics workload of Display Data's Phase 1 size. Revisit when paid tenant count justifies it.
@@ -162,6 +172,31 @@ Initial dev apply set only the top-level field. Post-apply `gcloud describe` rev
 ### Observation — Cloud SQL Postgres 17 Enterprise defaults to Cloud Storage for transaction logs
 
 Older GCP documentation described `settings.transactionalLogStorageState` as `DISK` for Enterprise and `CLOUD_STORAGE` for Enterprise Plus. Our three Phase A instances — all Enterprise — all show `CLOUD_STORAGE`. PITR and retention behave identically regardless of storage location; no action needed. This appears to be a recent GCP default change on Postgres 17 maintenance versions (`POSTGRES_17_9.R20260319.00_02` observed across all three envs). Note here for future operators who encounter older reference material.
+
+### Observation — Cloud SQL Auth Proxy ADC is separate from `gcloud` CLI auth
+
+Cloud SQL Auth Proxy authenticates to `sqladmin.googleapis.com` via Application Default Credentials (ADC), not via the `gcloud` CLI's own credential store. A fresh `gcloud auth login` does NOT refresh ADC — you must run `gcloud auth application-default login` explicitly. On Google Workspace domains with reauth policies, the ADC's RAPT (Reauth Proof Token) can expire independently of the CLI's refresh token.
+
+Two diagnostic details:
+
+- **Proxy startup ≠ per-connection capability.** The proxy's `Listening / ready for new connections!` banner validates that ADC exists, but the per-client-connection call to `sqladmin.googleapis.com` happens lazily. If the RAPT expires between proxy startup and the first client connect, every connection fails with `oauth2: invalid_grant "invalid_rapt"` in the proxy log.
+- **Client-side error is misleading.** When the proxy can't reach the upstream API, client connections get `server closed the connection unexpectedly` — which looks like an instance-side issue, not a proxy-upstream issue.
+
+**Debugging rule:** when psql / drizzle-kit reports connection errors to 127.0.0.1, check the proxy's terminal output first. That's where the real error surfaces.
+
+**Fix:** `gcloud auth application-default login` (separate from `gcloud auth login`). For CI and production workflows, Workload Identity Federation replaces ADC entirely — the developer-laptop path is inherently short-term; P0.5 CI takes over.
+
+### Observation — `--private-ip` flag required for Cloud SQL Auth Proxy on private-only instances
+
+Cloud SQL Auth Proxy defaults to probing the instance's public IP. Instances with `ipv4_enabled = false` (Phase 1 staging / prod per Decision 11) cause the proxy to log `Config error: instance does not have IP of type "PUBLIC"` and drop client connections at the TCP accept step.
+
+**Fix:** pass `--private-ip` to the proxy CLI:
+
+```
+cloud-sql-proxy sevyn8-cortex-<env>:asia-south1:cortex-<env>-postgres --private-ip --port=5432
+```
+
+**Caveat.** `--private-ip` resolves the _configuration_ error but not the _network reachability_ problem. The proxy still needs a routable path to the instance's private IP (`10.X.240.X` in Cortex's PSA ranges). From outside the VPC (e.g., a developer laptop on a home ISP), this requires VPN, IAP tunnel, Cloud Shell, or a VPC-resident bastion. Phase B resolved this for **dev** via the public IP exception (see Dev exception to Decision 11); staging and prod will use a VPC-internal runner once P0.5 Cloud Build lands — `--private-ip` stays useful there because the runner will sit inside the VPC.
 
 ## References
 

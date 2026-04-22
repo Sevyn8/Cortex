@@ -281,6 +281,99 @@ Budget alerts (to be configured in P0.6) fire at 50%, 80%, 100% of monthly budge
 
 ---
 
+## Cloud SQL operations
+
+Day-to-day database access: running migrations, psql shell, password rotation, proxy
+troubleshooting. See ADR-INFRA-005 for instance posture and ADR-DB-001/002/003 for
+migration-content conventions.
+
+### Running migrations
+
+1. In a dedicated terminal, start the Cloud SQL Auth Proxy for the target env. Wait for the `Listening on 127.0.0.1:5432 / ready for new connections!` banner.
+
+   ```bash
+   make db-proxy-dev        # dev uses public IP per Dev exception; no --private-ip
+   make db-proxy-staging    # private-only; Makefile target includes --private-ip
+   make db-proxy-prod
+   ```
+
+2. In another terminal, run the matching apply target. `PGPASSWORD` is resolved inline from Secret Manager via gcloud. Prod requires `CONFIRM=yes`.
+
+   ```bash
+   make db-migrate-dev
+   make db-migrate-staging
+   make CONFIRM=yes db-migrate-prod
+   ```
+
+3. Verify application count after the run:
+
+   ```bash
+   PGPASSWORD=$(gcloud secrets versions access latest \
+     --secret=cortex-db-postgres-break-glass-<env> \
+     --project=sevyn8-cortex-<env>) \
+   psql "host=127.0.0.1 port=5432 user=postgres dbname=cortex sslmode=disable" \
+     -c "SELECT count(*), max(created_at) FROM __drizzle_migrations;"
+   ```
+
+### Psql shell to Cloud SQL
+
+With the proxy running:
+
+```bash
+PGPASSWORD=$(gcloud secrets versions access latest \
+  --secret=cortex-db-postgres-break-glass-<env> \
+  --project=sevyn8-cortex-<env>) \
+psql "host=127.0.0.1 port=5432 user=postgres dbname=cortex sslmode=disable"
+```
+
+`sslmode=disable` is correct for the proxy hop (TLS terminates at the proxy; the
+client-to-proxy leg is localhost). Direct public-IP connections (dev only) must use
+`sslmode=require` — Cloud SQL enforces `ENCRYPTED_ONLY` on public IP.
+
+### Proxy troubleshooting
+
+- **`server closed the connection unexpectedly`** at the client → proxy's upstream API call failed. Check the proxy's terminal. Common causes:
+  - `oauth2: invalid_grant "invalid_rapt"` → ADC reauth expired. Fix: `gcloud auth application-default login`, then restart proxy.
+  - `Config error: instance does not have IP of type "PUBLIC"` → staging/prod instance is private-only and the proxy target is missing `--private-ip`.
+- **`Connection refused`** at the client → proxy isn't listening. Verify it's running in the dedicated terminal.
+- **Workspace reauth in CI/CD** → not applicable; use Workload Identity Federation (P0.5).
+
+See ADR-INFRA-005 Implementation Notes for the full ADC / `--private-ip` postmortem.
+
+### Password rotation (break-glass)
+
+The `postgres` superuser password is stored in Secret Manager as
+`cortex-db-postgres-break-glass-<env>` and applied to the instance via
+`gcloud sql users set-password`. Rotation sequence:
+
+1. Generate a new password, store as a new Secret Manager version:
+
+   ```bash
+   printf '%s' '<new-password>' | gcloud secrets versions add \
+     cortex-db-postgres-break-glass-<env> \
+     --project=sevyn8-cortex-<env> --data-file=-
+   ```
+
+2. Apply to the Cloud SQL user:
+
+   ```bash
+   PASSWORD=$(gcloud secrets versions access latest \
+     --secret=cortex-db-postgres-break-glass-<env> \
+     --project=sevyn8-cortex-<env>)
+   gcloud sql users set-password postgres \
+     --instance=cortex-<env>-postgres \
+     --project=sevyn8-cortex-<env> \
+     --password="$PASSWORD"
+   unset PASSWORD
+   ```
+
+3. Verify by reconnecting (either via proxy or direct public IP for dev).
+
+Break-glass use only. IAM authentication is the default production path; password
+use is operator-triggered for migration runs and incident response.
+
+---
+
 ## References
 
 - ADR-INFRA-002 — Terraform bootstrap (SA model + 5 quirks)

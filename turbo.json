@@ -18,7 +18,8 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "env": ["PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"]
     },
     "clean": {
       "cache": false

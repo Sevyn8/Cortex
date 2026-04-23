@@ -2,10 +2,12 @@ import { execSync } from 'node:child_process';
 import { Pool } from 'pg';
 
 /**
- * Creates a pg Pool connected to Cloud SQL dev via cloud-sql-proxy on 127.0.0.1.
- * Password is fetched from the break-glass secret via gcloud if PGPASSWORD is unset.
+ * Creates a pg Pool from PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE env vars.
+ * Defaults: 127.0.0.1:5432 / postgres / cortex. If PGPASSWORD is unset, falls
+ * back to fetching the dev break-glass secret via gcloud (laptop convenience).
  *
- * Prereq: `make db-proxy-dev` running in a separate terminal.
+ * Callers must ensure Postgres is reachable on the target host:port
+ * (laptop: make db-proxy-dev; CI: postgres service container).
  */
 export function getTestPool(): Pool {
   const password =
@@ -17,22 +19,27 @@ export function getTestPool(): Pool {
       { encoding: 'utf8' },
     ).trim();
 
-  // Sanity-check: is cloud-sql-proxy actually up on the port?
+  const host = process.env.PGHOST ?? '127.0.0.1';
+  const port = Number(process.env.PGPORT ?? 5432);
+
+  // Sanity-check: is Postgres actually reachable on host:port?
   // Bash's /dev/tcp pseudo-device lets us probe without extra deps.
   try {
-    execSync("timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/5432'", {
+    execSync(`timeout 2 bash -c 'echo > /dev/tcp/${host}/${port}'`, {
       stdio: 'pipe',
     });
   } catch {
     throw new Error(
-      'cloud-sql-proxy is not running on 127.0.0.1:5432. ' +
-        'Start it in a separate terminal with: make db-proxy-dev',
+      `Postgres is not reachable on ${host}:${port}. ` +
+        'If running locally, ensure the Cloud SQL Auth Proxy is active (make db-proxy-dev). ' +
+        'If running in CI, ensure the postgres service container is healthy. ' +
+        'If running elsewhere, verify PGHOST/PGPORT env vars point at a reachable instance.',
     );
   }
 
   return new Pool({
-    host: process.env.PGHOST ?? '127.0.0.1',
-    port: Number(process.env.PGPORT ?? 5432),
+    host,
+    port,
     user: process.env.PGUSER ?? 'postgres',
     password,
     database: process.env.PGDATABASE ?? 'cortex',

@@ -65,6 +65,25 @@ The `services/` tree contains both patterns:
 
 `pnpm-workspace.yaml` globs both `services/*` and `services/*/*`. Avoid mixing: a service at `services/foundation/package.json` cannot also have `services/foundation/<sub>/package.json` — the two globs would double-match and pnpm would reject.
 
+## Turbo env var passthrough
+
+Turbo 2.x runs in strict env mode by default. Env vars are stripped from task
+child processes unless explicitly declared:
+
+- `task.env[]` — passes through AND includes in cache key (use for vars that
+  change behavior, like PGHOST)
+- `task.passThroughEnv[]` — passes through WITHOUT affecting cache key (use
+  for secrets/tokens that shouldn't invalidate cache)
+- `globalPassThroughEnv[]` — same but repo-wide
+
+Forgetting this manifests as surprising `undefined` env vars in test/build
+processes despite them being set at the shell or CI level. See `turbo.json`'s
+`test.env` for the pattern.
+
+First time encountered: P0.5 Phase 2C ci.yaml first-run — Postgres env vars
+set at GHA job level weren't reaching vitest subprocess via `pnpm test` →
+`turbo test` → `vitest`.
+
 ## Database conventions
 
 Phase 1 database posture — raw-SQL migrations, bi-temporal primitives, RLS, audit chain.

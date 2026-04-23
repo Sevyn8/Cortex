@@ -49,6 +49,6 @@ variable "repo_full_name" {
 
   validation {
     condition     = can(regex("^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$", var.repo_full_name))
-    error_message = "repo_full_name must be 'owner/repo' format (e.g., 'rahul-1974/Cortex')."
+    error_message = "repo_full_name must be 'owner/repo' format (e.g., 'Sevyn8/Cortex')."
   }
 }

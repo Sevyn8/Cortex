@@ -25,15 +25,15 @@ topology.
 
 ## Inputs
 
-| Variable                | Required | Default                  | Description                                                                               |
-| ----------------------- | -------- | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `project_id`            | yes      | —                        | GCP project hosting the pool (Cortex: `sevyn8-cortex-shared`).                            |
-| `repo_full_name`        | yes      | —                        | GitHub repo as `owner/repo` (Cortex: `rahul-1974/Cortex`). Used in `attribute_condition`. |
-| `pool_id`               | no       | `cortex-github-pool`     | Pool short ID.                                                                            |
-| `pool_display_name`     | no       | `Cortex GitHub Actions`  | Console display.                                                                          |
-| `pool_description`      | no       | (see source)             | Console description.                                                                      |
-| `provider_id`           | no       | `cortex-github-provider` | Provider short ID.                                                                        |
-| `provider_display_name` | no       | `GitHub Actions OIDC`    | Console display.                                                                          |
+| Variable                | Required | Default                  | Description                                                                           |
+| ----------------------- | -------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| `project_id`            | yes      | —                        | GCP project hosting the pool (Cortex: `sevyn8-cortex-shared`).                        |
+| `repo_full_name`        | yes      | —                        | GitHub repo as `owner/repo` (Cortex: `Sevyn8/Cortex`). Used in `attribute_condition`. |
+| `pool_id`               | no       | `cortex-github-pool`     | Pool short ID.                                                                        |
+| `pool_display_name`     | no       | `Cortex GitHub Actions`  | Console display.                                                                      |
+| `pool_description`      | no       | (see source)             | Console description.                                                                  |
+| `provider_id`           | no       | `cortex-github-provider` | Provider short ID.                                                                    |
+| `provider_display_name` | no       | `GitHub Actions OIDC`    | Console display.                                                                      |
 
 ## Outputs
 
@@ -53,7 +53,7 @@ module "wif" {
   source = "../../modules/wif"
 
   project_id     = var.project_id
-  repo_full_name = "rahul-1974/Cortex"
+  repo_full_name = "Sevyn8/Cortex"
 }
 ```
 
@@ -63,7 +63,7 @@ Per-SA bindings in consuming roots reference the pool via:
 resource "google_service_account_iam_member" "wif_submit_staging" {
   service_account_id = google_service_account.cortex_ci_submit.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "${data.terraform_remote_state.shared.outputs.pool_principal_set_base}/attribute.workflow_ref/rahul-1974/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main"
+  member             = "${data.terraform_remote_state.shared.outputs.pool_principal_set_base}/attribute.workflow_ref/Sevyn8/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main"
 }
 ```
 

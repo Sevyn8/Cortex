@@ -27,12 +27,12 @@ Specifically:
 
 2. **OIDC provider: `cortex-github-provider` for `github.com`.** Issuer `https://token.actions.githubusercontent.com`. Attribute mapping:
    - `google.subject` ← `assertion.sub`
-   - `attribute.repository` ← `assertion.repository` (e.g., `rahul-1974/Cortex`)
+   - `attribute.repository` ← `assertion.repository` (e.g., `Sevyn8/Cortex`)
    - `attribute.ref` ← `assertion.ref` (e.g., `refs/heads/main`)
-   - `attribute.workflow_ref` ← `assertion.workflow_ref` (e.g., `rahul-1974/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main`)
+   - `attribute.workflow_ref` ← `assertion.workflow_ref` (e.g., `Sevyn8/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main`)
    - `attribute.actor` ← `assertion.actor` (for audit visibility)
 
-3. **Provider-level attribute condition: `assertion.repository == 'rahul-1974/Cortex'`.** A hard wall before SA-level checks. Even if a future SA's binding is misconfigured (omits the workflow attribute), the provider-level repo check still rejects token exchange from any external repo. Belt-and-suspenders.
+3. **Provider-level attribute condition: `assertion.repository == 'Sevyn8/Cortex'`.** A hard wall before SA-level checks. Even if a future SA's binding is misconfigured (omits the workflow attribute), the provider-level repo check still rejects token exchange from any external repo. Belt-and-suspenders.
 
 4. **CI service accounts — separate submit + worker per env, plus a single test SA in shared.**
 
@@ -57,7 +57,7 @@ Specifically:
    resource "google_service_account_iam_member" "wif_submit_<env>" {
      service_account_id = google_service_account.cortex_ci_submit.name
      role               = "roles/iam.workloadIdentityUser"
-     member             = "principalSet://iam.googleapis.com/projects/<shared-project-number>/locations/global/workloadIdentityPools/cortex-github-pool/attribute.workflow_ref/rahul-1974/Cortex/.github/workflows/migrate-<env>.yaml@refs/heads/main"
+     member             = "principalSet://iam.googleapis.com/projects/<shared-project-number>/locations/global/workloadIdentityPools/cortex-github-pool/attribute.workflow_ref/Sevyn8/Cortex/.github/workflows/migrate-<env>.yaml@refs/heads/main"
    }
    ```
 
@@ -80,7 +80,7 @@ Specifically:
 ## Rationale
 
 - **Single shared pool over per-env pools.** Per-env pools mean 3 OIDC providers, 3 attribute-condition mappings, 3 issuer URLs to keep in sync. Same security posture (SA-level attribute conditions are the binding wall). Rejected three times the moving parts for no security gain.
-- **Provider-level repo condition as defense-in-depth.** A misconfigured SA binding could conceivably omit the workflow attribute and accept tokens from any GitHub workflow on any repo. The provider-level `repository == 'rahul-1974/Cortex'` blocks that token exchange before SA-level checks are evaluated. Costs nothing, eliminates a class of misconfiguration risk.
+- **Provider-level repo condition as defense-in-depth.** A misconfigured SA binding could conceivably omit the workflow attribute and accept tokens from any GitHub workflow on any repo. The provider-level `repository == 'Sevyn8/Cortex'` blocks that token exchange before SA-level checks are evaluated. Costs nothing, eliminates a class of misconfiguration risk.
 - **Per-`workflow_ref` SA bindings.** GitHub's OIDC `workflow_ref` is `<repo>/<workflow-path>@<ref>` — the most specific identity attribute the assertion carries. Binding on it means PRs that add or modify workflow files cannot impersonate sensitive SAs. Less specific attributes (e.g., just `repository == ours` or just `ref == main`) leave room for in-repo escalation.
 - **No SA keys, ever.** Cortex's posture from ADR-INFRA-002. WIF preserves it for automation.
 - **Separate submit + worker SAs per env.** Submit authority (permission to create a Cloud Build job) and execute authority (permission to touch Cloud SQL and read the break-glass secret) are semantically different. Separating them:

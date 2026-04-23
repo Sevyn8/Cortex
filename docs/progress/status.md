@@ -5,7 +5,7 @@ Last updated: 2026-04-22 (P0.4 Phase B complete)
 ## Pre-flight
 
 - [x] Claude Code installed + logged in
-- [x] GitHub org + repo set up (rahul-1974/Cortex)
+- [x] GitHub org + repo set up (Sevyn8/Cortex)
 - [x] Repo cloned into WSL (~/projects/Cortex)
 - [x] v2.1 spec committed at docs/spec/cortex_v2.docx (superseded 2026-04-21)
 - [x] v2.2 spec committed at docs/spec/cortex_v2.2.docx (2026-04-21 — adds Part VII-b "The Case for MCP"; no v2.1 content modified)

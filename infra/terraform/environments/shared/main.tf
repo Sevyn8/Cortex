@@ -87,7 +87,7 @@ module "wif" {
   source = "../../modules/wif"
 
   project_id     = var.project_id
-  repo_full_name = "rahul-1974/Cortex"
+  repo_full_name = "Sevyn8/Cortex"
 
   # Module defaults used for pool_id (cortex-github-pool),
   # provider_id (cortex-github-provider), and display names.

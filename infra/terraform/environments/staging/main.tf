@@ -131,5 +131,5 @@ module "ci_runner" {
 resource "google_service_account_iam_member" "wif_submit_staging" {
   service_account_id = module.ci_runner.submit_sa_resource_name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "${var.wif_pool_principal_set_base}/attribute.workflow_ref/rahul-1974/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main"
+  member             = "${var.wif_pool_principal_set_base}/attribute.workflow_ref/Sevyn8/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main"
 }

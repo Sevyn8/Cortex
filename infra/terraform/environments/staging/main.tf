@@ -83,6 +83,7 @@ module "cloud_sql" {
   source = "../../modules/cloud-sql"
 
   project_id         = var.project_id
+  project_number     = data.google_project.current.number
   environment        = "staging"
   region             = var.region
   private_network_id = module.networking.vpc_self_link

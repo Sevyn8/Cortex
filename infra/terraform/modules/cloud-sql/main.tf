@@ -12,12 +12,15 @@ locals {
   # project number. Pattern per ADR-INFRA-002 Quirk 1 — google_project_
   # service_identity returns .email = null for pre-materialized agents,
   # so we compute rather than look up.
-  cloudsql_service_agent = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-cloud-sql.iam.gserviceaccount.com"
-}
-
-# ─── Project lookup — for project_number ────────────────────────────────────
-data "google_project" "this" {
-  project_id = var.project_id
+  #
+  # project_number is passed as a variable from the env root (rather than
+  # read via data "google_project" inside this module) to avoid Terraform
+  # deferring the data source under depends_on chains. When other modules
+  # this one depends on have pending changes, in-module data sources are
+  # marked "read during apply", which propagates (known after apply) into
+  # this local and forces ForceNew recreation of the CMEK IAM binding.
+  # See env-root pattern: data "google_project" "current" passed down.
+  cloudsql_service_agent = "serviceAccount:service-${var.project_number}@gcp-sa-cloud-sql.iam.gserviceaccount.com"
 }
 
 # ─── Force materialization of Cloud SQL service agent ──────────────────────

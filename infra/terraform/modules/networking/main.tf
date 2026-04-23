@@ -111,10 +111,26 @@ resource "google_compute_global_address" "psa" {
   network       = google_compute_network.vpc.id
 }
 
+# Cloud Build private worker pool PSA range. Separate reservation from the
+# Cloud SQL range above; both are members of the same service-networking
+# connection. See ADR-CI-001 Impl Notes "Private pool PSA range allocation".
+resource "google_compute_global_address" "cloudbuild_psa" {
+  project       = var.project_id
+  name          = "cortex-cloudbuild-psa-range"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 24
+  address       = "10.${local.octet}.224.0"
+  network       = google_compute_network.vpc.id
+}
+
 resource "google_service_networking_connection" "psa" {
-  network                 = google_compute_network.vpc.id
-  service                 = "servicenetworking.googleapis.com"
-  reserved_peering_ranges = [google_compute_global_address.psa.name]
+  network = google_compute_network.vpc.id
+  service = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [
+    google_compute_global_address.psa.name,
+    google_compute_global_address.cloudbuild_psa.name,
+  ]
 }
 
 # ─── Serverless VPC Access Connector ────────────────────────────────────────

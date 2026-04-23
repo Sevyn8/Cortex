@@ -219,6 +219,18 @@ resource "google_kms_crypto_key_iam_member" "artifactregistry_cmek" {
 
 Replicate for Cloud SQL (`sqladmin`), Pub/Sub (`pubsub`), Secret Manager (`secretmanager`), etc. **Do not read `.email` from `google_project_service_identity`** due to the null-email quirk (see Quirk 1); compute the member string deterministically from project number instead. The resource itself may still be used as a pure materialization trigger — see ADR-INFRA-005 Quirk 1 for the Cloud SQL example where the agent is not materialized at all until first use.
 
+### Observation — In-module data sources defer under depends_on chains (P0.5 Phase A discovery)
+
+When a module declares `depends_on = [module.X]` and `module.X` has pending changes, Terraform marks ALL of the depending module's `data` resources as "will be read during apply" — their values become `(known after apply)` at plan time. If any of those values feed a ForceNew field (e.g., an IAM binding's `member`), Terraform plans a destroy + recreate even when the actual value won't change.
+
+**Specific case (P0.5 Phase A):** `module.cloud_sql` had `data "google_project" "this"` reading its own project number, which fed the CMEK binding's member string via `cloudsql_service_agent = "serviceAccount:service-${data.google_project.this.number}@..."`. When `module.networking` got a pending change (adding a new PSA range for Cloud Build), `data.google_project.this.number` became `(known after apply)`, the member string became `(known after apply)`, and Terraform planned destroy + recreate of the CMEK IAM binding — a brief window where Cloud SQL's service agent loses CMEK access. New member would equal old member, but the recreation gap is a real risk on live instances.
+
+**Pattern:** Read `data "google_project" "current"` at each env ROOT (not inside modules), and pass `project_number = data.google_project.current.number` as a module input. Modules receive the value as a `variable` of type `number`, decoupled from their own data-source deferral.
+
+**Applied to:** `cloud-sql` module, `ci-runner` module. Future modules that need `project_number` follow the same pattern.
+
+**Cross-ref:** CLAUDE.md "Terraform conventions" section (rule to be added: "Modules receive `project_number` as a typed input from the env root; do not read `data \"google_project\"` inside a module").
+
 ## Revisit triggers
 
 This decision should be revisited if any of the following happen:

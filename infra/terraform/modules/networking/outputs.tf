@@ -43,6 +43,16 @@ output "psa_range_name" {
   value       = google_compute_global_address.psa.name
 }
 
+output "cloudbuild_psa_range_name" {
+  description = "Name of the Cloud Build PSA reserved range. Consumed by the ci-runner module."
+  value       = google_compute_global_address.cloudbuild_psa.name
+}
+
+output "cloudbuild_psa_range_cidr" {
+  description = "CIDR of the Cloud Build PSA reserved range. Consumed by the ci-runner module as network_config.peered_network_ip_range."
+  value       = local.cidr_cloudbuild_psa
+}
+
 output "vpc_connector_id" {
   description = "Serverless VPC Access Connector ID. Cloud Run services reference this to reach private resources."
   value       = google_vpc_access_connector.connector.id

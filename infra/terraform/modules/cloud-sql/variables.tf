@@ -3,6 +3,11 @@ variable "project_id" {
   description = "GCP project hosting the Cloud SQL instance. One instance per env project."
 }
 
+variable "project_number" {
+  type        = number
+  description = "GCP project number (read once at env root via data \"google_project\" \"current\", passed down to avoid in-module data-source deferral when other modules with depends_on have pending changes). Used to compute the Cloud SQL service-agent email deterministically. Type number, not string."
+}
+
 variable "environment" {
   type        = string
   description = "Environment key. Used as a label value and embedded in the instance name (cortex-<env>-postgres)."

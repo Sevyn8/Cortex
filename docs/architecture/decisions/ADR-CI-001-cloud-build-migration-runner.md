@@ -197,6 +197,8 @@ gcloud builds worker-pools update cortex-migration-runner \
 
 This state is NOT tracked by Terraform. `terraform plan` will NOT surface the deviation — the field is invisible to the provider.
 
+**Coupled field: `no_external_ip`.** GCP's `--public-egress` gcloud flag flips both `egressOption` AND `no_external_ip` together. `NO_PUBLIC_EGRESS` requires `no_external_ip=true`; `PUBLIC_EGRESS` requires `no_external_ip=false`. The ci-runner module's `no_external_ip` value is declared explicitly in worker_config to match the PUBLIC_EGRESS posture — this is Terraform-managed. If the egress posture is ever reverted to `NO_PUBLIC_EGRESS` (via the pre-baked builder image trigger below), BOTH the gcloud egress flip AND the module's `no_external_ip = true` change must happen as one coherent operation.
+
 **Disaster recovery implications:**
 
 - `terraform destroy` then `terraform apply` will recreate the pool with GCP's default (`NO_PUBLIC_EGRESS`)

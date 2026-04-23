@@ -118,8 +118,13 @@ resource "google_cloudbuild_worker_pool" "cortex_migration_runner" {
   project  = var.project_id
 
   worker_config {
-    machine_type   = var.worker_pool_machine_type
-    no_external_ip = true
+    machine_type = var.worker_pool_machine_type
+    # Coupled with egress_option: PUBLIC_EGRESS (set out-of-band via
+    # `gcloud ... --public-egress`, see Makefile cloud-build-pool-configure-*).
+    # Public-egress workers require an external IP; no_external_ip must be false.
+    # If egress is ever reverted to NO_PUBLIC_EGRESS, flip this back to true in
+    # the same change. See ADR-CI-001 Impl Notes "CRITICAL PROVIDER GAP".
+    no_external_ip = false
     disk_size_gb   = var.worker_pool_disk_size_gb
   }
 

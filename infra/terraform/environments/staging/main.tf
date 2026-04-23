@@ -105,3 +105,31 @@ module "cloud_sql" {
   # the service-networking connection.
   depends_on = [module.project_baseline, module.networking]
 }
+
+# ─── CI migration runner — per-env submit/worker SAs + Cloud Build private pool ──
+# Per ADR-CI-001: Cloud Build runs inside VPC with --private-ip, authenticated
+# via WIF. Worker SA (cortex-ci-migration-staging) holds Cloud SQL + Secret
+# Manager roles; submit SA (cortex-ci-submit-staging) is the WIF-facing
+# identity. See ADR-INFRA-006 for the submit/worker split rationale.
+module "ci_runner" {
+  source = "../../modules/ci-runner"
+
+  project_id                = var.project_id
+  project_number            = data.google_project.current.number
+  environment               = "staging"
+  region                    = var.region
+  vpc_id                    = module.networking.vpc_id
+  cloudbuild_psa_range_cidr = module.networking.cloudbuild_psa_range_cidr
+  break_glass_secret_id     = "cortex-db-postgres-break-glass-staging"
+
+  depends_on = [module.project_baseline, module.networking]
+}
+
+# ─── WIF binding — submit SA impersonation scoped to migrate-staging.yaml@main ──
+# Per ADR-INFRA-006 Decision 5: only the exact workflow file at the exact ref
+# can federate into this SA.
+resource "google_service_account_iam_member" "wif_submit_staging" {
+  service_account_id = module.ci_runner.submit_sa_resource_name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "${var.wif_pool_principal_set_base}/attribute.workflow_ref/rahul-1974/Cortex/.github/workflows/migrate-staging.yaml@refs/heads/main"
+}

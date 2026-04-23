@@ -78,3 +78,17 @@ module "artifact_registry" {
     google_kms_crypto_key_iam_member.artifactregistry_cmek,
   ]
 }
+
+# ─── Workload Identity Federation — GitHub Actions OIDC pool + provider ──
+# Per ADR-INFRA-006: single pool in shared, single OIDC provider for github.com,
+# attribute_condition restricts token exchange to the Cortex repo.
+# Per-SA bindings live in consuming env roots (dev/staging/prod), not here.
+module "wif" {
+  source = "../../modules/wif"
+
+  project_id     = var.project_id
+  repo_full_name = "rahul-1974/Cortex"
+
+  # Module defaults used for pool_id (cortex-github-pool),
+  # provider_id (cortex-github-provider), and display names.
+}

@@ -55,5 +55,19 @@ jobs:
       - name: Apply migrations to ephemeral Postgres
         run: pnpm db:migrate
 
+      - name: Strip postgres role privileges for RLS testing (match Cloud SQL)
+        run: |
+          psql <<'SQL'
+          -- Stock Postgres: postgres has rolsuper=true + rolbypassrls=true.
+          -- Per PG17 docs, BOTH attributes independently bypass RLS.
+          -- Cloud SQL: postgres is "cloudsqlsuperuser" — rolsuper=false +
+          -- rolbypassrls=false. FORCE ROW LEVEL SECURITY works there because
+          -- the owner is not a real superuser.
+          -- Match Cloud SQL behavior in CI: clear both flags so RLS policies
+          -- apply to test queries. Must run AFTER migrations — CREATE EXTENSION
+          -- vector needs superuser.
+          ALTER ROLE postgres NOSUPERUSER NOBYPASSRLS;
+          SQL
+
       - name: Run foundation tests
         run: pnpm test

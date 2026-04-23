@@ -87,6 +87,10 @@ steps:
         \echo === Audit event count ===
         SELECT count(*) AS audit_event_count FROM audit_event;
 
+        \echo === Cortex schema functions ===
+        SELECT routine_schema, routine_name FROM information_schema.routines
+        WHERE routine_schema = 'cortex' ORDER BY routine_name;
+
         \echo === Migration state ===
         SELECT count(*) AS migrations_applied, max(created_at) AS last_applied FROM __drizzle_migrations;
         SQL

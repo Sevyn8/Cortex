@@ -27,6 +27,7 @@ module "project_baseline" {
     "artifactregistry.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "cloudbuild.googleapis.com",
   ]
 }
 

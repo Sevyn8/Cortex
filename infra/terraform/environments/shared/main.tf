@@ -25,6 +25,8 @@ module "project_baseline" {
     "artifactregistry.googleapis.com",
     "cloudkms.googleapis.com",
     "containeranalysis.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "sts.googleapis.com",
   ]
 }
 

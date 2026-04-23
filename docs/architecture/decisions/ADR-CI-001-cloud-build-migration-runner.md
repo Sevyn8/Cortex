@@ -214,6 +214,42 @@ This state is NOT tracked by Terraform. `terraform plan` will NOT surface the de
 
 **Concrete trigger for Option 2:** when a second Cloud Build config is added to `infra/cloud-build/` (ci.yaml for tests, or deploy pipelines). Pre-baked image amortizes across configs at that point.
 
+### Observation — Submit SA requires cloudbuild.builds.builder, not builds.editor (P0.5 Phase 2C discovery)
+
+Initial module design gave the submit SA `roles/cloudbuild.builds.editor`.
+This is sufficient when submitting via operator identity (because the
+operator's broader credentials cover source-bucket access). It is NOT
+sufficient when GitHub Actions dispatches the submit via WIF — the submit
+SA itself must hold all required permissions.
+
+Error surfaced in first migrate-dev.yaml dispatch (GitHub Actions run 24833217219):
+
+    ERROR: (gcloud.builds.submit) The user is forbidden from accessing the
+    bucket [sevyn8-cortex-dev_cloudbuild]. Please check your organization's
+    policy or if the user has the "serviceusage.services.use" permission.
+
+**Root cause:** `gcloud builds submit --source=.` requires the submitting
+identity to have:
+
+- `storage.objects.create` on `{project}_cloudbuild` (upload tarball)
+- `storage.objects.get` on same (verify upload)
+- `serviceusage.services.use` on project (use Cloud Build as service consumer)
+
+`roles/cloudbuild.builds.editor` covers the Cloud Build API calls but NOT
+the source bucket access nor service usage. `roles/cloudbuild.builds.builder`
+is the Google-curated role that covers the submit flow end-to-end.
+
+**Rule:** Custom service accounts submitting Cloud Build via `--source=.`
+need `roles/cloudbuild.builds.builder` on the project, not just
+`builds.editor`. Applies any time Cloud Build submission is automated from
+outside operator context (CI/CD, cron, event triggers).
+
+**Proof of fix:** migrate-dev.yaml dispatched successfully after applying
+the role change — Cloud Build 5b67be23-e8f0-43de-aa18-fae0ebab3f0b, 2m24s
+total wall-clock, all 6 verify sections clean.
+
+Cross-ref: ADR-INFRA-006 Decision 4 (submit SA role list).
+
 ## References
 
 - ADR-INFRA-005 — Cloud SQL posture; Dev exception reverts when this runner is green on dev.

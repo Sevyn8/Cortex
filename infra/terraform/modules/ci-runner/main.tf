@@ -43,10 +43,15 @@ resource "google_service_account" "worker" {
   display_name = "Cortex CI migration worker (${var.environment}) — Cloud Build runs as this identity"
 }
 
-# ─── Submit SA → project: cloudbuild.builds.editor ─────────────────────────
-resource "google_project_iam_member" "submit_cloudbuild_editor" {
+# ─── Submit SA → project: cloudbuild.builds.builder ────────────────────────
+# Strict superset of builds.editor. Provides submit capability PLUS the
+# storage.objects.* + cloudbuild.workerpools.use perms needed for source
+# uploads (--source=.) and private-pool targeting. builds.editor alone is
+# insufficient — first GitHub Actions dispatch failed with source-bucket
+# forbidden error. See ADR-CI-001 Impl Notes.
+resource "google_project_iam_member" "submit_cloudbuild_builder" {
   project = var.project_id
-  role    = "roles/cloudbuild.builds.editor"
+  role    = "roles/cloudbuild.builds.builder"
   member  = "serviceAccount:${google_service_account.submit.email}"
 }
 

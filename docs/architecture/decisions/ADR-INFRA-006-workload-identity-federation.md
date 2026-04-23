@@ -38,7 +38,7 @@ Specifically:
 
    Per env (`{env}` = `dev` | `staging` | `prod`):
    - `cortex-ci-submit-{env}@sevyn8-cortex-{env}.iam.gserviceaccount.com` — **submitter.** Receives the WIF binding; submits Cloud Build jobs specifying the worker SA as the build's runtime identity. Roles:
-     - `roles/cloudbuild.builds.editor` (submit builds in the env project)
+     - `roles/cloudbuild.builds.builder` (project) — superset of builds.editor, adds storage access to `{project}_cloudbuild` source bucket + `serviceusage.services.use` required for `gcloud builds submit` from custom SA. See ADR-CI-001 Impl Notes for discovery context.
      - `roles/iam.serviceAccountUser` on `cortex-ci-migration-{env}` (authorize submissions that run as the worker)
 
    - `cortex-ci-migration-{env}@sevyn8-cortex-{env}.iam.gserviceaccount.com` — **worker.** Cloud Build runs AS this identity during the migration job. Roles on itself and inbound bindings:

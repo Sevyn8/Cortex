@@ -17,7 +17,9 @@ COMPOSE := docker compose -f infra/dev/docker-compose.yml
         tf-init-staging tf-plan-staging tf-apply-staging \
         tf-init-prod tf-plan-prod tf-apply-prod \
         tf-init-tfstate tf-plan-tfstate tf-apply-tfstate \
-        tf-plan-all
+        tf-plan-all \
+        cloud-build-pool-configure-dev cloud-build-pool-configure-staging \
+        cloud-build-pool-configure-prod cloud-build-pools-configure-all
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ": +##"; printf "\nCortex dev targets\n\nUsage: make <target>\n\n"} /^[a-zA-Z0-9_:\\-]+: +##/ {t = $$1; gsub(/\\:/, ":", t); printf "  \033[36m%-18s\033[0m %s\n", t, $$2}' $(MAKEFILE_LIST)
@@ -199,3 +201,22 @@ tf-apply-tfstate: ## Apply tfstate (no-op today)
 # prerequisite list. Make merges the two.
 tf-plan-all: ## Plan every module (bootstrap + dev + shared + staging + prod + tfstate)
 tf-plan-all: tf-bootstrap-plan tf-plan-dev tf-plan-shared tf-plan-staging tf-plan-prod tf-plan-tfstate
+
+# Out-of-band Cloud Build private-pool config. google provider 6.50.0 does not
+# expose egress_option on google_cloudbuild_worker_pool.network_config; migrate.yaml
+# needs PUBLIC_EGRESS for apt/npm. Re-run after any pool recreate (DR, migrations).
+# See ADR-CI-001 Impl Notes "CRITICAL PROVIDER GAP: egress_option".
+cloud-build-pool-configure-dev: ## Flip dev migration-runner pool to PUBLIC_EGRESS (out-of-band, required until provider exposes egress_option)
+	gcloud builds worker-pools update cortex-migration-runner \
+		--region=asia-south1 --project=sevyn8-cortex-dev --public-egress
+
+cloud-build-pool-configure-staging: ## Flip staging migration-runner pool to PUBLIC_EGRESS
+	gcloud builds worker-pools update cortex-migration-runner \
+		--region=asia-south1 --project=sevyn8-cortex-staging --public-egress
+
+cloud-build-pool-configure-prod: ## Flip prod migration-runner pool to PUBLIC_EGRESS
+	gcloud builds worker-pools update cortex-migration-runner \
+		--region=asia-south1 --project=sevyn8-cortex-prod --public-egress
+
+cloud-build-pools-configure-all: ## Flip all three migration-runner pools to PUBLIC_EGRESS
+cloud-build-pools-configure-all: cloud-build-pool-configure-dev cloud-build-pool-configure-staging cloud-build-pool-configure-prod

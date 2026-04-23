@@ -26,7 +26,7 @@ variable "region" {
 
 variable "vpc_id" {
   type        = string
-  description = "Self-link of the env VPC (e.g., projects/<project>/global/networks/cortex-vpc). Required by Cloud Build private pool's network_config.peered_network."
+  description = "Path-form ID of the env VPC (e.g., projects/<project>/global/networks/cortex-vpc). Required by Cloud Build private pool's network_config.peered_network — does NOT accept the full https:// self-link form. Use module.networking.vpc_id, not module.networking.vpc_self_link."
 }
 
 variable "cloudbuild_psa_range_cidr" {
@@ -54,4 +54,10 @@ variable "worker_pool_id" {
   type        = string
   description = "Short ID for the Cloud Build private worker pool."
   default     = "cortex-migration-runner"
+}
+
+variable "worker_pool_disk_size_gb" {
+  type        = number
+  description = "Disk size for worker pool VMs. GCP's default is 100 GB; declaring it explicitly prevents perpetual drift (Terraform sends null → API resets to default → next plan shows drift)."
+  default     = 100
 }

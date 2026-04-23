@@ -113,6 +113,7 @@ Specifically:
 
 - **`--private-ip` flag still required even from inside the VPC.** Cloud SQL Auth Proxy's default probe is for public IP regardless of where the proxy runs. Without `--private-ip`, the proxy errors out against staging / prod instances (ipv4_enabled=false) with `Config error: instance does not have IP of type "PUBLIC"`. Same quirk as ADR-INFRA-005 observation; applies to the Cloud Build case too.
 - **IAM propagation first-run (ADR-INFRA-002 Quirk 1 pattern).** Both `workloadIdentityUser` (on submit SA) and `serviceAccountTokenCreator` (Cloud Build service agent → worker SA) bindings take ~30-60s to propagate. First run after Terraform lands may fail with `Permission 'iam.serviceAccounts.getAccessToken' denied`. Wait 60s, retry. ADR-INFRA-006 Impl Notes catalogs the same pattern.
+- **Cloud Logging routing lag is a separate, longer wait.** When a new `roles/logging.logWriter` grant lands for a custom service account used in Cloud Build, IAM policy propagation (~30-60s) is NOT sufficient for step logs to flow. The routing path from Cloud Build → Cloud Logging → the `log_name='cloudbuild'` stream can take 2-5 additional minutes on first-ever-use of that SA. During this window, builds succeed silently with audit-only log entries. Second and subsequent builds using the same SA stream normally. Retry after ~5 minutes if first-use builds produce no step output despite the grant being in place.
 - **Region pin in two places.** `migrate.yaml` options + `gcloud builds submit --region` flag. If the flag is omitted, `gcloud` uses the user/gcloud-config default (often `us-central1`), where our private pool doesn't exist; the submit fails with `workerPool projects/.../workerPools/cortex-migration-runner not found in region us-central1`. Always pin both.
 - **Private pool logging constraint.** Private pools require `options.logging: CLOUD_LOGGING_ONLY`. Default pools support other values; private pools reject anything else. Forgetting this fails submission with `Invalid value for build.options.logging`.
 - **Private pool PSA range allocation.** Cloud Build private pools peer to env VPC via Service Networking, requiring a dedicated PSA range separate from Cloud SQL's. Per-env allocation:
@@ -135,6 +136,81 @@ Specifically:
   5. Repeat for dev via `migrate-dev.yaml` — validates the runner against dev (dev already has the migrations from Phase B, so this is a no-op apply that verifies the runner path works against dev's private IP).
   6. Once step 5 is green, drop `public_ip_enabled = true` + `authorized_networks` from `environments/dev/main.tf`, commit, apply — reverts the ADR-INFRA-005 Dev exception.
 - **Drizzle-kit migrate semantics for failure resume.** Each migration file runs in one Postgres transaction (drizzle-kit default). On failure, the entire file rolls back; `__drizzle_migrations` doesn't record it; the next run picks up from the failed file. One caveat: operations that can't run in a transaction (e.g., `CREATE INDEX CONCURRENTLY`, `VACUUM`) require migration-level escape hatches we haven't needed yet. When we do, document them per-migration in the SQL header.
+
+### Observation — Private pool + CLOUD_LOGGING_ONLY requires explicit logWriter grant (P0.5 Phase 2B discovery)
+
+Cloud Build private pools require `options.logging: CLOUD_LOGGING_ONLY` (other
+logging modes are rejected). With custom service accounts impersonated via
+`--service-account`, the worker SA must have `roles/logging.logWriter` on its
+own project. Without it, the build submission succeeds with warning
+"The service account running this build <SA> does not have permission to write
+logs to Cloud Logging" — but NO step output is captured anywhere. Cloud Logging
+queries for the build return zero entries. The build reports SUCCESS but the
+operator has no visibility into what happened.
+
+Surfaced in Phase 2B's first smoke test against dev: build reported SUCCESS but
+all 4 identity/connectivity checks were unverifiable. IAM inspection showed the
+worker SA held only cloudsql.client (project-level) and secretmanager.secretAccessor
+(resource-level). Adding roles/logging.logWriter made subsequent builds fully
+observable.
+
+**Rule:** Any service account assuming runtime identity for a Cloud Build private
+pool build must hold roles/logging.logWriter on its own project. The ci-runner
+module now grants this; when extending this pattern (e.g., deploy pipelines in
+Phase C), preserve the grant.
+
+Cross-ref: ADR-INFRA-006 Decision 4 (worker SA role list).
+
+### Observation — Custom SA + source-upload build requires storage.objectViewer (P0.5 Phase 2B discovery)
+
+`gcloud builds submit` with source upload uploads the build tarball to the
+auto-created `{project}_cloudbuild` GCS bucket before queueing the build.
+With a custom service account (`--service-account=...`), that SA — not the
+default Cloud Build SA — must read the object. Without the grant, submission
+fails with `storage.objects.get denied` on the source object.
+
+Bucket-scoped IAM would be stricter but introduces a chicken-and-egg
+dependency: the `{project}_cloudbuild` bucket is lazily created by gcloud on
+first use. Project-level `roles/storage.objectViewer` on the worker SA avoids
+the ordering issue and is semantically appropriate for a build runner.
+
+Surfaced in Phase 2B when migrate.yaml was first submitted with source upload
+instead of `--no-source`. The earlier smoke test used `--no-source` so this
+wasn't exercised until the real migrate run.
+
+Cross-ref: ADR-INFRA-006 Decision 4 (worker SA role list).
+
+### Observation — CRITICAL PROVIDER GAP: egress_option not in Terraform schema (P0.5 Phase 2B discovery)
+
+**This is a known-silent-drift situation. Read before touching the migration runner.**
+
+Cloud Build private pools default to `egressOption: NO_PUBLIC_EGRESS` when unset. This blocks outbound traffic to non-Google destinations (apt repos, npm registry, public container images). Private Google Access still routes Google services, which was sufficient for the smoke test but NOT for migrate.yaml's `apt-get install` and the cloud-sql-proxy download.
+
+**Provider gap:** Terraform's `google_cloudbuild_worker_pool.network_config` block does NOT expose `egress_option` as of google provider 6.50.0 (both `google` and `google-beta`). The GCP API accepts the field; the Terraform provider does not surface it. Attempting to set it in Terraform fails validation: "An argument named `egress_option` is not expected here."
+
+**Fix (out-of-band):**
+
+```
+gcloud builds worker-pools update cortex-migration-runner \
+  --region=asia-south1 --project=sevyn8-cortex-<env> --public-egress
+```
+
+This state is NOT tracked by Terraform. `terraform plan` will NOT surface the deviation — the field is invisible to the provider.
+
+**Disaster recovery implications:**
+
+- `terraform destroy` then `terraform apply` will recreate the pool with GCP's default (`NO_PUBLIC_EGRESS`)
+- migrate.yaml WILL FAIL after DR rebuild with the exact error seen in Phase 2B build `89e8dd7b` (`E: Unable to locate package curl` / `Package 'ca-certificates' has no installation candidate`)
+- The out-of-band gcloud update MUST be re-run after any DR rebuild
+
+**Required runbook entry:** Any project-rebuild runbook for Cortex must include re-running the gcloud egress-option update as a post-Terraform-apply step. See Makefile target `cloud-build-pool-configure-{env}`.
+
+**Triggers for removing this drift:**
+
+- **Option 1:** google provider exposes `egress_option` in a future release. Check provider changelog periodically; when available, add the field to the `ci-runner` module and re-plan. Terraform will see no change (field already set) and state is reconciled.
+- **Option 2:** we build a pre-baked builder image (`cortex-apps/cortex-migration-runner:v1`) that eliminates the apt-get + public-registry dependencies. At that point, `NO_PUBLIC_EGRESS` is the correct posture and the gcloud out-of-band update is reverted.
+
+**Concrete trigger for Option 2:** when a second Cloud Build config is added to `infra/cloud-build/` (ci.yaml for tests, or deploy pipelines). Pre-baked image amortizes across configs at that point.
 
 ## References
 

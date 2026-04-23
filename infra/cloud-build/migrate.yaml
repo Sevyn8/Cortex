@@ -1,0 +1,79 @@
+# infra/cloud-build/migrate.yaml — drizzle-kit migration runner per ADR-CI-001.
+# Invoked by .github/workflows/migrate-{env}.yaml via WIF-authenticated
+# `gcloud builds submit --source=. --substitutions=_ENV=<env>,...`.
+# Default substitutions target dev; staging/prod override via --substitutions.
+
+substitutions:
+  _ENV: dev
+  _INSTANCE_CONNECTION_NAME: sevyn8-cortex-dev:asia-south1:cortex-dev-postgres
+  _SECRET_NAME: cortex-db-postgres-break-glass-dev
+
+steps:
+  # Step 1: fetch break-glass password into workspace file (mode 600).
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: fetch-secret
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        gcloud secrets versions access latest \
+          --secret="$_SECRET_NAME" \
+          --project="sevyn8-cortex-$_ENV" \
+          > /workspace/.pgpass
+        chmod 600 /workspace/.pgpass
+
+  # Step 2: proxy + drizzle-kit migrate + verify. Single step — proxy process
+  # cannot cross step boundaries (each step runs in its own container).
+  - name: 'node:22-slim'
+    id: migrate
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        cd /workspace
+
+        # System deps (postgresql-client gives us pg_isready + psql)
+        apt-get update -qq
+        apt-get install -y -qq curl ca-certificates postgresql-client
+
+        # Cloud SQL Auth Proxy binary (v2.11.0 pinned; bump via ADR amendment)
+        curl -sSL -o /usr/local/bin/cloud-sql-proxy \
+          https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.11.0/cloud-sql-proxy.linux.amd64
+        chmod +x /usr/local/bin/cloud-sql-proxy
+
+        # Start proxy; --private-ip still required from inside VPC (ADR-CI-001).
+        # Bash $-vars are escaped $$ so Cloud Build doesn't parse them as substitutions.
+        cloud-sql-proxy --private-ip --port=5432 "$_INSTANCE_CONNECTION_NAME" &
+        PROXY_PID=$$!
+        trap 'kill $$PROXY_PID 2>/dev/null || true; rm -f /workspace/.pgpass' EXIT
+
+        # Wait for proxy liveness via pg_isready (more reliable than /dev/tcp)
+        for i in $$(seq 1 30); do
+          if pg_isready -h 127.0.0.1 -p 5432 -q; then
+            echo "Proxy ready after $${i}s"
+            break
+          fi
+          if [ "$$i" = "30" ]; then echo "Proxy liveness timeout"; exit 1; fi
+          sleep 1
+        done
+
+        # pnpm via corepack (pins to packageManager@10.33.0 from package.json)
+        corepack enable
+        pnpm install --frozen-lockfile
+
+        # Apply migrations
+        export PGPASSWORD=$$(cat /workspace/.pgpass)
+        pnpm db:migrate
+
+        # Verify
+        psql -h 127.0.0.1 -p 5432 -U postgres -d cortex \
+          -c "SELECT count(*) AS migrations_applied, max(created_at) AS last_applied FROM __drizzle_migrations"
+
+options:
+  pool:
+    name: projects/sevyn8-cortex-${_ENV}/locations/asia-south1/workerPools/cortex-migration-runner
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 600s

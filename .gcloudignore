@@ -1,0 +1,23 @@
+# .gcloudignore — excludes expensive-to-upload artifacts for `gcloud builds submit --source=.`
+# Self-contained: does NOT rely on .gitignore fallback. Explicit list wins on readability.
+
+# Dependencies and build outputs
+node_modules/
+**/node_modules/
+.turbo/
+**/.turbo/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+
+# Terraform state and plans (sensitive + expensive)
+.terraform/
+**/.terraform/
+**/*.tfstate*
+**/*.tfplan
+
+# Editor clutter
+.DS_Store

@@ -44,6 +44,8 @@ Specifically:
    - `cortex-ci-migration-{env}@sevyn8-cortex-{env}.iam.gserviceaccount.com` — **worker.** Cloud Build runs AS this identity during the migration job. Roles on itself and inbound bindings:
      - `roles/cloudsql.client` (proxy connect to env's Cloud SQL)
      - `roles/secretmanager.secretAccessor` scoped to `cortex-db-postgres-break-glass-{env}` (fetch migration password)
+     - `roles/logging.logWriter` (project) — required for private-pool builds to emit step logs; see ADR-CI-001 Impl Notes
+     - `roles/storage.objectViewer` (project) — read source tarball from auto-created `{project}_cloudbuild` bucket when `gcloud builds submit` uses source upload; bucket-scoped not viable because the bucket is lazily created
      - Inbound binding: `service-<env-project-number>@gcp-sa-cloudbuild.iam.gserviceaccount.com` gets `roles/iam.serviceAccountTokenCreator` on this SA (lets Cloud Build assume the worker identity at build runtime — explicit and required, NOT implicit via `cloudbuild.serviceAgent`).
 
    Shared:

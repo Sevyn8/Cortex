@@ -64,6 +64,29 @@ resource "google_project_iam_member" "worker_cloudsql_client" {
   member  = "serviceAccount:${google_service_account.worker.email}"
 }
 
+# ─── Worker SA → project: logging.logWriter (private-pool step logs) ──────
+# Required because Cloud Build private pools mandate options.logging:
+# CLOUD_LOGGING_ONLY. Without this role the build reports SUCCESS but step
+# output is not captured anywhere. See ADR-CI-001 Impl Notes.
+resource "google_project_iam_member" "worker_logs_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+# ─── Worker SA → project: storage.objectViewer (read source tarball) ──────
+# gcloud builds submit with source upload targets the auto-created
+# {project}_cloudbuild bucket. With a custom service account the worker SA
+# (not the default Cloud Build SA) must read that object. Project-level chosen
+# over bucket-scoped because the bucket is created lazily by gcloud — scoped
+# IAM would fail on fresh envs where no build has yet run. See ADR-CI-001
+# Impl Notes.
+resource "google_project_iam_member" "worker_source_reader" {
+  project = var.project_id
+  role    = "roles/storage.objectViewer"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
 # ─── Worker SA → secret: secretAccessor (scoped, NOT project-wide) ─────────
 resource "google_secret_manager_secret_iam_member" "worker_secret_accessor" {
   project   = var.project_id
@@ -97,6 +120,7 @@ resource "google_cloudbuild_worker_pool" "cortex_migration_runner" {
   worker_config {
     machine_type   = var.worker_pool_machine_type
     no_external_ip = true
+    disk_size_gb   = var.worker_pool_disk_size_gb
   }
 
   network_config {

@@ -8,3 +8,8 @@ common_labels = {
   prompt      = "p0-3"
   environment = "prod"
 }
+
+wif_pool_resource_name      = "projects/242079866727/locations/global/workloadIdentityPools/cortex-github-pool"
+wif_pool_principal_set_base = "principalSet://iam.googleapis.com/projects/242079866727/locations/global/workloadIdentityPools/cortex-github-pool"
+wif_provider_resource_name  = "projects/242079866727/locations/global/workloadIdentityPools/cortex-github-pool/providers/cortex-github-provider"
+wif_project_number          = "242079866727"

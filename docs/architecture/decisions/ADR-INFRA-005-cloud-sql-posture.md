@@ -80,6 +80,8 @@ To unblock laptop-based migration operations during Phase 1 build, dev overrides
 - **Reversion trigger.** When P0.5 Cloud Build lands a VPC-internal migration runner, the dev public IP becomes unnecessary. The `cloud-sql` module's `public_ip_enabled` defaults to `false`; reversion is a one-line edit in `environments/dev/main.tf` to drop the override.
 - **Terraform shape.** Module gains two defaulted variables: `public_ip_enabled` (bool, default `false`) and `authorized_networks` (list of `{name,value}` objects, default `[]`). Added to `infra/terraform/modules/cloud-sql/{variables,main}.tf`. Dev env overrides both in `environments/dev/main.tf`. Staging and prod continue to call the module without overriding — defaults preserve original posture.
 
+**Status update (2026-04-23):** Reverted after P0.5 Phase 2C delivered the VPC-internal migration runner (ADR-CI-001) and WIF-authenticated GitHub Actions dispatch (ADR-INFRA-006). Dev Cloud SQL now matches staging/prod private-IP-only posture. Migrations to dev flow via `migrate-dev.yaml` → Cloud Build private pool → private-IP connection, same as staging/prod. Laptop-direct access to dev Cloud SQL is no longer available; requires VPN/IAP/bastion if needed in future.
+
 ## Rationale
 
 - **Enterprise edition vs Enterprise Plus.** The pricing delta (~2.5×) is material at a pre-revenue stage. Enterprise Plus's headline features — Data Cache, Near-Zero Downtime planned maintenance, 24/7/365 Premium Support — are infrastructure conveniences, not go-live blockers for a retail analytics workload of Display Data's Phase 1 size. Revisit when paid tenant count justifies it.

@@ -115,18 +115,6 @@ module "cloud_sql" {
   # P0.4-phase label override. Preserves prompt="p0-3" on P0.3 resources.
   common_labels = merge(var.common_labels, { prompt = "p0-4" })
 
-  # Dev-only public IP with narrow CIDR allowlist so P0.4 Phase B
-  # migrations can run from the operator's WSL laptop. Staging and prod
-  # remain private-only per ADR-INFRA-005 Decision 11; they get the same
-  # migrations via a VPC-internal runner when P0.5 Cloud Build lands.
-  public_ip_enabled = true
-  authorized_networks = [
-    {
-      name  = "amit-wsl-dev-migrations"
-      value = "43.230.65.5/32"
-    },
-  ]
-
   # Networking (PSA peering) and sqladmin API must be in place before
   # instance creation. project_baseline carries the API; networking carries
   # the service-networking connection.

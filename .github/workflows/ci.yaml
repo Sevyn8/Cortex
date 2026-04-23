@@ -55,19 +55,27 @@ jobs:
       - name: Apply migrations to ephemeral Postgres
         run: pnpm db:migrate
 
-      - name: Strip postgres role privileges for RLS testing (match Cloud SQL)
+      - name: Create non-superuser test role + transfer audit_event ownership
         run: |
-          psql <<'SQL'
-          -- Stock Postgres: postgres has rolsuper=true + rolbypassrls=true.
-          -- Per PG17 docs, BOTH attributes independently bypass RLS.
-          -- Cloud SQL: postgres is "cloudsqlsuperuser" — rolsuper=false +
-          -- rolbypassrls=false. FORCE ROW LEVEL SECURITY works there because
-          -- the owner is not a real superuser.
-          -- Match Cloud SQL behavior in CI: clear both flags so RLS policies
-          -- apply to test queries. Must run AFTER migrations — CREATE EXTENSION
-          -- vector needs superuser.
-          ALTER ROLE postgres NOSUPERUSER NOBYPASSRLS;
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          -- Cloud SQL's postgres is cloudsqlsuperuser (rolsuper=false). Stock
+          -- Postgres' postgres is the bootstrap superuser and cannot drop its
+          -- SUPERUSER attribute. Workaround: create a dedicated non-super role
+          -- and run tests as it. Policies apply; FORCE on owner-owned tables
+          -- still meaningful. Migrations keep running as postgres (need
+          -- superuser for CREATE EXTENSION vector).
+          CREATE ROLE test_user LOGIN PASSWORD 'testpw' NOSUPERUSER NOBYPASSRLS;
+          GRANT USAGE ON SCHEMA public, cortex TO test_user;
+          GRANT CREATE ON SCHEMA public TO test_user;
+          GRANT ALL ON ALL TABLES IN SCHEMA public TO test_user;
+          GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO test_user;
+          GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA cortex TO test_user;
+          -- FORCE RLS in audit-chain.spec.ts beforeAll requires the caller
+          -- to be the table owner when not superuser.
+          ALTER TABLE audit_event OWNER TO test_user;
           SQL
 
       - name: Run foundation tests
+        env:
+          PGUSER: test_user
         run: pnpm test

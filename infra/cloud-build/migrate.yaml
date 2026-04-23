@@ -67,9 +67,29 @@ steps:
         export PGPASSWORD=$$(cat /workspace/.pgpass)
         pnpm db:migrate
 
-        # Verify
-        psql -h 127.0.0.1 -p 5432 -U postgres -d cortex \
-          -c "SELECT count(*) AS migrations_applied, max(created_at) AS last_applied FROM __drizzle_migrations"
+        # Verify — schema/extension checks plus migration state. Output is
+        # self-evident proof that 0001-0004 applied. Heredoc uses 'SQL' (quoted)
+        # so psql receives queries literally; no Cloud Build or bash expansion
+        # inside. No bash $-vars between <<'SQL' and SQL.
+        psql -h 127.0.0.1 -p 5432 -U postgres -d cortex <<'SQL'
+        \echo === Connection context ===
+        SELECT current_database() AS db, current_user AS "user";
+
+        \echo === Installed extensions ===
+        SELECT extname, extversion FROM pg_extension ORDER BY extname;
+
+        \echo === User tables ===
+        SELECT table_schema, table_name
+        FROM information_schema.tables
+        WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+        ORDER BY table_schema, table_name;
+
+        \echo === Audit event count ===
+        SELECT count(*) AS audit_event_count FROM audit_event;
+
+        \echo === Migration state ===
+        SELECT count(*) AS migrations_applied, max(created_at) AS last_applied FROM __drizzle_migrations;
+        SQL
 
 options:
   pool:

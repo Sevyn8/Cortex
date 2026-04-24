@@ -128,14 +128,20 @@ describe('bi-temporal helpers (ADR-DB-001)', () => {
         'Globex Inc',
       ]);
 
-      const before = (await pool.query(`SELECT now() AS t`)).rows[0].t as Date;
+      // [BITEMP-DIAG] t_str preserves µs; JS Date on `before` is ms-truncated.
+      // See docs/deviations.md §"bi-temporal test flake". Remove after diagnosis.
+      const beforeRow = (await pool.query(`SELECT now() AS t, now()::text AS t_str`)).rows[0];
+      const before = beforeRow.t as Date;
+      const tSRaw = beforeRow.t_str as string;
       await new Promise((r) => setTimeout(r, 50));
 
       await pool.query(`DELETE FROM ${TABLE} WHERE business_key = $1`, ['globex']);
 
       const all = (
         await pool.query(
-          `SELECT name, upper(txn_time) AS upper_tt
+          `SELECT name, upper(txn_time) AS upper_tt,
+                  lower(txn_time)::text AS t_i_lower_str,
+                  upper(txn_time)::text AS t_d_upper_str
            FROM ${TABLE}
            WHERE business_key = 'globex'`,
         )
@@ -149,6 +155,12 @@ describe('bi-temporal helpers (ADR-DB-001)', () => {
          WHERE business_key = 'globex'
            AND cortex.at_time_t(valid_time, txn_time, now(), $1::timestamptz)`,
         [before],
+      );
+      // [BITEMP-DIAG] Logs on both pass and fail so healthy vs failing µs-delta
+      // distributions are visible. Remove after flake is diagnosed.
+      console.error(
+        `[BITEMP-DIAG] T_I=${all[0].t_i_lower_str} T_D=${all[0].t_d_upper_str} ` +
+          `T_S_raw=${tSRaw} before=${before.toISOString()} rows=${asOfPrior.rows.length}`,
       );
       expect(asOfPrior.rows).toHaveLength(1);
       expect(asOfPrior.rows[0].name).toBe('Globex Inc');

@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-23 (P0.5 complete, P0.6 scoping complete)
+Last updated: 2026-04-24 (P0.6 Phase 1 + Phase 8 complete; P0.8 re-sequenced per ADR-SEQ-001)
 
 ## Pre-flight
 
@@ -28,9 +28,11 @@ Last updated: 2026-04-23 (P0.5 complete, P0.6 scoping complete)
 - [x] P0.3 GCP Terraform baseline
 - [x] P0.4 Postgres + bi-temporal helpers
 - [x] P0.5 CI/CD
-- [ ] P0.6 Observability baseline
-- [ ] P0.7 Secret Manager + KMS
-- [ ] P0.8 MCP scaffolding
+- [ ] P0.6 Observability baseline — Phase 1 DONE 2026-04-24; Phase 2 + 3 below
+  - [x] Phase 1 operator infrastructure + Phase 8 synthetic validation (2026-04-24)
+  - [ ] Phase 2 `@cortex/observability` library (gate for P0.10) — slots between P0.7 and P0.9
+  - [ ] Phase 3 dashboards — DEFERRED indefinitely (no hard consumer; trigger on operator ask)
+- [ ] P0.7 Secret Manager + KMS ← NEXT
 - [ ] P0.9 Super Admin bootstrap
 - [ ] P0.10 Audit event emission convention
 
@@ -44,6 +46,10 @@ Last updated: 2026-04-23 (P0.5 complete, P0.6 scoping complete)
 - [ ] P1.4 F04 Configuration Plane
 - [ ] P1.5 F05 Schema Evolution
 - [ ] P1.6 Feature Flags
+
+### MCP interlude (per ADR-SEQ-001)
+
+- [ ] P0.8 MCP scaffolding + protocol-agnostic tool platform — moved from Phase 0; lands after F05 with real tools to register
 
 ### Access Control
 
@@ -288,3 +294,37 @@ Per-prompt completion records for prompts that landed substantive work. Short su
 - Default VPC cleanup (ADR-INFRA-003 follow-up) — housekeeping, separate commit when convenient
 
 **Total shipped:** 12+ commits, 10+ ADRs touched, 2 new ADRs drafted
+
+### P0.6 Phase 1 + Phase 8 — Observability operator infrastructure (2026-04-24)
+
+**Shipped:**
+
+- `modules/monitoring/` (5 files, ci-runner idiom): per-env notification channels (3 email + 1 Chat webhook), 2 log-based metrics (wif_auth_failures, cloud_build_submit_failures), 7 alert policies. Commit 703878f.
+- `project-baseline` audit_config for iam.googleapis.com + sts.googleapis.com — required for WIF token-exchange events to reach logs.
+- Env wiring across dev/staging/prod; 47 GCP resources applied across 4 envs total.
+
+**Phase 8 validation:**
+
+- Chat webhook: direct-post HTTP 200 at 2026-04-24 — delivery proven end-to-end.
+- WIF filter: initial filter watched sts.googleapis.com; synthetic dispatch revealed GHA auth failures actually log to iamcredentials.googleapis.com. Filter fixed + ADR observation captured. Counter incremented post-fix. Commit 0f21845.
+- Cloud Build submit failure: filter structurally correct; retrigger blocked by gcloud pre-flight validation. Filter trusted on structural match.
+
+**Architectural discoveries captured as ADR-OBS-001 Implementation notes:**
+
+- `notification_rate_limit` only valid on `condition_matched_log` policies, not on `condition_threshold` against log-based user metrics.
+- GHA WIF auth failures log to `iamcredentials.googleapis.com:GenerateAccessToken`, not STS. Two-step OIDC flow (STS exchange silent; iamcredentials impersonation where binding is checked).
+- `iamcredentials.googleapis.com` does NOT support service-level `google_project_iam_audit_config` (GCP 400); events log as Admin Activity by default.
+
+**Sequencing change (per ADR-SEQ-001):**
+
+- P0.6 Phase 2 `@cortex/observability` library slots between P0.7 and P0.9 (was: before P0.8).
+- P0.6 Phase 3 dashboards deferred indefinitely.
+- P0.8 MCP moved out of Phase 0 to post-F05.
+
+**Deferred (explicitly):**
+
+- Email channel verification (9 channels NOT_SET across dev/staging/prod). Tracked in docs/deviations.md. CRITICAL alerts still deliverable via Chat.
+- bi-temporal test flake (services/foundation/test/bi-temporal.spec.ts:153) — instrumentation in commit 2604c85; waiting for natural CI flake recurrence to capture diagnostic data.
+- Default VPC cleanup (ADR-INFRA-003 follow-up) — rolled into general housekeeping.
+
+**Commit trail:** 703878f (Phase 1 infra) · 2604c85 (bi-temporal diagnostic instrumentation) · 0f21845 (WIF filter fix) · this commit (sequencing re-shape).

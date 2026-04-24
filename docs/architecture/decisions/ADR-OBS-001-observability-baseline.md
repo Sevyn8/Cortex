@@ -168,3 +168,4 @@ not support service level configuration of Google Cloud audit logging
 - P0.6 scoping document: `docs/planning/p0-6-observability-scope.md`
 - ADR-INFRA-006 (WIF federation — source of WIF failure metrics tracked in P0.6)
 - ADR-CI-001 (migration runner — source of Cloud Build submit failure metrics tracked in P0.6)
+- ADR-SEQ-001 (P0.8 MCP deferred to post-F-series — shifts Phase 2 library's slot to between P0.7 and P0.9)

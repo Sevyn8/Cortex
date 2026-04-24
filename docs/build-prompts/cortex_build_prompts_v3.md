@@ -664,9 +664,11 @@ Acceptance:
 
 ## P0.8: MCP server scaffolding + protocol-agnostic tool platform (EXPANDED in v3.1)
 
+**Sequencing note:** Per ADR-SEQ-001, P0.8 is sequenced after F05 (end of Phase 1 Foundation Layer), not inside Phase 0 as originally planned. MCP needs real tools to register, and tools come from F-services.
+
 **Spec reference:** §Part VII-b "The Case for MCP" (Cortex v2.2), UX01 note on MCP-native architecture
-**ADR reference:** ADR-MCP-001 (Cortex is MCP-Native — Three-Server Decomposition with Protocol-Agnostic Tool Platform) — **MUST READ before executing this prompt**
-**Dependencies:** P0.1 (monorepo), P0.6 (observability), P0.7 (secrets)
+**ADR references:** ADR-MCP-001 (Cortex is MCP-Native — Three-Server Decomposition with Protocol-Agnostic Tool Platform), ADR-SEQ-001 (MCP deferred to post-F-series) — **MUST READ both before executing this prompt**
+**Dependencies:** P0.1 (monorepo), P0.6 (observability — both Phase 1 operator infra AND Phase 2 library), P0.7 (secrets), F01–F05 (services providing tools to register)
 **Output:** Three MCP server skeletons + four capability-layer packages + shared tool registry + three per-server trust-model ADR stubs, no tools yet
 
 ```

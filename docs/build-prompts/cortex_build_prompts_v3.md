@@ -579,6 +579,8 @@ Acceptance:
 
 ## P0.6: Observability baseline
 
+> **Scope delta (2026-04-23):** This build prompt section is superseded for implementation by ADR-OBS-001. Key deviations from the original scope below are cataloged in `docs/deviations.md`. Read ADR-OBS-001 and `docs/planning/p0-6-observability-scope.md` before starting implementation. The body below is preserved for historical reference.
+
 **Spec reference:** OB01 Platform Observability Stack
 **Dependencies:** P0.3
 **Output:** Logging, metrics, tracing baseline

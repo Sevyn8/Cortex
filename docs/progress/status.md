@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-22 (P0.4 Phase B complete)
+Last updated: 2026-04-23 (P0.5 complete, P0.6 scoping complete)
 
 ## Pre-flight
 
@@ -27,7 +27,7 @@ Last updated: 2026-04-22 (P0.4 Phase B complete)
 - [x] P0.2 Dev environment
 - [x] P0.3 GCP Terraform baseline
 - [x] P0.4 Postgres + bi-temporal helpers
-- [ ] P0.5 CI/CD
+- [x] P0.5 CI/CD
 - [ ] P0.6 Observability baseline
 - [ ] P0.7 Secret Manager + KMS
 - [ ] P0.8 MCP scaffolding
@@ -251,3 +251,40 @@ Per-prompt completion records for prompts that landed substantive work. Short su
   - P0.5: CI pipeline wires `pnpm --filter @cortex/foundation test` into PR checks.
   - First-consumer deferrals from ADR-DB-001/002/003: per-table `as_of_valid` wrappers, `verify_chain`, advisory locks / chain-tail / partial unique index (forks), `cortex_admin` role / admin-bypass policies.
   - SCR-20 (audit log UI) when it lands → implement `verify_chain` and admin-bypass.
+
+### P0.5 CI/CD — Completion notes (2026-04-23)
+
+**Shipped:**
+
+- WIF substrate across 5 GCP projects (shared + dev/staging/prod + tfstate) — identity pool, provider, per-env submit and worker service accounts with scoped bindings
+- Cloud Build migration runners in private pools inside each env's VPC — private-IP Cloud SQL access, no public surface
+- Rich 6-section verify output (tables, schemas, functions, extensions, audit count, migration state)
+- GitHub Actions workflows: migrate-dev, migrate-staging, migrate-prod (manual dispatch, WIF-authenticated), ci.yaml (ephemeral Postgres + 22 Phase B tests on PR and push)
+- Branch protection on main requiring ci.yaml status check
+- Dev Cloud SQL public-IP exception reverted per ADR-INFRA-005 reversion trigger
+
+**Architectural discoveries captured as ADR amendments:**
+
+- ADR-INFRA-006 Decision 4 amended: worker SA needs `logging.logWriter` + `storage.objectViewer` for private-pool logging + source access
+- ADR-INFRA-006 Decision 4 amended: submit SA needs `cloudbuild.builds.builder` (not `builds.editor`) — covers source bucket access and serviceusage
+- ADR-CI-001 Implementation notes amended: submit SA permissions discovery via first GitHub Actions dispatch (run 24833217219)
+- CLAUDE.md new section: Turbo env var passthrough convention (strict env mode strips undeclared vars)
+- ADR-CI-001 Implementation notes amended: CI test role model — stock Postgres bootstrap superuser can't drop SUPERUSER, non-superuser role required for RLS enforcement in tests; audit_event ownership transfer required for FORCE RLS
+
+**Unplanned side-quest:**
+
+- Repo transferred mid-phase from `rahul-1974/Cortex` to `Sevyn8/Cortex` (GitHub org). Required updates to WIF provider attribute_condition + 3 env submit SA bindings (case-sensitive match) + local git remote + 5 doc files. All applied, end-to-end validated via migrate-dev dispatch #3/#4.
+
+**Repo state at P0.5 close:**
+
+- Main HEAD: accb73c (dev public-IP revert)
+- All 3 envs: private-IP Cloud SQL, Cloud Build migration runners operational, migrate-\*.yaml workflows dispatch-validated
+- ci.yaml: passing, 22/22 foundation tests green
+- Branch protection: active on Sevyn8/Cortex main, classic API, admin bypass preserved for solo dev
+
+**Deferred (explicitly):**
+
+- `cortex-ci-test-shared` SA in shared project — ADR-INFRA-006 Decision 4 marks this deferred until first GCP-accessing CI workflow (trigger: pre-baked builder image per ADR-CI-001 Option B)
+- Default VPC cleanup (ADR-INFRA-003 follow-up) — housekeeping, separate commit when convenient
+
+**Total shipped:** 12+ commits, 10+ ADRs touched, 2 new ADRs drafted

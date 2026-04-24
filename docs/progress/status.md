@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-24 (P0.6 Phase 1 + Phase 8 complete; P0.8 re-sequenced per ADR-SEQ-001)
+Last updated: 2026-04-24 (P0.6 Phase 1 + Phase 8 complete; P0.7 complete; ADR-SEQ-001 amended — P0.9 next)
 
 ## Pre-flight
 
@@ -30,10 +30,10 @@ Last updated: 2026-04-24 (P0.6 Phase 1 + Phase 8 complete; P0.8 re-sequenced per
 - [x] P0.5 CI/CD
 - [ ] P0.6 Observability baseline — Phase 1 DONE 2026-04-24; Phase 2 + 3 below
   - [x] Phase 1 operator infrastructure + Phase 8 synthetic validation (2026-04-24)
-  - [ ] Phase 2 `@cortex/observability` library (gate for P0.10) — slots between P0.7 and P0.9
+  - [ ] Phase 2 `@cortex/observability` library — hard gate ONLY for P0.10 (can land before or after P0.9; see ADR-SEQ-001 amendment)
   - [ ] Phase 3 dashboards — DEFERRED indefinitely (no hard consumer; trigger on operator ask)
-- [ ] P0.7 Secret Manager + KMS ← NEXT
-- [ ] P0.9 Super Admin bootstrap
+- [x] P0.7 Secret Manager + KMS (2026-04-24)
+- [ ] P0.9 Super Admin bootstrap ← NEXT
 - [ ] P0.10 Audit event emission convention
 
 ## Phase 1 — Display Data Go-Live
@@ -328,3 +328,28 @@ Per-prompt completion records for prompts that landed substantive work. Short su
 - Default VPC cleanup (ADR-INFRA-003 follow-up) — rolled into general housekeeping.
 
 **Commit trail:** 703878f (Phase 1 infra) · 2604c85 (bi-temporal diagnostic instrumentation) · 0f21845 (WIF filter fix) · this commit (sequencing re-shape).
+
+### P0.7 — @cortex/secrets package (2026-04-24)
+
+**Shipped:**
+
+- New package `packages/secrets/` (7 src files + 5 unit test files + 2 integration test files + README + 3 configs). Commit 8f55b8a.
+- Public API: `secrets.get/put`, `envelope.encrypt/decrypt`, `getKeyForTenant` (Phase 1 stub per ADR-INFRA-004 Decision 5).
+- Wire format: `[ver=1][wrap_len u16 BE][wrapped_DEK][IV 12][tag 16][ciphertext]`. AES-256-GCM, per-op random 32-byte DEK, `utf8(tenantId)` as AAD (programmatic cross-tenant protection).
+- Envelope wraps with `cortex-general-key`; `cortex-secrets-key` stays exclusive to Secret Manager's own CMEK.
+- Input validation via zod; secret-id regex byte-identical to `infra/terraform/modules/secret/variables.tf`.
+- Audit logging: `[SECRETS-AUDIT]` JSON lines to stderr with TODO marker for `@cortex/observability` swap at P0.6 Phase 2.
+
+**Tests:**
+
+- 65 unit tests pass (errors, config, per-tenant-keys, secret-manager, kms) — mocks via `__setClientFactoryForTesting` injection hooks.
+- 5 integration tests auto-skip unless `CORTEX_INTEGRATION_TESTS=true` (read-only GET against `cortex-db-postgres-break-glass-dev`; envelope round-trip against dev `cortex-general-key`).
+- `put` integration deferred until F02 exercises it.
+
+**Scope decisions:**
+
+- Rotation explicitly out of scope per P0.7 build prompt (F02 owns).
+- Binary payloads deferred (`getBytes` when first binary consumer emerges).
+- No `.env.local` fallback — Secret Manager is the single path in all envs.
+
+**Next consumers:** F01 (P1.1) PII encryption, F02 (P1.2) per-tenant key swap of `getKeyForTenant`, P0.9 for super-admin initial password, G01 (P4.4) for Kafka SASL creds.

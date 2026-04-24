@@ -26,6 +26,23 @@ Defer P0.8 MCP scaffolding to after F05 (end of Phase 1 Foundation Layer). MCP l
 - No impact on other Phase 0 items. P0.9 (Super Admin bootstrap) and P0.10 (Audit event emission convention) both stay in Phase 0; their dependencies (P0.3, P0.7 for P0.9; P0.6 for P0.10) are independent of MCP.
 - P0.6 Phase 3 dashboards separately deferred indefinitely per `docs/progress/status.md` — no hard consumer, trigger on operator ask. Not governed by this ADR.
 
+## Amendment 2026-04-24 — P0.9 and P0.6 Phase 2 library are independent
+
+The Phase 0 tail stated in Consequences reads as a strict sequence. Re-examining the dependency graph: P0.9 and P0.6 Phase 2 library are independent; only P0.10 has a hard dependency on Phase 2 library.
+
+P0.9 (Super Admin bootstrap) depends only on P0.3 (infra) + P0.7 (secrets). It does not consume `@cortex/observability`. Like P0.7 before it, P0.9 can use the interim stderr audit pattern (`[P0.9-AUDIT]` prefix) until the library lands and consumers swap.
+
+P0.6 Phase 2 library is a hard gate ONLY for P0.10 (audit event emission — consumes observability for its own logging).
+
+Corrected Phase 0 tail:
+
+- P0.7 Secret Manager + KMS (done)
+- P0.9 Super Admin bootstrap — no hard dep on Phase 2 library
+- P0.6 Phase 2 `@cortex/observability` library — hard gate for P0.10
+- P0.10 Audit event emission convention
+
+P0.9 and Phase 2 library are independent; either can land first. Reprioritize based on operational need.
+
 ## References
 
 - ADR-MCP-001 — MCP architecture (authoritative for WHAT MCP is; unchanged)

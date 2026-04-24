@@ -42,3 +42,17 @@ variable "wif_project_number" {
   type        = string
   description = "Project number of sevyn8-cortex-shared. Used for principal-set composition and audit reference."
 }
+
+variable "notification_recipients" {
+  type = list(object({
+    display_name = string
+    email        = string
+  }))
+  description = "Per-env notification recipients (display_name + email). Values live in local.auto.tfvars (gitignored). Passed to the monitoring module's per-env notification channels. NOT marked sensitive: Terraform forbids for_each over sensitive values, and operator emails aren't credentials (team-visible via Chat/Workspace anyway)."
+}
+
+variable "chat_webhook_url" {
+  type        = string
+  description = "Google Chat incoming webhook URL for the Cortex Alerts space. Lives in local.auto.tfvars (gitignored). Passed to the monitoring module's webhook_tokenauth channel for CRITICAL-route alerts."
+  sensitive   = true
+}

@@ -58,7 +58,11 @@ infra/terraform/**/crash.*.log
 # there is a dev/test artifact, not something to version.
 infra/terraform/modules/**/.terraform.lock.hcl
 # Never commit .tfvars with secrets — env tfvars are safe (no secrets) so
-# they are checked in explicitly; .tfvars.local is the escape hatch.
+# they are checked in explicitly; local.auto.tfvars is the escape hatch
+# (auto-loaded by Terraform because it ends in .auto.tfvars). Retaining
+# the older *.tfvars.local + *.auto.tfvars.local patterns for defensive
+# coverage.
+infra/terraform/**/local.auto.tfvars
 infra/terraform/**/*.tfvars.local
 infra/terraform/**/*.auto.tfvars.local
 

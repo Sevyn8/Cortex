@@ -122,7 +122,17 @@ Future phases follow the same pattern when source documents diverge.
 
 ## Implementation notes
 
-_Observations will be added here during implementation phases, following the pattern established in ADR-CI-001 and ADR-INFRA-006._
+### Observation — notification_rate_limit only valid on condition_matched_log policies (P0.6 Phase 1 discovery)
+
+GCP's Cloud Monitoring API rejects notification_rate_limit on alert policies whose conditions use condition_threshold against log-based user metrics (metric.type starts with logging.googleapis.com/user/). The API error: "only log-based alert policies may specify a notification rate limit."
+
+The term "log-based alert policy" in this error message refers specifically to policies using condition_matched_log — not to policies that reference log-based metrics via condition_threshold. The distinction is at the condition type, not at whether the metric originates in logs.
+
+First encountered when applying P0.6 Phase 1 monitoring module — wif_auth_failures and cloud_build_submit_failures policies (both condition_threshold on user-defined log-based metrics) were rejected. Fix: removed notification_rate_limit blocks from those policies. Natural deduplication comes from the 3600s alignment window + ALIGN_SUM + fixed threshold — the condition fires once when the rolling hour sum crosses the threshold and remains firing until it drops below.
+
+cloud_build_failures uses condition_matched_log directly (not a log-based metric), which GCP correctly recognizes as log-based and accepts the rate_limit.
+
+**Rule:** notification_rate_limit only on condition_matched_log. For condition_threshold against log-based user metrics, rely on alignment window semantics for deduplication.
 
 ## References
 

@@ -149,3 +149,21 @@ resource "google_service_account_iam_member" "wif_submit_dev" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "${var.wif_pool_principal_set_base}/attribute.workflow_ref/Sevyn8/Cortex/.github/workflows/migrate-dev.yaml@refs/heads/main"
 }
+
+# ─── Monitoring — alert policies + notification channels ────────────────────
+# Per ADR-OBS-001: operator-facing observability substrate. CRITICAL alerts
+# route to email + Google Chat; WARNING alerts route to email only.
+# depends_on ensures project-baseline's audit-log config (iam + sts) lands
+# before monitoring's log-based metrics reference STS token-exchange events.
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  project_id                = var.project_id
+  environment               = "dev"
+  cloud_sql_instance_name   = "cortex-dev-postgres"
+  cloud_sql_max_connections = 100
+  notification_recipients   = var.notification_recipients
+  chat_webhook_url          = var.chat_webhook_url
+
+  depends_on = [module.project_baseline]
+}

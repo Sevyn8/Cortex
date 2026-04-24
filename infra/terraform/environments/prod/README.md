@@ -25,6 +25,10 @@ GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=cortex-tf-admin@sevyn8-cortex-prod.iam.gservi
 
 Production applies are gated — the Makefile's `tf-apply-prod` requires `CORTEX_CONFIRM_PROD=yes`.
 
+## Local variables (`local.auto.tfvars`)
+
+Some variables live only in a gitignored `local.auto.tfvars` in this directory — personal identities and credentials never commit. Currently required: `notification_recipients` (list of operator contacts) and `chat_webhook_url` (Google Chat incoming webhook). Without this file, `terraform plan` / `apply` will fail fast with "variable X is required but has no default". Get current values from a shared secure channel (secrets manager, 1Password) or another operator; never paste into chat or commit to the repo.
+
 ## Identity
 
 - State: personal ADC via cortex-admins group's `objectAdmin` on the state bucket.

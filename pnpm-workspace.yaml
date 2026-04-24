@@ -4,6 +4,7 @@ packages:
   - 'packages/*'
   - 'services/*'
   - 'services/*/*'
+  - 'scripts/bootstrap'
 
 catalog:
   drizzle-orm: ^0.37.0

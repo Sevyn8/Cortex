@@ -1,0 +1,23 @@
+{
+  "name": "@cortex/bootstrap",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint lib",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/canonical-schema": "workspace:*",
+    "@cortex/secrets": "workspace:*",
+    "@inquirer/prompts": "^7.2.0",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

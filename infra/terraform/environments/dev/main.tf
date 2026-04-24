@@ -95,6 +95,11 @@ data "google_kms_crypto_key" "cloudsql" {
   key_ring = data.google_kms_key_ring.cortex.id
 }
 
+data "google_kms_crypto_key" "secrets" {
+  name     = "cortex-secrets-key"
+  key_ring = data.google_kms_key_ring.cortex.id
+}
+
 module "cloud_sql" {
   source = "../../modules/cloud-sql"
 
@@ -164,6 +169,33 @@ module "monitoring" {
   cloud_sql_max_connections = 100
   notification_recipients   = var.notification_recipients
   chat_webhook_url          = var.chat_webhook_url
+
+  depends_on = [module.project_baseline]
+}
+
+# ─── Super Admin initial password secret (P0.9) ────────────────────────────
+# Per ADR-SEQ-001 amendment: the P0.9 bootstrap script (scripts/bootstrap/
+# create-super-admin.ts) writes the initial super admin password into this
+# secret's latest version. AC01 (P2.1) reads it at promotion time to seed
+# the users + user_role_assignment tables.
+#
+# Metadata lives in Terraform; version populated by the bootstrap script
+# via @cortex/secrets secrets.put. Prod has NO equivalent — production uses
+# WorkOS SSO with an env-var-specified initial user validated on AC01 first
+# run. See /docs/runbooks/super-admin-bootstrap.md.
+module "secret_super_admin_initial" {
+  source = "../../modules/secret"
+
+  project_id = var.project_id
+  secret_id  = "cortex-auth-super-admin-initial-dev"
+  kms_key_id = data.google_kms_crypto_key.secrets.id
+
+  common_labels = {
+    managed_by  = "terraform"
+    project     = "cortex"
+    environment = "dev"
+    prompt      = "p0-9"
+  }
 
   depends_on = [module.project_baseline]
 }

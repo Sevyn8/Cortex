@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["lib/**/*", "create-super-admin.ts", "vitest.config.ts"]
+}

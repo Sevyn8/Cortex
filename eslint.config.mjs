@@ -13,6 +13,7 @@ const WORKSPACE_TS = [
   'apps/**/*.tsx',
   'services/**/*.ts',
   'services/**/*.tsx',
+  'scripts/bootstrap/**/*.ts',
 ];
 
 export default [

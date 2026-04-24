@@ -85,3 +85,15 @@ The analogous UPDATE test (same structure: INSERT → SELECT now() → sleep →
 
 - This flake pre-dates P0.6 Phase 1. Commit 703878f is not the cause; it only made the flake more visible.
 - Main is red on the flake as of 2026-04-24. GCP infrastructure from P0.6 Phase 1 is correctly applied and working — CI red does NOT indicate broken infrastructure.
+
+## P0.6 Phase 8 — operator-validation observations
+
+### Email channel verification deferred
+
+All 9 email notification channels (3 recipients × 3 envs) remain in `verificationStatus: NOT_SET`. GCP requires a manual code-entry flow per channel (`sendVerificationCode` via REST, then paste code back via UI), which has disproportionate cost for current operational value:
+
+- CRITICAL alerts route to email + Chat (Chat delivery proven end-to-end at 2026-04-24 via direct webhook test, HTTP 200)
+- WARNING alerts route to email only (current impact: zero — no real traffic, no incidents to miss)
+- Verification is trivial to complete later (one gcloud + UI session per channel) if email delivery becomes operationally needed
+
+Not blocking P0.7 or any downstream work. Will address if email alerts become useful after F-series ships services that produce real traffic.

@@ -74,11 +74,11 @@ locals {
 resource "google_logging_metric" "wif_auth_failures" {
   project     = var.project_id
   name        = "cortex/wif_auth_failures"
-  description = "IAM Security Token Service (STS) GenerateAccessToken failures. Source signal for WIF token exchange issues from GitHub Actions dispatches. Requires iam.googleapis.com DATA_READ audit logs enabled (see project-baseline module)."
+  description = "IAM Credentials (iamcredentials.googleapis.com) GenerateAccessToken failures. Source signal for WIF token exchange issues from GitHub Actions dispatches where a federated identity attempts to impersonate a service account it isn't bound to. GHA OIDC flow is two-step: STS exchange (external OIDC → federated identity, always succeeds if WIF pool/provider exists) THEN iamcredentials impersonation (federated identity → service account, where the workflow_ref binding is checked). Failures land on step 2, not STS."
 
   filter = <<-EOT
-    protoPayload.serviceName="sts.googleapis.com"
-    AND protoPayload.methodName=~"GenerateAccessToken"
+    protoPayload.serviceName="iamcredentials.googleapis.com"
+    AND protoPayload.methodName="GenerateAccessToken"
     AND (protoPayload.status.code!=0 OR severity>=ERROR)
   EOT
 

@@ -17,15 +17,22 @@ resource "google_project_service" "activated" {
 }
 
 # ─── Data Access audit logs for IAM / STS ───────────────────────────────────
-# Per ADR-OBS-001: WIF token-exchange failures (sts.googleapis.com
-# GenerateAccessToken) are classified as reads, not Admin Activity. They do
-# NOT appear in audit logs by default — Data Access logs must be explicitly
-# enabled. Without this, the wif_auth_failures log-based metric in the
-# monitoring module has nothing to count.
+# Per ADR-OBS-001: GHA WIF auth failures log to iamcredentials.googleapis.com
+# (GenerateAccessToken), NOT sts. The OIDC flow is two-step: STS exchange
+# (external OIDC → federated identity) THEN iamcredentials impersonation
+# (federated identity → service account, where workflow_ref binding is
+# checked — failures land here).
 #
 # Scope: enable DATA_READ + ADMIN_READ on two services:
 #   - iam.googleapis.com: policy reads, role lookups
-#   - sts.googleapis.com: token exchanges (the WIF primary signal)
+#   - sts.googleapis.com: external-token exchange (low-signal but kept
+#                          for defense-in-depth / future STS-specific filters)
+#
+# NOT configurable: iamcredentials.googleapis.com does NOT support
+# service-level audit config (API returns 400 "does not support service
+# level configuration of Google Cloud audit logging"). Its GenerateAccessToken
+# failures are logged as Admin Activity by default — the wif_auth_failures
+# metric consumes them without any explicit audit_config required.
 #
 # Cost: Data Access logs are charged at standard Cloud Logging rates above
 # the 50 GB/month free tier per project. IAM + STS log volume on Cortex's

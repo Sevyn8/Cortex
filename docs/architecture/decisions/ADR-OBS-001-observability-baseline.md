@@ -134,6 +134,33 @@ cloud_build_failures uses condition_matched_log directly (not a log-based metric
 
 **Rule:** notification_rate_limit only on condition_matched_log. For condition_threshold against log-based user metrics, rely on alignment window semantics for deduplication.
 
+### Observation — GHA WIF auth failures log to iamcredentials.googleapis.com, not STS (P0.6 Phase 8 discovery)
+
+The initial wif_auth_failures filter watched sts.googleapis.com for failed GenerateAccessToken calls. Synthetic validation revealed this was wrong: GitHub Actions' OIDC flow with Google Cloud is two-step —
+
+1. STS token exchange: external OIDC token → federated identity. Succeeds whenever the WIF pool and provider exist. Low-signal event; authentication not yet tied to any service account.
+2. iamcredentials GenerateAccessToken: federated identity → impersonated service account. This is where the workflow_ref binding is checked. Failures (wrong branch, wrong workflow file path, missing iam.workloadIdentityUser grant) land here with status.code=7 PERMISSION_DENIED.
+
+The alert signal for "a dispatch tried to assume an SA it wasn't bound to" is iamcredentials, not STS. Module filter updated in the same commit.
+
+Validation trigger: dispatched migrate-dev.yaml from branch p0-6-phase-8-wif-synthetic (branch binding is refs/heads/main only). Real audit log entry captured:
+
+```
+serviceName: iamcredentials.googleapis.com
+methodName:  GenerateAccessToken
+status.code: 7 (PERMISSION_DENIED)
+severity:    ERROR
+```
+
+Attempted to extend the project-baseline audit-config coverage to include iamcredentials.googleapis.com for symmetry with iam + sts. GCP rejected this at apply time:
+
+```
+Error 400: Service iamcredentials.googleapis.com does not exist or does
+not support service level configuration of Google Cloud audit logging
+```
+
+**Rule:** iamcredentials.googleapis.com does NOT support service-level audit config. Its GenerateAccessToken events are logged as Admin Activity by default — no per-service `google_project_iam_audit_config` required. The wif_auth_failures metric consumes these default-on logs directly; the audit-config coverage stays at iam + sts.
+
 ## References
 
 - Cortex v2.2 Spec §OB01 (Platform Observability Stack, FR-001 through FR-004)

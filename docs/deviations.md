@@ -33,3 +33,55 @@ When these diverge during a phase, we reconcile explicitly rather than silently.
 - Each row links to the ADR that contains reasoning; don't duplicate reasoning here
 - If a spec section is superseded by multiple ADRs (happens on large modules), list each with its ADR
 - When spec is next revised (v2.3, v3, etc.), use this catalog to identify sections needing update
+
+## bi-temporal test flake — cortex_scd_trigger DELETE branch
+
+### Symptom
+
+`services/foundation/test/bi-temporal.spec.ts:153` — "cortex_scd_trigger on DELETE > closes old row; no new row; as-of prior returns value, as-of now returns nothing" intermittently fails on CI with:
+
+```
+AssertionError: expected [] to have a length of 1 but got +0
+  at test/bi-temporal.spec.ts:153:30
+```
+
+### Occurrences
+
+- Commit 8581b0f, CI run 24837833606 — failed once, passed on retry
+- Commit 703878f (P0.6 Phase 1), CI runs 24884652888 + rerun — failed twice consecutively
+
+### Working hypothesis (unconfirmed)
+
+JS Date has millisecond precision; Postgres timestamptz has microsecond. When the test captures `SELECT now() AS t` and the pg client uses default type parsers, the returned JS Date truncates microseconds. If the INSERT's DEFAULT `tstzrange(now(), NULL)` and the subsequent `SELECT now()` fall in the same millisecond, the round-tripped `before` value (passed back as `$1::timestamptz`) can land BEFORE the recorded INSERT lower bound — causing `txn_time @> before` to evaluate FALSE on the closed lower boundary, returning zero rows.
+
+### Why unconfirmed
+
+Local repro attempted against pgvector/pgvector:pg17 (same image CI uses) on WSL2 Docker Desktop:
+
+- 100/100 passes on standalone JS script mirroring the test exactly
+- 30/30 passes on real `vitest run test/bi-temporal.spec.ts`
+
+Did not reproduce. Flake is likely CI-runner-specific — GitHub Actions ephemeral VM clock/scheduling, or state interaction from running `audit-chain.spec.ts` + `rls.spec.ts` before `bi-temporal.spec.ts` in the same vitest invocation.
+
+### Candidate fixes
+
+**(A) Trigger-layer fix (production-grade):** Wrap all Postgres-side `now()` calls in `date_trunc('millisecond', now())` — SCD trigger (both UPDATE and DELETE branches) and table DEFAULT expressions. Aligns whole-system temporal quantum with JS Date precision.
+
+**(B) Test-layer fix (narrow):** Change `SELECT now() AS t` → `SELECT now()::text AS t_str`, pass back as `$1::timestamptz`. Preserves microsecond precision on round-trip. Minimal surface but only fixes this test.
+
+**(C) Diagnostic approach:** Add temporary stderr logging for T_I, T_D, T_S_raw, and `before` in the failing test, commit, wait for the flake to recur in CI, diagnose from real data.
+
+### Unresolved anomaly
+
+The analogous UPDATE test (same structure: INSERT → SELECT now() → sleep → UPDATE → predicate with `before`) consistently passes. Under the hypothesis, it should be equally flaky. Reason to prefer (C) — instrument and wait for real data — before committing (A) or (B) blind.
+
+### Recommended path (next session)
+
+1. Option (C) first — add diagnostic logging (5-line test edit), commit, let CI flake naturally, capture real T_I vs before delta
+2. Once hypothesis confirmed or refuted, apply the appropriate fix
+3. If (A) is chosen, audit all other Postgres-side `now()` usage across the codebase for the same issue class
+
+### Notes
+
+- This flake pre-dates P0.6 Phase 1. Commit 703878f is not the cause; it only made the flake more visible.
+- Main is red on the flake as of 2026-04-24. GCP infrastructure from P0.6 Phase 1 is correctly applied and working — CI red does NOT indicate broken infrastructure.

@@ -420,11 +420,11 @@ Updated whenever a deferral is added or revisited.
 
 ### 7.4 `app.tenant_id` session variable contract
 
-**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
+**Resolved 2026-04-25** by F01 Slice A (commit `4811821`) — see "## Resolved deferrals" below.
 
 ### 7.5 RLS FORCE flag (test-only)
 
-**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
+**Resolved 2026-04-25** by F01 Slice A (commit `4811821`) — see "## Resolved deferrals" below.
 
 ---
 
@@ -535,7 +535,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.1 Control-plane database location
 
-**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
+**Resolved 2026-04-25** by F01 Slice A (commit `4811821`) — see "## Resolved deferrals" below.
 
 ### 10.2 Tenant ID format
 
@@ -587,7 +587,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.6 Async-local context propagation library
 
-**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
+**Resolved 2026-04-25** by F01 Slice A (commit `4811821`) — see "## Resolved deferrals" below.
 
 ### 10.7 Blob isolation IAM strategy
 
@@ -703,28 +703,28 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ## Resolved deferrals
 
-### 7.4 `app.tenant_id` session variable contract — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+### 7.4 `app.tenant_id` session variable contract — Resolved 2026-04-25 / commit `4811821`
 
 - **Item:** Postgres session var that RLS policies read via `cortex.current_tenant_id()`
 - **Current state at deferral:** Reader function existed (migration 0003); fail-closed behavior verified by tests. No middleware set it — `withTenantContext` test helper was the only setter.
 - **Resolution:** F01 Slice A — `bindTenantToDbSession` in `@cortex/tenant-context` calls `SELECT set_config('app.tenant_id', $1, true)` inside transactions; `ensureBoundToTenant` reads from the async-local store and binds. Middleware factory threads tenant id from HTTP layer through async context → DB session var. End-to-end exercised by 6 db-session tests + 8 audit tests + 19 tenants tests.
 - **References:** ADR-DB-002 §Decision 1, migration 0003, `packages/tenant-context/src/db-session.ts`, `packages/tenant-context/src/middleware.ts`.
 
-### 7.5 RLS FORCE flag (test-only) — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+### 7.5 RLS FORCE flag (test-only) — Resolved 2026-04-25 / commit `4811821`
 
 - **Item:** `ALTER TABLE ... FORCE ROW LEVEL SECURITY` enabled in tests
 - **Current state at deferral:** Tests ran as `postgres` superuser which bypasses RLS unless FORCE was set; test fixtures used FORCE.
 - **Resolution:** Production runtime SAs are non-superuser, so RLS applies without FORCE on the new control-plane tables (`tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`). Tests use FORCE selectively where the table owner happens to equal the test connection role (`audit_event` only); `packages/tenant-context/test/helpers/db.ts:forceRlsOnAuditEvent` isolates the pattern. Production posture: no FORCE needed; runtime non-bypass roles inherit RLS by default.
 - **References:** CLAUDE.md "Testing RLS-protected tables", ADR-DB-002, `packages/tenant-context/test/helpers/db.ts`.
 
-### 10.1 Control-plane database location — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+### 10.1 Control-plane database location — Resolved 2026-04-25 / commit `4811821`
 
 - **Item:** Where do F01's control-plane tables (`tenant`, `tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`) live?
 - **Current state at deferral:** Not decided. Three options: same `cortex` DB / same Cloud SQL instance separate DB / separate Cloud SQL instance.
 - **Resolution:** Single `cortex` DB chosen — control plane co-located with tenant data. Migration 0007 added the four control-plane tables in the `cortex` Postgres database. Phase 1 reality: 1 tenant; co-location has no isolation downside at this scale. Trigger to revisit (separate `cortex_control` DB or per-Enterprise dedicated instances) remains in §1.2 (Cloud SQL Enterprise Plus upgrade) and the deferred Enterprise tier work; F02 may revisit at multi-tenant traffic.
 - **References:** Build prompts §F01 §1.4, `services/foundation/migrations/0007_control_plane_tables.sql`.
 
-### 10.6 Async-local context propagation library — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+### 10.6 Async-local context propagation library — Resolved 2026-04-25 / commit `4811821`
 
 - **Item:** Node.js `AsyncLocalStorage` wrapper for tenant context
 - **Current state at deferral:** No existing pattern in the repo. `packages/tenant-context/` was an empty shell.

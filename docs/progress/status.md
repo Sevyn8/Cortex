@@ -41,7 +41,7 @@ Last updated: 2026-04-25 (F01 Slice A complete; remaining Phase 0: P0.6 Phase 2 
 ### Foundation Layer
 
 - [ ] P1.1 F01 Multi-Tenancy ← IN PROGRESS
-  - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `<F01_SLICE_A_HASH>`)
+  - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
   - [ ] Slice B — Encryption + GCS isolation
   - [ ] Slice C — Quotas + Compute isolation
 - [ ] P1.2 F02 Tenant Lifecycle

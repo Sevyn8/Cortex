@@ -7,7 +7,18 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
-    "test": "echo \"no tests yet\" && exit 0"
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/canonical-schema": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "vitest": "catalog:",
+    "@types/pg": "catalog:",
+    "@types/node": "^22.0.0"
   }
 }

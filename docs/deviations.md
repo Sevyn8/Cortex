@@ -34,68 +34,23 @@ When these diverge during a phase, we reconcile explicitly rather than silently.
 - If a spec section is superseded by multiple ADRs (happens on large modules), list each with its ADR
 - When spec is next revised (v2.3, v3, etc.), use this catalog to identify sections needing update
 
-## bi-temporal test flake — cortex_scd_trigger DELETE branch
+## bi-temporal test flake — cortex_scd_trigger DELETE branch (Resolved 2026-04-25)
 
-### Symptom
+**Status:** Resolved 2026-04-25 / commit `180c849` / `services/foundation/migrations/0006_bi_temporal_ms_truncation.sql`.
 
-`services/foundation/test/bi-temporal.spec.ts:153` — "cortex_scd_trigger on DELETE > closes old row; no new row; as-of prior returns value, as-of now returns nothing" intermittently fails on CI with:
+### Summary
 
-```
-AssertionError: expected [] to have a length of 1 but got +0
-  at test/bi-temporal.spec.ts:153:30
-```
+`services/foundation/test/bi-temporal.spec.ts` intermittently failed on CI (e.g., runs 24837833606, 24884652888, 24893617678) with `expected [] to have a length of 1 but got +0` on the DELETE-branch as-of-prior assertion. Diagnostic instrumentation in commit `2604c85` captured the smoking gun in failing run 24893617678: `T_I=…867135+00, T_S=…867851+00, before=…867Z, rows=0` — INSERT and `SELECT now()` landed in the same millisecond, the JS-`Date`-round-tripped `before` truncated µs to `.867000`, and the closed-lower-bound predicate `[867135, …) ⊇ 867000` evaluated FALSE.
 
-### Occurrences
+The flake was µs-vs-ms precision asymmetry between Postgres `timestamptz` (µs) and JS `Date` (ms), surfacing only when the system clock didn't cross a ms boundary between the trigger-side `now()` and the test-side `SELECT now()`.
 
-- Commit 8581b0f, CI run 24837833606 — failed once, passed on retry
-- Commit 703878f (P0.6 Phase 1), CI runs 24884652888 + rerun — failed twice consecutively
+### Fix
 
-### Working hypothesis (unconfirmed)
+Migration 0006 (`bi_temporal_ms_truncation.sql`) wraps every Postgres-side `now()` consumer in `date_trunc('millisecond', now())`: the SCD trigger's INSERT/UPDATE/DELETE branches plus the `txn_time` / `valid_time` `DEFAULT` expressions. The whole-system temporal quantum now matches JS-`Date` precision; the round-trip is lossless by design. µs-precision audit (2026-04-25) confirmed no consumer of `txn_time` / `valid_time` reads sub-ms; the audit chain's µs dependency is on `audit_event.occurred_at`, a separate column untouched by the SCD trigger.
 
-JS Date has millisecond precision; Postgres timestamptz has microsecond. When the test captures `SELECT now() AS t` and the pg client uses default type parsers, the returned JS Date truncates microseconds. If the INSERT's DEFAULT `tstzrange(now(), NULL)` and the subsequent `SELECT now()` fall in the same millisecond, the round-tripped `before` value (passed back as `$1::timestamptz`) can land BEFORE the recorded INSERT lower bound — causing `txn_time @> before` to evaluate FALSE on the closed lower boundary, returning zero rows.
+### Prevention
 
-### Why unconfirmed
-
-Local repro attempted against pgvector/pgvector:pg17 (same image CI uses) on WSL2 Docker Desktop:
-
-- 100/100 passes on standalone JS script mirroring the test exactly
-- 30/30 passes on real `vitest run test/bi-temporal.spec.ts`
-
-Did not reproduce. Flake is likely CI-runner-specific — GitHub Actions ephemeral VM clock/scheduling, or state interaction from running `audit-chain.spec.ts` + `rls.spec.ts` before `bi-temporal.spec.ts` in the same vitest invocation.
-
-### Candidate fixes
-
-**(A) Trigger-layer fix (production-grade):** Wrap all Postgres-side `now()` calls in `date_trunc('millisecond', now())` — SCD trigger (both UPDATE and DELETE branches) and table DEFAULT expressions. Aligns whole-system temporal quantum with JS Date precision.
-
-**(B) Test-layer fix (narrow):** Change `SELECT now() AS t` → `SELECT now()::text AS t_str`, pass back as `$1::timestamptz`. Preserves microsecond precision on round-trip. Minimal surface but only fixes this test.
-
-**(C) Diagnostic approach:** Add temporary stderr logging for T_I, T_D, T_S_raw, and `before` in the failing test, commit, wait for the flake to recur in CI, diagnose from real data.
-
-### Unresolved anomaly
-
-The analogous UPDATE test (same structure: INSERT → SELECT now() → sleep → UPDATE → predicate with `before`) consistently passes. Under the hypothesis, it should be equally flaky. Reason to prefer (C) — instrument and wait for real data — before committing (A) or (B) blind.
-
-### Hypothesis confirmed (2026-04-25)
-
-Diagnostic instrumentation in commit `2604c85` captured the smoking gun in failing CI run `24893617678` (P0.7 commit, 2026-04-24 14:03 UTC):
-
-```
-[BITEMP-DIAG] T_I=2026-04-24 14:03:58.867135+00
-              T_S_raw=2026-04-24 14:03:58.867851+00
-              before=2026-04-24T14:03:58.867Z
-              rows=0
-```
-
-T_I and T_S landed in the **same millisecond** (867). T_I had µs=135; the JS-Date-truncated `before` was 867.000. Predicate `[867135, ...) ⊇ 867000` is FALSE — exactly the µs-truncation pattern the hypothesis predicted. Companion passing-run diag (local docker, 3ms delta between T_I and T_S) shows the predicate succeeds when the timestamps cross a millisecond boundary.
-
-**Recommended path: Option (A) trigger-layer fix.** Wrap `now()` in `date_trunc('millisecond', now())` in the SCD trigger's UPDATE + DELETE branches and in the `txn_time` / `valid_time` DEFAULT expressions. Aligns the whole-system temporal quantum with JS Date precision. JS-Date round-trip becomes lossless by design; the test stops being flaky structurally.
-
-µs-precision audit (2026-04-25): no consumer of `txn_time` / `valid_time` reads sub-millisecond precision. The audit chain's µs dependency is on `audit_event.occurred_at` — a separate column the SCD trigger doesn't touch. Trigger-layer fix is structurally safe.
-
-### Notes
-
-- This flake pre-dates P0.6 Phase 1. Commit 703878f is not the cause; it only made the flake more visible.
-- Main is red on the flake as of 2026-04-24. GCP infrastructure from P0.6 Phase 1 is correctly applied and working — CI red does NOT indicate broken infrastructure.
+Migration 0007 (control-plane tables, F01 Slice A) and any future tables with bi-temporal or wall-clock-default columns should default via `date_trunc('millisecond', now())` rather than bare `now()`. The pattern is established and exercised by 41 foundation tests + 65 tenant-context tests as of 2026-04-25.
 
 ## P0.6 Phase 8 — operator-validation observations
 

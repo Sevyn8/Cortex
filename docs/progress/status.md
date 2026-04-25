@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-25 (P0.9 complete; remaining Phase 0: P0.6 Phase 2 library + P0.10; F01 next)
+Last updated: 2026-04-25 (F01 Slice A complete; remaining Phase 0: P0.6 Phase 2 library + P0.10; F01 Slices B/C next)
 
 ## Pre-flight
 
@@ -40,7 +40,10 @@ Last updated: 2026-04-25 (P0.9 complete; remaining Phase 0: P0.6 Phase 2 library
 
 ### Foundation Layer
 
-- [ ] P1.1 F01 Multi-Tenancy ← NEXT
+- [ ] P1.1 F01 Multi-Tenancy ← IN PROGRESS
+  - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `<F01_SLICE_A_HASH>`)
+  - [ ] Slice B — Encryption + GCS isolation
+  - [ ] Slice C — Quotas + Compute isolation
 - [ ] P1.2 F02 Tenant Lifecycle
 - [ ] P1.3 F03 Temporal Data Engine
 - [ ] P1.4 F04 Configuration Plane

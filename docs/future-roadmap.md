@@ -420,21 +420,11 @@ Updated whenever a deferral is added or revisited.
 
 ### 7.4 `app.tenant_id` session variable contract
 
-- **Item:** Postgres session var that RLS policies read via `cortex.current_tenant_id()`
-- **Current state:** Reader function exists (migration 0003); fail-closed behavior verified by tests. No middleware sets it yet — `withTenantContext` test helper is the only setter.
-- **Future options:** F01 middleware sets `app.tenant_id` per-transaction at the start of every request.
-- **Triggers:** F01 (P1.1) middleware lands.
-- **References:** ADR-DB-002 §Decision 1, `services/foundation/migrations/0003_rls_baseline.sql`.
-- **Owner phase:** F01.
+**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
 
 ### 7.5 RLS FORCE flag (test-only)
 
-- **Item:** `ALTER TABLE ... FORCE ROW LEVEL SECURITY` enabled in tests
-- **Current state:** Tests run as `postgres` superuser, which bypasses RLS unless FORCE is set. Test fixtures use FORCE.
-- **Future options:** Production tables won't need FORCE because F01 middleware never runs as superuser.
-- **Triggers:** F01 (P1.1) ships and runs as a non-super service account against shared Cloud SQL; tests can drop FORCE on production tables.
-- **References:** CLAUDE.md "Testing RLS-protected tables", ADR-DB-002.
-- **Owner phase:** F01 (cleanup post-middleware).
+**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
 
 ---
 
@@ -545,15 +535,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.1 Control-plane database location
 
-- **Item:** Where do F01's control-plane tables (`tenant`, `tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`) live?
-- **Current state:** Not decided. F01 build prompt says "in a CONTROL PLANE database (shared across all tenants, not RLS-protected — these tables ARE the tenant registry)" without specifying.
-- **Future options:**
-  1. Same `cortex` Postgres database, separate `cortex_control_plane` schema. Simplest; no extra Cloud SQL instance.
-  2. Separate database on the same Cloud SQL instance (`control_plane` DB next to `cortex`). Cleaner namespace separation.
-  3. Separate Cloud SQL instance per env entirely. Strongest isolation; highest cost + ops surface.
-- **Triggers:** F01 (P1.1) design phase.
-- **References:** Build prompts §F01 §1.4.
-- **Owner phase:** F01.
+**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
 
 ### 10.2 Tenant ID format
 
@@ -605,15 +587,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.6 Async-local context propagation library
 
-- **Item:** Node.js `AsyncLocalStorage` wrapper for tenant context
-- **Current state:** No existing pattern in the repo. `packages/tenant-context/` is an empty shell.
-- **Future options:**
-  1. Bare `AsyncLocalStorage` from `node:async_hooks`, wrapped in helpers.
-  2. A library (e.g., `cls-hooked`) — heavier, deprecated.
-  3. Custom implementation per service — anti-pattern.
-- **Triggers:** F01 (P1.1) — this is what `packages/tenant-context` will provide.
-- **References:** Build prompts §F01 §1.
-- **Owner phase:** F01.
+**Resolved 2026-04-25** by F01 Slice A (commit `<F01_SLICE_A_HASH>`) — see "## Resolved deferrals" below.
 
 ### 10.7 Blob isolation IAM strategy
 
@@ -663,8 +637,96 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **References:** Build prompts §F01, §AC02.
 - **Owner phase:** F01 + AC02 jointly.
 
+### 10.11 HTTP framework choice for tenant middleware
+
+- **Item:** Which HTTP framework does `@cortex/tenant-context.buildTenantContextMiddleware` commit to?
+- **Current state:** Framework-agnostic adapter pattern in `@cortex/tenant-context`. Hono + Express adapters provided as primitives sharing a common extraction + validation core. No production consumer yet.
+- **Future options:**
+  1. Commit to Hono ecosystem-wide (Cloud Run-friendly, modern, fetch-API-native).
+  2. Commit to Express (incumbent Node ecosystem, mature middleware library).
+  3. Commit to Fastify (performance-oriented, schema-first).
+  4. Keep framework-agnostic permanently — add adapters as new frameworks land.
+- **Triggers:** First F-service shipping an HTTP API.
+- **References:** `packages/tenant-context/src/middleware.ts`; F-series build prompts P1.2–P1.5.
+- **Owner phase:** F02 or first HTTP-exposing F-service.
+
+### 10.12 Tenant CRUD authorization layer
+
+- **Item:** Who is allowed to call `tenants.*` (especially `tenants.list`)?
+- **Current state:** Phase 1: no authz at the package layer. Anything that imports `@cortex/tenant-context` can call any method. Callers must be trusted control-plane code.
+- **Future options:**
+  1. AC01 layers authz: a separate `authz` package gates `tenant.list`, `tenant.create`, etc. via per-method permissions.
+  2. Move CRUD behind a privileged-only HTTP surface that auths callers explicitly.
+  3. Both — package-layer permission checks AND HTTP-surface auth.
+- **Triggers:** AC01 design phase, or first multi-actor consumer of tenants.\* (whichever first).
+- **References:** `packages/tenant-context/src/tenants.ts`; F01 deviations Issue 6.
+- **Owner phase:** AC01.
+
+### 10.13 Cursor pagination for `tenants.list`
+
+- **Item:** Slice A uses limit/offset pagination. When does cursor pagination become necessary?
+- **Current state:** `tenants.list` returns `{ items, total, limit, offset }` via `OFFSET / LIMIT`. Phase 1 has 1 tenant; predictable page-N-of-M semantics matter more than streaming for admin tooling.
+- **Future options:**
+  1. Switch to keyset cursor (e.g., `(created_at, id)` ordering).
+  2. Hybrid: keep offset for admin UI, expose cursor for programmatic high-volume callers.
+  3. Stay on offset permanently — tenant counts likely never exceed thousands.
+- **Triggers:** Tenant count or query latency exceeds the offset-friendly threshold (~10k rows or noticeable p99 regression).
+- **References:** `packages/tenant-context/src/tenants.ts`.
+- **Owner phase:** F01 (later slice) or F02.
+
+### 10.14 `external_id` format policy
+
+- **Item:** Lockdown rules for tenant `external_id` values.
+- **Current state:** Regex `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/`, length 2..64. Lowercase slug, hyphens allowed but not at start/end.
+- **Future options:**
+  1. Reserve prefixes (e.g., `cortex-`, `internal-`, `system-`) for platform-owned tenants.
+  2. Forbid consecutive hyphens explicitly (regex is currently permissive).
+  3. Allow underscores and/or digits as the first char.
+  4. Tighten length (e.g., 3..32) once the bootstrap tenant naming convention settles.
+- **Triggers:** First operator collision or naming-convention clash.
+- **References:** `packages/tenant-context/src/tenants.ts`; migration 0007 (`tenant.external_id`).
+- **Owner phase:** F01 or F02 (operator-driven).
+
+### 10.15 FOR UPDATE contention test for `tenants.update` / `tenants.setStatus`
+
+- **Item:** Concurrent update test proving `SELECT ... FOR UPDATE` actually serializes contending transactions on the same tenant row.
+- **Current state:** All `update` / `setStatus` tests exercise the `.for('update')` SQL syntax. Contention behavior is unverified — the Postgres lock semantics are correct by language spec, but a regression in our query construction could silently lose the lock.
+- **Future options:**
+  1. Add a two-connection contention test using promise barriers to force interleaving.
+  2. Rely on Postgres correctness; defer permanently.
+  3. Add a chaos test in the integration suite (separate from unit-spec scope).
+- **Triggers:** First production-level concurrency incident, OR if any future Slice C work refactors the locking strategy.
+- **References:** `packages/tenant-context/test/tenants.spec.ts`; `tenants.ts:443-489` (`setStatus`), `:341-401` (`update`).
+- **Owner phase:** F02 or first concurrency incident.
+
 ---
 
 ## Resolved deferrals
 
-(empty — populate with `Resolved YYYY-MM-DD` entries as items land)
+### 7.4 `app.tenant_id` session variable contract — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+
+- **Item:** Postgres session var that RLS policies read via `cortex.current_tenant_id()`
+- **Current state at deferral:** Reader function existed (migration 0003); fail-closed behavior verified by tests. No middleware set it — `withTenantContext` test helper was the only setter.
+- **Resolution:** F01 Slice A — `bindTenantToDbSession` in `@cortex/tenant-context` calls `SELECT set_config('app.tenant_id', $1, true)` inside transactions; `ensureBoundToTenant` reads from the async-local store and binds. Middleware factory threads tenant id from HTTP layer through async context → DB session var. End-to-end exercised by 6 db-session tests + 8 audit tests + 19 tenants tests.
+- **References:** ADR-DB-002 §Decision 1, migration 0003, `packages/tenant-context/src/db-session.ts`, `packages/tenant-context/src/middleware.ts`.
+
+### 7.5 RLS FORCE flag (test-only) — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+
+- **Item:** `ALTER TABLE ... FORCE ROW LEVEL SECURITY` enabled in tests
+- **Current state at deferral:** Tests ran as `postgres` superuser which bypasses RLS unless FORCE was set; test fixtures used FORCE.
+- **Resolution:** Production runtime SAs are non-superuser, so RLS applies without FORCE on the new control-plane tables (`tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`). Tests use FORCE selectively where the table owner happens to equal the test connection role (`audit_event` only); `packages/tenant-context/test/helpers/db.ts:forceRlsOnAuditEvent` isolates the pattern. Production posture: no FORCE needed; runtime non-bypass roles inherit RLS by default.
+- **References:** CLAUDE.md "Testing RLS-protected tables", ADR-DB-002, `packages/tenant-context/test/helpers/db.ts`.
+
+### 10.1 Control-plane database location — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+
+- **Item:** Where do F01's control-plane tables (`tenant`, `tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`) live?
+- **Current state at deferral:** Not decided. Three options: same `cortex` DB / same Cloud SQL instance separate DB / separate Cloud SQL instance.
+- **Resolution:** Single `cortex` DB chosen — control plane co-located with tenant data. Migration 0007 added the four control-plane tables in the `cortex` Postgres database. Phase 1 reality: 1 tenant; co-location has no isolation downside at this scale. Trigger to revisit (separate `cortex_control` DB or per-Enterprise dedicated instances) remains in §1.2 (Cloud SQL Enterprise Plus upgrade) and the deferred Enterprise tier work; F02 may revisit at multi-tenant traffic.
+- **References:** Build prompts §F01 §1.4, `services/foundation/migrations/0007_control_plane_tables.sql`.
+
+### 10.6 Async-local context propagation library — Resolved 2026-04-25 / commit `<F01_SLICE_A_HASH>`
+
+- **Item:** Node.js `AsyncLocalStorage` wrapper for tenant context
+- **Current state at deferral:** No existing pattern in the repo. `packages/tenant-context/` was an empty shell.
+- **Resolution:** F01 Slice A — package now has 8 source files (`errors`, `types`, `context`, `db-session`, `audit`, `tenants`, `middleware`, `index`) with 65 tests (12 errors + 10 context + 6 db-session + 8 audit + 19 tenants + 10 middleware). Public API: bare `AsyncLocalStorage` from `node:async_hooks` wrapped in helpers (`getTenantId` / `getTenantOrThrow` / `withTenantContext` / `withoutTenantContext`); DB session-var bridge; audit emission; tenant CRUD namespace; framework-agnostic HTTP middleware (Hono + Express adapters).
+- **References:** Build prompts §F01 §1, `packages/tenant-context/src/`.

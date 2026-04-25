@@ -3,7 +3,29 @@
 // this file is for app-side typed queries only (not the migration source of
 // truth). Add pgTable entries here when new cross-cutting tables land.
 
-import { boolean, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  bigint,
+  boolean,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
+
+// ─────────────────────────────────────────────────────────────────────
+// Shared default expression — matches the temporal-quantum invariant
+// established by migration 0006 (SCD trigger) + 0007 (control plane).
+// ─────────────────────────────────────────────────────────────────────
+
+const msNow = sql`date_trunc('millisecond', now())`;
+
+// ─────────────────────────────────────────────────────────────────────
+// Pre-AC01 super-admin placeholder (P0.9 / migration 0005)
+// ─────────────────────────────────────────────────────────────────────
 
 /**
  * Pre-AC01 super-admin placeholder. Populated by the P0.9 bootstrap script in
@@ -30,3 +52,122 @@ export const bootstrapAdmin = pgTable('bootstrap_admin', {
 
 export type BootstrapAdmin = typeof bootstrapAdmin.$inferSelect;
 export type NewBootstrapAdmin = typeof bootstrapAdmin.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────
+// F01 control plane tables (migration 0007)
+//
+// Tenant registry + per-tenant config / quota / KMS-binding tables.
+// Migration 0007_control_plane_tables.sql is the DDL source of truth;
+// this file mirrors the shape for app-side typed queries only. Per the
+// bootstrapAdmin precedent, CHECK constraints (tier, status enums) live
+// migration-side only — Drizzle uses `enum: [...]` shorthand for TS
+// narrowing without duplicating the SQL CHECK definition here.
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Primary tenant registry. Control plane — NOT RLS-protected. Phase 1 only
+ * Standard tier path implemented; ENTERPRISE enum reserved for F02+. See
+ * migration 0007 + future-roadmap.md §10.1 (resolved by 0007).
+ */
+export const tenant = pgTable('tenant', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  external_id: text('external_id').notNull().unique(),
+  display_name: text('display_name').notNull(),
+  tier: text('tier', { enum: ['STANDARD', 'ENTERPRISE'] }).notNull(),
+  status: text('status', {
+    enum: ['PROVISIONING', 'ACTIVE', 'SUSPENDED', 'TERMINATED'],
+  })
+    .notNull()
+    .default('PROVISIONING'),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().default(msNow),
+  updated_at: timestamp('updated_at', { withTimezone: true }).notNull().default(msNow),
+});
+
+export type Tenant = typeof tenant.$inferSelect;
+export type NewTenant = typeof tenant.$inferInsert;
+
+/**
+ * Per-tenant versioned configuration (F04 consumer). RLS enabled in 0007 —
+ * reads/writes scoped by app.tenant_id. version_number is monotonic per
+ * tenant. created_by_user_id NULL pre-AC01.
+ */
+export const tenantConfigVersion = pgTable(
+  'tenant_config_version',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id')
+      .notNull()
+      .references(() => tenant.id, { onDelete: 'restrict' }),
+    version_number: integer('version_number').notNull(),
+    config_json: jsonb('config_json').notNull().$type<Record<string, unknown>>().default({}),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().default(msNow),
+    created_by_user_id: uuid('created_by_user_id'),
+  },
+  (t) => ({
+    tenantVersionUnique: unique('tenant_config_version_tenant_id_version_number_key').on(
+      t.tenant_id,
+      t.version_number,
+    ),
+  }),
+);
+
+export type TenantConfigVersion = typeof tenantConfigVersion.$inferSelect;
+export type NewTenantConfigVersion = typeof tenantConfigVersion.$inferInsert;
+
+/**
+ * Quota counters per (tenant, resource_class, window_start). RLS enabled.
+ * Slice A creates the substrate; enforcement (token bucket, 429-on-exceed)
+ * lands in F01 Slice C. resource_class is free-form for now; Slice C may
+ * constrain via CHECK or enum.
+ */
+// Convention note: this is the first table in the codebase with bigint
+// columns. mode: 'bigint' returns native BigInt at the call site, allowing
+// quota values to exceed JS Number.MAX_SAFE_INTEGER (2^53-1) — required
+// for byte-storage classes. Future tables with counters guaranteed to stay
+// under 2^53 (e.g., user counts) may use mode: 'number'; the choice is
+// per-column, not codebase-wide. Consumer call sites pay the BigInt
+// arithmetic ergonomics cost.
+export const tenantQuotaUsage = pgTable(
+  'tenant_quota_usage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id')
+      .notNull()
+      .references(() => tenant.id, { onDelete: 'restrict' }),
+    resource_class: text('resource_class').notNull(),
+    current_value: bigint('current_value', { mode: 'bigint' }).notNull().default(0n),
+    quota_limit: bigint('quota_limit', { mode: 'bigint' }).notNull(),
+    window_start: timestamp('window_start', { withTimezone: true }).notNull().default(msNow),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().default(msNow),
+  },
+  (t) => ({
+    tenantResourceWindowUnique: unique(
+      'tenant_quota_usage_tenant_id_resource_class_window_start_key',
+    ).on(t.tenant_id, t.resource_class, t.window_start),
+  }),
+);
+
+export type TenantQuotaUsage = typeof tenantQuotaUsage.$inferSelect;
+export type NewTenantQuotaUsage = typeof tenantQuotaUsage.$inferInsert;
+
+/**
+ * Per-tenant CMEK binding. Phase 1: empty — getKeyForTenant() in
+ * @cortex/secrets returns env-level cortex-general-key regardless of tenant
+ * (per ADR-INFRA-004 §Decision 5). F02 populates this table + swaps the
+ * resolver when per-tenant CMEK lands in Phase 2+. RLS enabled with
+ * SELECT-only policy in 0007 (writes via privileged F02 lifecycle paths).
+ * See future-roadmap.md §1.1, §7.1.
+ */
+export const tenantKmsKey = pgTable('tenant_kms_key', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenant_id: uuid('tenant_id')
+    .notNull()
+    .unique()
+    .references(() => tenant.id, { onDelete: 'restrict' }),
+  kms_key_resource_name: text('kms_key_resource_name').notNull(),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().default(msNow),
+  rotated_at: timestamp('rotated_at', { withTimezone: true }),
+});
+
+export type TenantKmsKey = typeof tenantKmsKey.$inferSelect;
+export type NewTenantKmsKey = typeof tenantKmsKey.$inferInsert;

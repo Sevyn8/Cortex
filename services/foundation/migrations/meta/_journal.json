@@ -43,6 +43,13 @@
       "when": 1777105223183,
       "tag": "0006_bi_temporal_ms_truncation",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777108613546,
+      "tag": "0007_control_plane_tables",
+      "breakpoints": true
     }
   ]
 }

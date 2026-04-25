@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-24 (P0.6 Phase 1 + Phase 8 complete; P0.7 complete; ADR-SEQ-001 amended — P0.9 next)
+Last updated: 2026-04-25 (P0.9 complete; remaining Phase 0: P0.6 Phase 2 library + P0.10; F01 next)
 
 ## Pre-flight
 
@@ -33,14 +33,14 @@ Last updated: 2026-04-24 (P0.6 Phase 1 + Phase 8 complete; P0.7 complete; ADR-SE
   - [ ] Phase 2 `@cortex/observability` library — hard gate ONLY for P0.10 (can land before or after P0.9; see ADR-SEQ-001 amendment)
   - [ ] Phase 3 dashboards — DEFERRED indefinitely (no hard consumer; trigger on operator ask)
 - [x] P0.7 Secret Manager + KMS (2026-04-24)
-- [ ] P0.9 Super Admin bootstrap ← NEXT
+- [x] P0.9 Super Admin bootstrap (2026-04-24)
 - [ ] P0.10 Audit event emission convention
 
 ## Phase 1 — Display Data Go-Live
 
 ### Foundation Layer
 
-- [ ] P1.1 F01 Multi-Tenancy
+- [ ] P1.1 F01 Multi-Tenancy ← NEXT
 - [ ] P1.2 F02 Tenant Lifecycle
 - [ ] P1.3 F03 Temporal Data Engine
 - [ ] P1.4 F04 Configuration Plane
@@ -353,3 +353,29 @@ Per-prompt completion records for prompts that landed substantive work. Short su
 - No `.env.local` fallback — Secret Manager is the single path in all envs.
 
 **Next consumers:** F01 (P1.1) PII encryption, F02 (P1.2) per-tenant key swap of `getKeyForTenant`, P0.9 for super-admin initial password, G01 (P4.4) for Kafka SASL creds.
+
+### P0.9 — Super Admin bootstrap (2026-04-24)
+
+**Shipped:**
+
+- New workspace package `@cortex/bootstrap` (`scripts/bootstrap/`) — CLI + business logic + 14 unit tests
+- Migration `0005_bootstrap_admin.sql` with CHECK constraints on `env_created_in` + promoted-consistency
+- Drizzle schema `bootstrapAdmin` in `@cortex/canonical-schema` (canonical location for forward AC01 use)
+- Terraform secret `cortex-auth-super-admin-initial-{dev,staging}` with CMEK via `cortex-secrets-key` (prod uses WorkOS — no secret)
+- Operational runbook `docs/runbooks/super-admin-bootstrap.md` (dev/staging procedure + prod procedure + emergency break-glass + reset)
+
+**Design decisions:**
+
+- Password handling: CLI collects via `@inquirer/prompts`; lib never sees terminal; AC01 hashes with argon2id at promotion time.
+- Idempotency: re-run with existing row exits 0 with runbook pointer (no destructive `--force-re-run` flag).
+- `password_secret_ref` stores full version name (`projects/.../versions/N`) — pins AC01 promotion to exact version.
+- Audit logging: `[BOOTSTRAP-AUDIT]` stderr stub matching `[SECRETS-AUDIT]` precedent (TODO swap when `@cortex/observability` lands).
+
+**Verification:**
+
+- 45 tests pass (14 bootstrap + 31 foundation), incl. password-never-in-logs at type + runtime.
+- Terraform applied cleanly to dev + staging; prod skipped per design.
+
+**Next consumer:** AC01 (P2.1) — promotion migration reads `bootstrap_admin` rows, hashes password, writes to users + user_role_assignment.
+
+**Commit:** `51253c7`

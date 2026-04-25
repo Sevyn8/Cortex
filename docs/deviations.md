@@ -75,11 +75,22 @@ Did not reproduce. Flake is likely CI-runner-specific — GitHub Actions ephemer
 
 The analogous UPDATE test (same structure: INSERT → SELECT now() → sleep → UPDATE → predicate with `before`) consistently passes. Under the hypothesis, it should be equally flaky. Reason to prefer (C) — instrument and wait for real data — before committing (A) or (B) blind.
 
-### Recommended path (next session)
+### Hypothesis confirmed (2026-04-25)
 
-1. Option (C) first — add diagnostic logging (5-line test edit), commit, let CI flake naturally, capture real T_I vs before delta
-2. Once hypothesis confirmed or refuted, apply the appropriate fix
-3. If (A) is chosen, audit all other Postgres-side `now()` usage across the codebase for the same issue class
+Diagnostic instrumentation in commit `2604c85` captured the smoking gun in failing CI run `24893617678` (P0.7 commit, 2026-04-24 14:03 UTC):
+
+```
+[BITEMP-DIAG] T_I=2026-04-24 14:03:58.867135+00
+              T_S_raw=2026-04-24 14:03:58.867851+00
+              before=2026-04-24T14:03:58.867Z
+              rows=0
+```
+
+T_I and T_S landed in the **same millisecond** (867). T_I had µs=135; the JS-Date-truncated `before` was 867.000. Predicate `[867135, ...) ⊇ 867000` is FALSE — exactly the µs-truncation pattern the hypothesis predicted. Companion passing-run diag (local docker, 3ms delta between T_I and T_S) shows the predicate succeeds when the timestamps cross a millisecond boundary.
+
+**Recommended path: Option (A) trigger-layer fix.** Wrap `now()` in `date_trunc('millisecond', now())` in the SCD trigger's UPDATE + DELETE branches and in the `txn_time` / `valid_time` DEFAULT expressions. Aligns the whole-system temporal quantum with JS Date precision. JS-Date round-trip becomes lossless by design; the test stops being flaky structurally.
+
+µs-precision audit (2026-04-25): no consumer of `txn_time` / `valid_time` reads sub-millisecond precision. The audit chain's µs dependency is on `audit_event.occurred_at` — a separate column the SCD trigger doesn't touch. Trigger-layer fix is structurally safe.
 
 ### Notes
 

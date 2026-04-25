@@ -36,6 +36,13 @@
       "when": 1777044428333,
       "tag": "0005_bootstrap_admin",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777105223183,
+      "tag": "0006_bi_temporal_ms_truncation",
+      "breakpoints": true
     }
   ]
 }

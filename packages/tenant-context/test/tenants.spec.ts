@@ -513,10 +513,19 @@ async function fetchAuditEvents(
 ): Promise<AuditEventRow[]> {
   return db.transaction(async (tx) => {
     await bindTenantToDbSession(tx, tenantId);
+    // occurred_at defaults to transaction_timestamp() which is CONSTANT
+    // within a single transaction — two audit emits inside the same
+    // db.transaction(...) (e.g., TENANT_CREATED + TENANT_CONFIG_VERSION_CREATED
+    // from tenants.create) receive identical occurred_at, so sorting by
+    // it alone is ambiguous. ctid is Postgres's physical row identifier,
+    // monotonic for sequential INSERTs on the same backend within a txn,
+    // used here as a reliable tiebreaker. The hash chain
+    // (prev_hash → curr_hash) encodes canonical event order in
+    // production; this ordering is purely for test row-recovery.
     const result = await tx.execute<AuditEventRow>(
       sql`SELECT action, occurred_at, payload FROM audit_event
             WHERE tenant_id = ${tenantId}
-            ORDER BY occurred_at ASC`,
+            ORDER BY occurred_at ASC, ctid ASC`,
     );
     return result.rows;
   });

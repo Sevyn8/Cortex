@@ -210,12 +210,7 @@ Updated whenever a deferral is added or revisited.
 
 ### 4.1 `@cortex/observability` library (P0.6 Phase 2)
 
-- **Item:** pino + OpenTelemetry SDK + prom-client-compatible API library
-- **Current state:** P0.6 Phase 1 (operator infrastructure) shipped; Phase 2 library not started. Interim audit logging uses stderr `[SECRETS-AUDIT]` + `[BOOTSTRAP-AUDIT]` prefixes.
-- **Future options:** Land per ADR-OBS-001 §Decision 1+2; F01/AC01 satisfy ContextProvider interface when they ship.
-- **Triggers:** Hard prerequisite for P0.10 (audit-events convention); also unlocks the swap markers in `packages/secrets/src/audit.ts:18` and `scripts/bootstrap/lib/bootstrap.ts:134`.
-- **References:** ADR-OBS-001, ADR-SEQ-001 amendment, `docs/planning/p0-6-observability-scope.md`.
-- **Owner phase:** P0.6 Phase 2 (can land before or after P0.9; gates P0.10).
+**Resolved 2026-04-25** by P0.6 Phase 2 (commit `15e5574`) — see "## Resolved deferrals" below.
 
 ### 4.2 P0.10 audit-events convention (`@cortex/audit-events`)
 
@@ -477,21 +472,11 @@ Updated whenever a deferral is added or revisited.
 
 ### 8.1 `[SECRETS-AUDIT]` swap
 
-- **Item:** Swap stderr emission to `@cortex/observability` structured logger
-- **Current state:** `console.error` with `[SECRETS-AUDIT]` JSON-line prefix.
-- **Future options:** Replace with `@cortex/observability` structured logger import.
-- **Triggers:** P0.6 Phase 2 library lands.
-- **References:** `packages/secrets/src/audit.ts:18` (`TODO(P0.6 Phase 2)`).
-- **Owner phase:** P0.6 Phase 2.
+**Resolved 2026-04-25** by P0.6 Phase 2 (commit `15e5574`) — see "## Resolved deferrals" below.
 
 ### 8.2 `[BOOTSTRAP-AUDIT]` swap
 
-- **Item:** Swap stderr emission to `@cortex/observability` structured logger
-- **Current state:** `console.error` with `[BOOTSTRAP-AUDIT]` JSON-line prefix.
-- **Future options:** Replace with `@cortex/observability` structured logger import.
-- **Triggers:** P0.6 Phase 2 library lands.
-- **References:** `scripts/bootstrap/lib/bootstrap.ts:134` (`TODO(P0.6 Phase 2)`).
-- **Owner phase:** P0.6 Phase 2.
+**Resolved 2026-04-25** by P0.6 Phase 2 (commit `15e5574`) — see "## Resolved deferrals" below.
 
 ### 8.3 VPC egress hardening marker
 
@@ -784,3 +769,24 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **Current state at deferral:** No existing pattern in the repo. `packages/tenant-context/` was an empty shell.
 - **Resolution:** F01 Slice A — package now has 8 source files (`errors`, `types`, `context`, `db-session`, `audit`, `tenants`, `middleware`, `index`) with 65 tests (12 errors + 10 context + 6 db-session + 8 audit + 19 tenants + 10 middleware). Public API: bare `AsyncLocalStorage` from `node:async_hooks` wrapped in helpers (`getTenantId` / `getTenantOrThrow` / `withTenantContext` / `withoutTenantContext`); DB session-var bridge; audit emission; tenant CRUD namespace; framework-agnostic HTTP middleware (Hono + Express adapters).
 - **References:** Build prompts §F01 §1, `packages/tenant-context/src/`.
+
+### 4.1 `@cortex/observability` library — Resolved 2026-04-25 / commit `15e5574`
+
+- **Item:** pino + OpenTelemetry SDK + prom-client-compatible API library
+- **Current state at deferral:** P0.6 Phase 1 (operator infrastructure) shipped; Phase 2 library not started. Interim audit logging used stderr `[SECRETS-AUDIT]` + `[BOOTSTRAP-AUDIT]` prefixes as placeholder.
+- **Resolution:** P0.6 Phase 2 — package ships 13 src files (`errors` / `types` / `context-provider` / `redaction` / `logger` / `sdk` / `tracer` / `metrics` / `correlation-context` / `http-middleware` / `grpc-middleware` / `pubsub-wrapper` / `test-utils`) plus the public barrel, with 77 unit tests across 9 spec files. Cloud Logging-compatible JSON output (severity / timestamp / message / module_id / context fields); ContextProvider wires `tenant_id` (F01 store), `correlation_id` (observability's own AsyncLocalStorage), `trace_id` / `span_id` (OTel active context); path-based PII redaction at the logger boundary per ADR-OBS-003; framework-agnostic HTTP / gRPC / Pub/Sub middleware; `@cortex/observability/test-utils` subpath export for the `LogCapture` helper.
+- **References:** ADR-OBS-001, ADR-OBS-003, `packages/observability/src/`, `docs/planning/p0-6-observability-scope.md`.
+
+### 8.1 `[SECRETS-AUDIT]` swap — Resolved 2026-04-25 / commit `15e5574`
+
+- **Item:** Swap stderr emission to `@cortex/observability` structured logger
+- **Current state at deferral:** `console.error` with `[SECRETS-AUDIT]` JSON-line prefix at `packages/secrets/src/audit.ts`.
+- **Resolution:** `audit.ts` refactored to hybrid DI — `createSecretsAuditEmitter(opts)` factory + module-scope default emitter backing the existing `auditLog(entry)` API + `__setLoggerForTesting` / `__resetForTesting` escape hatches. Emissions go through pino with `namespace: 'secrets-audit'`, `module_id: 'cortex-secrets'`. The 14 internal call sites in `kms.ts` / `secret-manager.ts` / `per-tenant-keys.ts` are unchanged; 16 prefix-string test assertions migrated to structured-field assertions via the `LogCapture` test-utils pattern.
+- **References:** `packages/secrets/src/audit.ts`, `packages/secrets/test/{kms,per-tenant-keys,secret-manager}.spec.ts`.
+
+### 8.2 `[BOOTSTRAP-AUDIT]` swap — Resolved 2026-04-25 / commit `15e5574`
+
+- **Item:** Swap stderr emission to `@cortex/observability` structured logger
+- **Current state at deferral:** `console.error` with `[BOOTSTRAP-AUDIT]` JSON-line prefix at `scripts/bootstrap/lib/bootstrap.ts`.
+- **Resolution:** Same hybrid-DI pattern as §8.1 — `createBootstrapAuditEmitter(opts)` factory + module-scope default + `__setLoggerForTesting` / `__resetForTesting`. Emissions carry `namespace: 'bootstrap-audit'`, `module_id: 'cortex-bootstrap'`. The 5 internal `emitAuditLog` call sites in `runBootstrap` are unchanged; the prior `captureAllLogs` test helper retired in favor of `LogCapture`. Password-leakage tests gain defense-in-depth: a small `captureConsoleAndStreams` helper preserves the "no password ever escapes" check across both the structured-logger path and any stray write to console / stderr / stdout.
+- **References:** `scripts/bootstrap/lib/bootstrap.ts`, `scripts/bootstrap/lib/bootstrap.test.ts`.

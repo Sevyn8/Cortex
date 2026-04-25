@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-25 (F01 Slice A complete; remaining Phase 0: P0.6 Phase 2 library + P0.10; F01 Slices B/C next)
+Last updated: 2026-04-25 (P0.6 Phase 2 `@cortex/observability` library complete; remaining Phase 0: P0.10; F01 Slices B/C next)
 
 ## Pre-flight
 
@@ -28,9 +28,9 @@ Last updated: 2026-04-25 (F01 Slice A complete; remaining Phase 0: P0.6 Phase 2 
 - [x] P0.3 GCP Terraform baseline
 - [x] P0.4 Postgres + bi-temporal helpers
 - [x] P0.5 CI/CD
-- [ ] P0.6 Observability baseline — Phase 1 DONE 2026-04-24; Phase 2 + 3 below
+- [x] P0.6 Observability baseline — Phase 1 DONE 2026-04-24; Phase 2 DONE 2026-04-25; Phase 3 deferred indefinitely
   - [x] Phase 1 operator infrastructure + Phase 8 synthetic validation (2026-04-24)
-  - [ ] Phase 2 `@cortex/observability` library — hard gate ONLY for P0.10 (can land before or after P0.9; see ADR-SEQ-001 amendment)
+  - [x] Phase 2 `@cortex/observability` library (2026-04-25, commit `15e5574`)
   - [ ] Phase 3 dashboards — DEFERRED indefinitely (no hard consumer; trigger on operator ask)
 - [x] P0.7 Secret Manager + KMS (2026-04-24)
 - [x] P0.9 Super Admin bootstrap (2026-04-24)

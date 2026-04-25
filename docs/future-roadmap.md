@@ -1,0 +1,670 @@
+# Cortex Future Roadmap
+
+Authoritative deferral catalog. Every architectural choice we've consciously
+deferred lives here with current state, future options, and trigger criteria.
+Updated whenever a deferral is added or revisited.
+
+## How to use this document
+
+- Adding a deferral: pick a section, add an entry with all 5 fields
+- Revisiting: search by trigger keyword (tenant count, scale, regulatory, etc.)
+- Resolving: keep the entry, add "Resolved YYYY-MM-DD" + commit hash; don't delete
+
+## Sections
+
+1. Tenant-scale triggers — revisit when tenant count or per-tenant traffic crosses thresholds.
+2. Operational triggers — revisit when operators ask, alert fatigue arrives, or specific tooling demand emerges.
+3. Regulatory / contractual triggers — revisit when DPA, certification, or regulatory mandate arrives.
+4. Phase-sequenced — tied to specific named build prompts (P0.10, F02, AC01, P11.x, etc.).
+5. First-consumer-driven — lands when the first concrete consumer arrives.
+6. Phase 1 explicit cuts — deliberately minimal in Phase 1; full implementation in named later phase.
+7. Stub implementations — currently shipped with explicit swap-paths.
+8. Code TODOs tied to future phases — grep-able markers in the codebase.
+9. Specification deviations — Cortex v2.2 spec deviations we're tracking. Mirrored from `docs/deviations.md` where applicable but listed here for forward planning.
+10. Decisions yet to be made — architectural choices F01 (or later modules) will need to make. Listed here so we don't forget them.
+
+## Entry template
+
+```
+- **Item:** [name]
+- **Current state:** [what we have today]
+- **Future options:** [numbered if multiple]
+- **Triggers:** [concrete criteria for revisit]
+- **References:** [ADR, build prompt, commit, file]
+- **Owner phase:** [target phase or "operator-driven"]
+```
+
+---
+
+## 1. Tenant-scale triggers
+
+### 1.1 Per-tenant CMEK keys
+
+- **Item:** Per-tenant CMEK key issuance + tenant_id ↔ key binding in D01
+- **Current state:** Single `cortex-secrets-key` per env wraps all tenant data. `getKeyForTenant(tenantId)` is a Phase-1 stub returning the env's `cortex-general-key` regardless of `tenantId`.
+- **Future options:**
+  1. Per-tenant CMEK on creation (D01 stores `tenant_id → key_id`). Additive — new keys, no re-key of existing data.
+  2. Per-tenant Cloud EKM (key material outside GCP) for specific tenants demanding sovereign control.
+- **Triggers:** Tenant count > ~5 OR a DPA explicitly requires customer-managed key material per tenant OR cryptographic-erasure-on-offboarding is contractually demanded.
+- **References:** ADR-INFRA-004 §Decision 5, `packages/secrets/src/per-tenant-keys.ts`, F02 build prompt (P1.2 provisioning steps include "create KMS key").
+- **Owner phase:** F02 implementation when triggered.
+
+### 1.2 Cloud SQL Enterprise Plus upgrade
+
+- **Item:** Upgrade Cloud SQL Postgres from Enterprise → Enterprise Plus
+- **Current state:** Enterprise edition across dev/staging/prod (per ADR-INFRA-005).
+- **Future options:**
+  1. Prod-only upgrade to Enterprise Plus (Data Cache, Near-Zero Downtime maintenance, Premium Support).
+  2. All-env upgrade.
+- **Triggers:** "Paid tenant count justifies it" — pricing delta is ~2.5× and not material at pre-revenue.
+- **References:** ADR-INFRA-005 §Rationale.
+- **Owner phase:** Operator-driven, post-Display-Data-revenue.
+
+### 1.3 Workload Identity Federation for human operators
+
+- **Item:** WIF-based human auth for Terraform operations
+- **Current state:** Personal ADC + cortex-admins group impersonating per-env `cortex-tf-admin` SAs (per ADR-INFRA-002).
+- **Future options:** WIF from a corp IdP (Google Workspace OIDC) into env SAs; eliminates per-person credential management.
+- **Triggers:** "Team size grows beyond ~3 engineers actively doing infra work." Per-person SA impersonation becomes unwieldy at scale.
+- **References:** ADR-INFRA-002 §Revisit triggers.
+- **Owner phase:** Operator-driven.
+
+### 1.4 Shared VPC migration
+
+- **Item:** Move from per-project VPCs to a Shared VPC (host + service projects)
+- **Current state:** One VPC per env project (dev, staging, prod), each with its own networking module instance.
+- **Future options:** Shared VPC with shared host project + service-project attachments.
+- **Triggers:** "Project count grows beyond ~6." Operational saving of Shared VPC pays off at scale, not at Phase 1.
+- **References:** ADR-INFRA-003 §Revisit triggers.
+- **Owner phase:** Operator-driven.
+
+### 1.5 Audit chain concurrent-write protection
+
+- **Item:** Advisory locks / chain-tail table / partial unique index for audit_event SHA-chain
+- **Current state:** Per-tenant SHA chain via SCD trigger; no lock — concurrent INSERTs to the same tenant can fork the chain.
+- **Future options:**
+  1. PG advisory lock per tenant on INSERT.
+  2. `chain_tail` table with single row per tenant, foreign-key referenced by audit_event.
+  3. Partial unique index on (tenant_id, prev_hash) WHERE next_event IS NULL.
+- **Triggers:** Any tenant exceeds ~10 audit events/sec sustained OR SCR-20 audit log surfaces an actual fork.
+- **References:** ADR-DB-003 Implementation notes.
+- **Owner phase:** SCR-20 (P8.12) or earlier if observed.
+
+### 1.6 Per-tenant metrics tagging at infrastructure layer
+
+- **Item:** Tagging GCP-ingested infrastructure metrics (Cloud SQL CPU, Cloud Build duration) with `tenant_id`
+- **Current state:** Application-emitted metrics tenant-tagged via OpenTelemetry; infrastructure metrics remain infrastructure-scoped (per ADR-OBS-001 §Decision 6).
+- **Future options:** Custom OTLP pipeline that re-tags infra metrics by inspecting workload labels.
+- **Triggers:** Multi-tenant traffic inflection (multiple tenants with material per-tenant resource consumption variance worth observing).
+- **References:** ADR-OBS-001 §Decision 6.
+- **Owner phase:** Operator-driven post-multi-tenancy.
+
+---
+
+## 2. Operational triggers
+
+### 2.1 P0.6 Phase 3 dashboards
+
+- **Item:** Cloud Monitoring dashboards linking alert state + tenant-scoped views
+- **Current state:** Phase 1 alert policies + notification channels live; no dashboards.
+- **Future options:** Build per-env dashboard set (Cloud SQL health + alert state + WIF/CB metrics) when an operator asks for one.
+- **Triggers:** Operator requests it during incident-response retrospective, or alert fatigue surfaces and dashboards become the sane way to triage.
+- **References:** `docs/progress/status.md` Phase 0 P0.6 entry; ADR-OBS-001.
+- **Owner phase:** Operator-driven, deferred indefinitely.
+
+### 2.2 Email channel verification
+
+- **Item:** Verify all 9 email notification channels (3 recipients × 3 envs) currently `verificationStatus: NOT_SET`
+- **Current state:** Channels created via Terraform; verification status never set. CRITICAL routing path uses Chat webhook (proven end-to-end at HTTP 200) so emails are belt-and-braces.
+- **Future options:**
+  1. Per-channel `gcloud monitoring channels verify` flow (manual code-entry per recipient).
+  2. Console UI verification flow (same code-entry, different surface).
+- **Triggers:** Email alerts become operationally needed (e.g., real traffic post-F-series, or operators want a parallel non-Chat path).
+- **References:** `docs/deviations.md` "P0.6 Phase 8 — Email channel verification deferred", commit `bb5bf0e`.
+- **Owner phase:** Operator-driven.
+
+### 2.3 Default VPC cleanup across 5 projects
+
+- **Item:** Delete the unused default VPCs in each GCP project (open SSH/RDP allows from 0.0.0.0/0 by default)
+- **Current state:** Default VPCs exist but no Cortex resources use them. Open-internet SSH/RDP allow rules remain.
+- **Future options:** Terraform-managed cleanup module that deletes default VPC + firewall rules across all 5 projects.
+- **Triggers:** "Housekeeping; separate commit when convenient" — also: any external security review flagging the open default VPC firewall rules.
+- **References:** `docs/progress/status.md` P0.5 deferred section; ADR-INFRA-003.
+- **Owner phase:** Operator-driven, low priority.
+
+### 2.4 VPC egress hardening
+
+- **Item:** Replace TCP:443→0.0.0.0/0 firewall rule with IP-allowlist or egress proxy
+- **Current state:** Open egress on TCP:443 (only outbound path for Anthropic, Resend, WorkOS — all dynamic-IP APIs). NAT logs every outbound, but allowlist hardening deferred.
+- **Future options:**
+  1. Egress proxy (Squid or similar) terminating outbound TLS, with per-destination allowlist.
+  2. Per-destination static routes via Service Connect (where APIs offer it).
+  3. Maintained IP allowlist updated via API (fragile — APIs publish IP ranges variably).
+- **Triggers:** Compliance review flags the open egress; or a security incident driven by exfil via the path.
+- **References:** ADR-INFRA-003 §Firewall posture, `infra/terraform/modules/networking/main.tf:178` (`TODO(P11.x)`).
+- **Owner phase:** P11.x Display Data hardening pass, or operator-driven if earlier trigger.
+
+---
+
+## 3. Regulatory / contractual triggers
+
+### 3.1 HSM-backed CMEK for production keys
+
+- **Item:** Upgrade prod CMEK keys from SOFTWARE → HSM (FIPS 140-2 Level 3)
+- **Current state:** All 17 keys SOFTWARE-protection. Dev/staging will stay SOFTWARE indefinitely.
+- **Future options:** Parallel HSM keyring + 5 HSM keys in prod; phased migration per resource class (Cloud SQL hardest, Pub/Sub easiest); deprecate SOFTWARE versions after 30-day overlap.
+- **Triggers:**
+  1. Scheduled at P11.4 (~4 weeks before Display Data go-live).
+  2. Earlier if any Enterprise DPA explicitly requires FIPS 140-2 L3 (HSM-backed) key material before signing.
+- **References:** ADR-INFRA-004 §Decision 3, Implementation note 5 (full migration plan).
+- **Owner phase:** P11.4.
+
+### 3.2 Org-level deny policies (`roles/iam.denyAdmin`)
+
+- **Item:** Reintroduce env-level IAM deny policies once `roles/iam.denyAdmin` can be granted at org/folder level
+- **Current state:** Phase 1 defers env-level deny policies (the role isn't grantable at project level — org/folder only); rely on implicit deny via role design.
+- **Future options:** Org-level `roles/iam.denyAdmin` grant to a designated security role, then add env-scoped deny policies for sensitive operations (e.g., destroy KMS key, delete state bucket).
+- **Triggers:** "Phase 2+" — when org-level coordination is feasible (typically once a security/compliance function exists in the org).
+- **References:** ADR-INFRA-002 Quirk 4, `docs/progress/status.md` P0.3 deferred section.
+- **Owner phase:** Phase 2+.
+
+### 3.3 Cloud EKM (external key material)
+
+- **Item:** Support Cloud EKM keys (key material outside GCP) for tenants with sovereign-key requirements
+- **Current state:** Not evaluated for Phase 1.
+- **Future options:** Configure Cloud EKM partner integration for that tenant's keys; coexists with CMEK for other tenants.
+- **Triggers:** A tenant DPA explicitly requires key material held outside GCP (e.g., in their own HSM or partner HSM-as-a-service).
+- **References:** ADR-INFRA-004 §Alternative 6.
+- **Owner phase:** Operator-driven, ad-hoc per-tenant.
+
+### 3.4 DPDP / SOC 2 / sectoral regulatory drift
+
+- **Item:** Re-evaluate encryption + key-management posture against new regulations
+- **Current state:** SOFTWARE Phase 1 + HSM-prod-at-P11.4 satisfies DPDP "reasonable security safeguards" + SOC 2 CC6.1.
+- **Future options:** Adjust rotation cadence (90→60 or 30 days), protection level, or jurisdiction-specific key sovereignty per new mandate.
+- **Triggers:** DPDP amendments, sectoral regulation (RBI, SEBI etc.), or client-jurisdiction rules (EU GDPR-specific tenant, US federal tenant).
+- **References:** ADR-INFRA-004 §Revisit triggers.
+- **Owner phase:** Operator-driven, regulatory-driven.
+
+---
+
+## 4. Phase-sequenced
+
+### 4.1 `@cortex/observability` library (P0.6 Phase 2)
+
+- **Item:** pino + OpenTelemetry SDK + prom-client-compatible API library
+- **Current state:** P0.6 Phase 1 (operator infrastructure) shipped; Phase 2 library not started. Interim audit logging uses stderr `[SECRETS-AUDIT]` + `[BOOTSTRAP-AUDIT]` prefixes.
+- **Future options:** Land per ADR-OBS-001 §Decision 1+2; F01/AC01 satisfy ContextProvider interface when they ship.
+- **Triggers:** Hard prerequisite for P0.10 (audit-events convention); also unlocks the swap markers in `packages/secrets/src/audit.ts:18` and `scripts/bootstrap/lib/bootstrap.ts:134`.
+- **References:** ADR-OBS-001, ADR-SEQ-001 amendment, `docs/planning/p0-6-observability-scope.md`.
+- **Owner phase:** P0.6 Phase 2 (can land before or after P0.9; gates P0.10).
+
+### 4.2 P0.10 audit-events convention (`@cortex/audit-events`)
+
+- **Item:** Cross-cutting library for emitting audit events to the SHA-chained `audit_event` table
+- **Current state:** `audit_event` table + chain trigger exist (migration 0004). No emitter library; mutating service methods don't emit yet.
+- **Future options:** Land per the build prompt §P0.10 spec.
+- **Triggers:** Hard prerequisite for clean F-series audit emission; gates a CLAUDE.md convention ("every mutating service method emits an audit event").
+- **References:** Build prompts §P0.10, ADR-DB-003, `docs/architecture/audit-event-convention.md` (TBD).
+- **Owner phase:** P0.10 (after P0.6 Phase 2).
+
+### 4.3 P0.8 MCP scaffolding (post-F05 per ADR-SEQ-001)
+
+- **Item:** Three MCP servers + capability-layer packages + tool registry
+- **Current state:** Stub directories at `apps/mcp-cortex-core`, `apps/mcp-edge`, `apps/mcp-admin-ops` (gitkeep only). No tool registry. No trust-model ADRs (MCP-002/003/004).
+- **Future options:** Land per ADR-MCP-001 + ADR-SEQ-001.
+- **Triggers:** F-series complete (F01-F05) so real tools exist to register.
+- **References:** ADR-MCP-001, ADR-SEQ-001, build prompts §P0.8.
+- **Owner phase:** P0.8, post-F05.
+
+### 4.4 Trust-model ADRs (MCP-002/003/004)
+
+- **Item:** ADRs for mcp-cortex-core, mcp-edge, mcp-admin-ops trust models
+- **Current state:** Reserved IDs only; not drafted.
+- **Future options:** Each fleshes out "when the first tool for each server is implemented" per ADR-MCP-001 §References.
+- **Triggers:** First tool added to each server (will naturally co-occur with P0.8 since P0.8 lands the registries).
+- **References:** ADR-MCP-001 §195.
+- **Owner phase:** P0.8 + first-tool prompts.
+
+### 4.5 `cortex-ci-test-shared` SA
+
+- **Item:** Shared-project test SA for first GCP-accessing CI workflow
+- **Current state:** Not provisioned. Per ADR-INFRA-006 §Decision 4, deferred until first GCP-accessing CI workflow exists.
+- **Future options:** Add per the WIF substrate pattern; bind to `.github/workflows/ci.yaml@refs/heads/main` via `workload_identity_user`.
+- **Triggers:** First CI workflow needs to call GCP APIs (e.g., pre-baked builder image per ADR-CI-001 Option B).
+- **References:** ADR-INFRA-006 §Decision 4, ADR-CI-001.
+- **Owner phase:** First GCP-accessing CI prompt.
+
+### 4.6 `secrets.put` integration test
+
+- **Item:** Integration test exercising real `secrets.put` against Secret Manager
+- **Current state:** Unit tests pass with mocked client; integration test file exists but auto-skips put case (`put integration deferred until F02 exercises it`).
+- **Future options:** Add an integration test creating + deleting a `cortex-app-test-*` secret per run, using F02-style admin credentials.
+- **Triggers:** F02 implementation hits real-secret-creation paths.
+- **References:** `packages/secrets/test/integration/secret-manager.integration.spec.ts`, P0.7 design lock.
+- **Owner phase:** F02 (P1.2).
+
+### 4.7 F05 → A01 Feature Store integration hook
+
+- **Item:** When schema changes, F05 notifies A01 to trigger feature re-computation or invalidate stale features
+- **Current state:** Hook stubbed in F05 build prompt scope.
+- **Future options:** Full integration when A01 lands (Phase 2).
+- **Triggers:** A01 Feature Store implementation phase begins.
+- **References:** Build prompts §F05.
+- **Owner phase:** Phase 2 (A01).
+
+---
+
+## 5. First-consumer-driven
+
+### 5.1 Bi-temporal helper functions
+
+- **Item:** `as_of_known` (system-time view), `point_in_time_join`, `temporal_union`, `temporal_intersection`
+- **Current state:** Not implemented. Per ADR-DB-001 §Implementation Notes, "deferred to first consumer." The predicate `at_time_t` + SCD trigger in 0002 is the minimum infrastructure.
+- **Future options:** Per-table SQL views (`as_of_known`), or `EXECUTE format(...)` helpers in `cortex` schema.
+- **Triggers:** First consumer arrives. `point_in_time_join` is for A01 Feature Store (P4.x); the others land when an analytical screen needs them.
+- **References:** ADR-DB-001 §Implementation Notes Decision 8, F03 build prompt.
+- **Owner phase:** First-consumer-driven.
+
+### 5.2 Per-table `as_of_valid` wrappers
+
+- **Item:** One-line per-table function over `at_time_t` for ergonomic as-of queries
+- **Current state:** Pattern documented in ADR-DB-001 §Implementation Notes; no actual wrapper exists yet.
+- **Future options:** Add as each F-/D-series bi-temporal table is created.
+- **Triggers:** Each new bi-temporal table in F-series / D-series.
+- **References:** ADR-DB-001 §Implementation Notes.
+- **Owner phase:** F01-F05, D01.
+
+### 5.3 `verify_chain` audit chain integrity verifier
+
+- **Item:** Function or service that walks a tenant's audit chain and returns chain-integrity status
+- **Current state:** Not implemented. Hash chain lands per row; no cumulative verifier.
+- **Future options:** PL/pgSQL function `cortex.verify_chain(tenant_id)` returning (last_verified_event_id, status, divergence_point).
+- **Triggers:** SCR-20 (Audit Log UI, P8.12) needs to surface chain integrity status.
+- **References:** ADR-DB-003 §Implementation Notes.
+- **Owner phase:** P8.12 (SCR-20).
+
+### 5.4 `cortex_admin` Postgres role + admin-bypass policies
+
+- **Item:** Role with `BYPASSRLS` + admin-bypass RLS policies for admin tooling
+- **Current state:** Not implemented. ADR-DB-002 §Decision 4 explicitly defers ("premature; SCR-20 is the natural trigger").
+- **Future options:** Create `cortex_admin` role; add `admin_read_policy` template alongside the per-table tenant policies; admin tools connect as `cortex_admin`.
+- **Triggers:** SCR-20 (P8.12) needs cross-tenant audit-log read.
+- **References:** ADR-DB-002 §Decision 4 + §Reasoning.
+- **Owner phase:** P8.12 (SCR-20).
+
+### 5.5 Configuration-as-Code Git sync (F04)
+
+- **Item:** Bidirectional YAML export/import for tenant configurations
+- **Current state:** API stubbed in F04 scope; no actual Git sync.
+- **Future options:** Push tenant configs to per-tenant Git repos; webhook-driven sync on commit.
+- **Triggers:** "Enterprise only, deferred to Phase 2" per F04 build prompt §4.
+- **References:** Build prompts §F04 §4.
+- **Owner phase:** Phase 2.
+
+---
+
+## 6. Phase 1 explicit cuts
+
+### 6.1 SCR-24 Platform Ops Dashboard
+
+- **Item:** Full Platform Ops capability (cross-env, cross-tenant operator dashboards)
+- **Current state:** Phase 1 minimal cut shipped: provisioning wizard only.
+- **Future options:** Full capability per spec §SCR-24 (Phase 2).
+- **Triggers:** Phase 2 backend modules complete; operator load justifies a unified dashboard.
+- **References:** Build prompts §P8.13.
+- **Owner phase:** Phase 2.
+
+### 6.2 OB02 FinOps & Cost Management
+
+- **Item:** Per-tenant cost attribution + budget alerts + chargeback
+- **Current state:** Stub for Phase 1 (ADR-OBS-001 §Decision 4 mentions "OB02" as Phase 5).
+- **Future options:** Full implementation per spec §OB02 (Phase 5).
+- **Triggers:** Multi-tenant production traffic + revenue requiring chargeback.
+- **References:** Build prompts §P5.10, ADR-OBS-001.
+- **Owner phase:** Phase 5 (P5.10).
+
+### 6.3 OB03 Metering & Billing
+
+- **Item:** Per-tenant usage metering + invoice generation
+- **Current state:** Stub for Phase 1.
+- **Future options:** Full implementation per spec §OB03 (Phase 5).
+- **Triggers:** Paid tenants exist + billing automation needed.
+- **References:** Build prompts §P5.11.
+- **Owner phase:** Phase 5 (P5.11).
+
+### 6.4 I03 Multi-Source Conflict Resolution
+
+- **Item:** Resolving conflicting attribute values across multiple ingestion sources
+- **Current state:** Deferred to Phase 2 in v2 build prompts.
+- **Future options:** Implement per spec §I03 when Body Shop (or similar conflict-heavy use case) drives demand.
+- **Triggers:** "Body Shop drives demand" per build_prompts; or any tenant where multiple sources for the same entity start producing meaningful conflicts.
+- **References:** Build prompts §P4.3, status.md.
+- **Owner phase:** Phase 2.
+
+### 6.5 I02 Knowledge Graph full graph DB
+
+- **Item:** Migrate from Postgres recursive CTEs to a dedicated graph DB
+- **Current state:** Phase 1 cut uses Postgres recursive CTEs only.
+- **Future options:** Neo4j, ArangoDB, or pgvector-adjacent extensions for graph workloads.
+- **Triggers:** Recursive CTE query performance crosses unacceptable threshold; or graph workloads (multi-hop, pathfinding) become primary use cases.
+- **References:** Build prompts pre-flight architectural decisions.
+- **Owner phase:** Phase 3.
+
+### 6.6 ED01 Edge-Cloud Orchestrator
+
+- **Item:** Edge device runtime + cloud orchestration plane
+- **Current state:** Deferred. No edge devices in Display Data Phase 1.
+- **Future options:** Implement per spec §ED01 when edge-device tenants land.
+- **Triggers:** First tenant with deployed edge devices (e.g., HHT app expanding into edge inference).
+- **References:** Build prompts pre-flight architectural decisions.
+- **Owner phase:** Phase 2.
+
+### 6.7 Mobile UX (375-767px)
+
+- **Item:** Phone-form-factor responsive design for admin + analytical screens
+- **Current state:** Phase 1 = tablet 768px+. Phone view not implemented.
+- **Future options:** Tailwind responsive variants + design tokens for the 375-767 range.
+- **Triggers:** First customer demanding mobile use, or Phase 2 timeline.
+- **References:** Build prompts pre-flight architectural decisions.
+- **Owner phase:** Phase 2.
+
+### 6.8 Dashboard Builder UI
+
+- **Item:** Tenant-facing UI for assembling custom dashboards
+- **Current state:** Parked. Sevyn8 authors all dashboards in Phase 1-2.
+- **Future options:** Drag-and-drop dashboard builder consuming the widget library.
+- **Triggers:** Customer demand for self-service dashboarding.
+- **References:** Build prompts pre-flight architectural decisions.
+- **Owner phase:** Phase 3.
+
+### 6.9 Workspace aggregate rollup
+
+- **Item:** Tenant-Admin aggregate view rolling up data across workspaces (for billing/ops)
+- **Current state:** Strict workspace-level data isolation. No rollup.
+- **Future options:** Materialized aggregates per tenant scoped above workspace boundary, with explicit access control.
+- **Triggers:** Enterprise tenant with many workspaces needs unified billing/ops view.
+- **References:** Build prompts pre-flight architectural decisions.
+- **Owner phase:** Phase 2.
+
+---
+
+## 7. Stub implementations
+
+### 7.1 `getKeyForTenant` Phase 1 stub
+
+- **Item:** Per-tenant KMS key resolver
+- **Current state:** Returns env's `cortex-general-key` regardless of `tenantId`. Audit-logs as if it were tenant-scoped. Fully type-safe interface ready for swap.
+- **Future options:** F02 swap reads from `tenant_kms_key` control-plane table populated at tenant provisioning.
+- **Triggers:** F02 (P1.2) provisioning pipeline lands per-tenant key creation.
+- **References:** `packages/secrets/src/per-tenant-keys.ts`, ADR-INFRA-004 §Decision 5.
+- **Owner phase:** F02.
+
+### 7.2 `bootstrap_admin` table
+
+- **Item:** Pre-AC01 super-admin placeholder row
+- **Current state:** Migration 0005 creates the table; P0.9 CLI populates rows in dev/staging. `password_secret_ref` points to Secret Manager version.
+- **Future options:** AC01 (P2.1) ships a one-shot promotion migration that reads `bootstrap_admin` rows where `promoted_to_users = false`, hashes the password with argon2id, writes to `users` + `user_role_assignment(SUPER_ADMIN)`, marks `promoted_to_users = true` + `promoted_at = now()`.
+- **Triggers:** AC01 implementation phase.
+- **References:** `services/foundation/migrations/0005_bootstrap_admin.sql`, `docs/runbooks/super-admin-bootstrap.md`, P0.9 commit `51253c7`.
+- **Owner phase:** AC01 (P2.1).
+
+### 7.3 ContextProvider stub provider
+
+- **Item:** Interface for tenant_id/user_id/request_id context propagation
+- **Current state:** Per ADR-OBS-001 §Decision 2, the interface is defined; the stub provider returns undefined for tenant/user. Library is usable today; logs degrade gracefully.
+- **Future options:** F01 satisfies tenant_id; AC01 satisfies user_id. No retrofit — middleware just implements the interface.
+- **Triggers:** F01 (P1.1) middleware lands; AC01 (P2.1) auth middleware lands.
+- **References:** ADR-OBS-001 §Decision 2.
+- **Owner phase:** F01 + AC01.
+
+### 7.4 `app.tenant_id` session variable contract
+
+- **Item:** Postgres session var that RLS policies read via `cortex.current_tenant_id()`
+- **Current state:** Reader function exists (migration 0003); fail-closed behavior verified by tests. No middleware sets it yet — `withTenantContext` test helper is the only setter.
+- **Future options:** F01 middleware sets `app.tenant_id` per-transaction at the start of every request.
+- **Triggers:** F01 (P1.1) middleware lands.
+- **References:** ADR-DB-002 §Decision 1, `services/foundation/migrations/0003_rls_baseline.sql`.
+- **Owner phase:** F01.
+
+### 7.5 RLS FORCE flag (test-only)
+
+- **Item:** `ALTER TABLE ... FORCE ROW LEVEL SECURITY` enabled in tests
+- **Current state:** Tests run as `postgres` superuser, which bypasses RLS unless FORCE is set. Test fixtures use FORCE.
+- **Future options:** Production tables won't need FORCE because F01 middleware never runs as superuser.
+- **Triggers:** F01 (P1.1) ships and runs as a non-super service account against shared Cloud SQL; tests can drop FORCE on production tables.
+- **References:** CLAUDE.md "Testing RLS-protected tables", ADR-DB-002.
+- **Owner phase:** F01 (cleanup post-middleware).
+
+---
+
+## 8. Code TODOs tied to future phases
+
+### 8.1 `[SECRETS-AUDIT]` swap
+
+- **Item:** Swap stderr emission to `@cortex/observability` structured logger
+- **Current state:** `console.error` with `[SECRETS-AUDIT]` JSON-line prefix.
+- **Future options:** Replace with `@cortex/observability` structured logger import.
+- **Triggers:** P0.6 Phase 2 library lands.
+- **References:** `packages/secrets/src/audit.ts:18` (`TODO(P0.6 Phase 2)`).
+- **Owner phase:** P0.6 Phase 2.
+
+### 8.2 `[BOOTSTRAP-AUDIT]` swap
+
+- **Item:** Swap stderr emission to `@cortex/observability` structured logger
+- **Current state:** `console.error` with `[BOOTSTRAP-AUDIT]` JSON-line prefix.
+- **Future options:** Replace with `@cortex/observability` structured logger import.
+- **Triggers:** P0.6 Phase 2 library lands.
+- **References:** `scripts/bootstrap/lib/bootstrap.ts:134` (`TODO(P0.6 Phase 2)`).
+- **Owner phase:** P0.6 Phase 2.
+
+### 8.3 VPC egress hardening marker
+
+- **Item:** TCP:443→0.0.0.0/0 firewall rule replacement
+- **Current state:** Open egress on TCP:443 with `TODO(P11.x)` comment listing hardening options.
+- **Future options:** See entry 2.4 above.
+- **Triggers:** P11.x Display Data hardening pass.
+- **References:** `infra/terraform/modules/networking/main.tf:178`, ADR-INFRA-003 §Firewall posture.
+- **Owner phase:** P11.x.
+
+---
+
+## 9. Specification deviations
+
+These mirror entries in `docs/deviations.md`; listed here for forward-planning visibility.
+
+### 9.1 Compute plane: GKE Prometheus → Cloud Run + OTLP
+
+- **Item:** Build prompt assumed GKE Prometheus scraping; Cortex compute is Cloud Run.
+- **Current state:** OTLP export via OpenTelemetry SDK (per ADR-OBS-001 §Decision 1).
+- **Future options:** Continue OTLP path; revisit only if compute plane changes.
+- **Triggers:** Compute-plane migration (none planned).
+- **References:** `docs/deviations.md` row 1, ADR-OBS-001 §Decision 1, ADR-OBS-002 (forthcoming).
+- **Owner phase:** Resolved in P0.6.
+
+### 9.2 PII redaction in logs
+
+- **Item:** Build prompt omitted; spec OB01-FR-002 mandated.
+- **Current state:** Scope-in to P0.6 library (Phase 2). Substrate-level redaction.
+- **Future options:** Pino redaction middleware + allowlist/denylist config.
+- **Triggers:** P0.6 Phase 2 library lands.
+- **References:** `docs/deviations.md` row 2, ADR-OBS-001 §Decision 5, ADR-OBS-003 (forthcoming).
+- **Owner phase:** P0.6 Phase 2.
+
+### 9.3 Alert routing: O02 → email + Chat direct
+
+- **Item:** Spec OB01-FR-004 routed alerts through O02; O02 is Phase 5.
+- **Current state:** Email + Chat direct via Cloud Monitoring notification channels.
+- **Future options:** Retarget to O02 when it lands (~30 min config change per ADR-OBS-001 §Decision 4).
+- **Triggers:** O02 (P5.7) lands.
+- **References:** `docs/deviations.md` row 3, ADR-OBS-001 §Decision 4.
+- **Owner phase:** P5.7.
+
+### 9.4 P0.6 scope boundary
+
+- **Item:** Build prompt scoped library only; we shipped library + operator infrastructure + dashboards.
+- **Current state:** Phase 1 + Phase 8 done; Phase 2 library pending; Phase 3 dashboards deferred indefinitely.
+- **Future options:** Per ADR-OBS-001 §Decision 3 sequencing.
+- **Triggers:** N/A — scope decision.
+- **References:** `docs/deviations.md` row 4, ADR-OBS-001 §Decision 3.
+- **Owner phase:** Resolved in P0.6.
+
+### 9.5 Tenant-scoping of metrics
+
+- **Item:** Spec required all metrics tenant-scoped; infrastructure metrics from GCP can't be tenant-tagged at ingestion.
+- **Current state:** Application-emitted metrics tenant-tagged via OpenTelemetry; infrastructure metrics infrastructure-scoped.
+- **Future options:** See entry 1.6.
+- **Triggers:** Multi-tenant traffic inflection.
+- **References:** `docs/deviations.md` row 5, ADR-OBS-001 §Decision 6.
+- **Owner phase:** Operator-driven post-multi-tenancy.
+
+### 9.6 ContextProvider source
+
+- **Item:** Build prompt assumed F01/AC01 middleware exists; both deferred when P0.6 Phase 2 library design landed.
+- **Current state:** Interface defined in P0.6 design; stub provider; F01/AC01 satisfy when they land.
+- **Future options:** F01 + AC01 implement the interface.
+- **Triggers:** F01 (P1.1) + AC01 (P2.1).
+- **References:** `docs/deviations.md` row 6, ADR-OBS-001 §Decision 2.
+- **Owner phase:** F01 + AC01.
+
+### 9.7 F01 compute isolation: K8s namespace vs Cloud Run (anticipated)
+
+- **Item:** F01 build prompt §3 says "Kubernetes namespace per Enterprise tenant"; Cortex platform is Cloud Run.
+- **Current state:** Not yet encountered; F01 hasn't shipped.
+- **Future options:**
+  1. Cloud Run service-per-Enterprise-tenant with per-service IAM scoping.
+  2. Per-Enterprise dedicated Cloud Run revision pool with workload identity isolation.
+  3. K8s migration if Cloud Run isolation is insufficient (significant infra change — would need its own ADR).
+- **Triggers:** F01 design phase.
+- **References:** Build prompts §F01 §3.
+- **Owner phase:** F01 — will be a deviations.md entry when F01 lands.
+
+---
+
+## 10. Decisions yet to be made
+
+### 10.1 Control-plane database location
+
+- **Item:** Where do F01's control-plane tables (`tenant`, `tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`) live?
+- **Current state:** Not decided. F01 build prompt says "in a CONTROL PLANE database (shared across all tenants, not RLS-protected — these tables ARE the tenant registry)" without specifying.
+- **Future options:**
+  1. Same `cortex` Postgres database, separate `cortex_control_plane` schema. Simplest; no extra Cloud SQL instance.
+  2. Separate database on the same Cloud SQL instance (`control_plane` DB next to `cortex`). Cleaner namespace separation.
+  3. Separate Cloud SQL instance per env entirely. Strongest isolation; highest cost + ops surface.
+- **Triggers:** F01 (P1.1) design phase.
+- **References:** Build prompts §F01 §1.4.
+- **Owner phase:** F01.
+
+### 10.2 Tenant ID format
+
+- **Item:** UUID v4 vs ULID vs human-readable slug for `tenant_id`
+- **Current state:** Not decided. RLS contract uses `uuid` type; existing test fixtures use `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa` style v4 UUIDs.
+- **Future options:**
+  1. UUID v4 (current de-facto). 36 chars, opaque, sortable randomly.
+  2. ULID (lexicographic time-sortable). Useful if tenant tables become append-heavy.
+  3. Human-readable slug + UUID (e.g., `acme-corp-a1b2c3d4`). Operator-friendly but harder to enforce uniqueness.
+- **Triggers:** F01 (P1.1) tenant table creation.
+- **References:** ADR-DB-002 (assumes UUID).
+- **Owner phase:** F01.
+
+### 10.3 Tenant tier discriminator
+
+- **Item:** How does F01 know whether a tenant is Standard or Enterprise?
+- **Current state:** Spec mentions "hybrid model: shared Postgres with RLS for Standard; dedicated Cloud SQL for Enterprise" but the tier field isn't pre-defined.
+- **Future options:**
+  1. `tenant.tier text CHECK (tier IN ('STANDARD','ENTERPRISE'))`.
+  2. Enum type.
+  3. Computed from feature flags (more flexible, less explicit).
+- **Triggers:** F01 (P1.1).
+- **References:** Build prompts §F01 §2.
+- **Owner phase:** F01.
+
+### 10.4 DB client abstraction shape
+
+- **Item:** Per F01 §2 "abstraction layer: services never know which mode a tenant is in — the DB client picks the right instance based on tenant tier"
+- **Current state:** `packages/canonical-schema/src/db-client.ts` has a thin `createDrizzleClient(pool, schema?)` factory. No tier-aware routing.
+- **Future options:**
+  1. F01 ships a `getTenantDbClient(tenantId)` that resolves to shared or dedicated based on tier.
+  2. Per-tenant connection pool registry warmed on tenant provisioning.
+  3. Multiple Drizzle clients pooled and selected at request time.
+- **Triggers:** F01 (P1.1).
+- **References:** Build prompts §F01 §2.
+- **Owner phase:** F01.
+
+### 10.5 Quota enforcement implementation
+
+- **Item:** Token bucket per tenant per resource class (DB connections, CPU seconds, RAM MB, API calls/min)
+- **Current state:** Not implemented. F01 prompt §6 specifies the requirement.
+- **Future options:**
+  1. In-memory token bucket per Cloud Run instance + Redis-backed shared state.
+  2. Memorystore Redis with Lua scripts for atomic decrement.
+  3. Cloud-native quota via API Gateway / Apigee (heavier, longer to land).
+- **Triggers:** F01 (P1.1).
+- **References:** Build prompts §F01 §6.
+- **Owner phase:** F01.
+
+### 10.6 Async-local context propagation library
+
+- **Item:** Node.js `AsyncLocalStorage` wrapper for tenant context
+- **Current state:** No existing pattern in the repo. `packages/tenant-context/` is an empty shell.
+- **Future options:**
+  1. Bare `AsyncLocalStorage` from `node:async_hooks`, wrapped in helpers.
+  2. A library (e.g., `cls-hooked`) — heavier, deprecated.
+  3. Custom implementation per service — anti-pattern.
+- **Triggers:** F01 (P1.1) — this is what `packages/tenant-context` will provide.
+- **References:** Build prompts §F01 §1.
+- **Owner phase:** F01.
+
+### 10.7 Blob isolation IAM strategy
+
+- **Item:** GCS bucket(s) layout for tenant blob isolation
+- **Current state:** Not provisioned. F01 prompt §5 specifies tenant-prefixed paths.
+- **Future options:**
+  1. One bucket per env, tenant prefix in object path. WIF-based per-SA prefix scoping.
+  2. One bucket per tenant. Cleanest isolation, more buckets to manage.
+  3. One bucket per (env, tier) — Standard tenants share, Enterprise gets dedicated.
+- **Triggers:** F01 (P1.1).
+- **References:** Build prompts §F01 §5.
+- **Owner phase:** F01.
+
+### 10.8 Pre-signed URL signing identity
+
+- **Item:** Which SA signs GCS pre-signed URLs that embed tenant scope?
+- **Current state:** Not provisioned.
+- **Future options:**
+  1. Per-tenant SA (clean blast radius; many SAs).
+  2. Single per-env SA with pre-signed URLs that include explicit object path constraints.
+  3. Workload identity tokens with scoped audiences.
+- **Triggers:** F01 (P1.1).
+- **References:** Build prompts §F01 §5.
+- **Owner phase:** F01.
+
+### 10.9 OPA vs Cedar for ABAC policy language
+
+- **Item:** Which declarative policy language for AC01's attribute-based policies
+- **Current state:** Build prompt says "OPA or Cedar — evaluate both in an ADR"
+- **Future options:**
+  1. OPA (Rego). Mature ecosystem, widely adopted, slower than native code.
+  2. Cedar (AWS-originated, declarative). Newer, designed for fast evaluation, less ecosystem.
+  3. Custom DSL. Avoid — reinventing the wheel.
+- **Triggers:** AC01 (P2.1) design phase.
+- **References:** Build prompts §AC01 §2.
+- **Owner phase:** AC01.
+
+### 10.10 Workspaces vs hierarchies separation
+
+- **Item:** F01 mentions workspaces (per F02); AC02 has a separate "hierarchy" concept. How do they interact?
+- **Current state:** Not designed. Both are Phase 1 concerns but the boundary isn't sharp.
+- **Future options:**
+  1. Workspaces are the strict isolation boundary; hierarchies are policy-scope-only on top.
+  2. Hierarchies subsume workspaces (single tree, with workspace as a hierarchy level).
+  3. Distinct dimensions, both first-class.
+- **Triggers:** F01 (P1.1) tenant model + AC02 (P2.2) hierarchy implementation.
+- **References:** Build prompts §F01, §AC02.
+- **Owner phase:** F01 + AC02 jointly.
+
+---
+
+## Resolved deferrals
+
+(empty — populate with `Resolved YYYY-MM-DD` entries as items land)

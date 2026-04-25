@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLogger } from '@cortex/observability';
+import { createLogCapture, type LogCapture } from '@cortex/observability/test-utils';
 import {
+  __resetForTesting,
+  __setLoggerForTesting,
   checkExistingAdmin,
   emitAuditLog,
   insertBootstrapRow,
@@ -12,7 +16,15 @@ import {
 
 // ─── Fixtures + mock factories ─────────────────────────────────────────────
 
-function captureAllLogs(): { captured: string[]; restore: () => void } {
+let logCapture: LogCapture;
+
+/**
+ * Defense-in-depth helper for the password-leakage tests: spies on console
+ * + raw stderr/stdout writes. Audit emissions go through pino into
+ * `logCapture`; this catches anything else that tries to escape to a
+ * stream. Used only by the "NEVER logs the password" tests.
+ */
+function captureConsoleAndStreams(): { captured: string[]; restore: () => void } {
   const captured: string[] = [];
   const push = (msg: unknown): void => {
     captured.push(typeof msg === 'string' ? msg : String(msg));
@@ -161,15 +173,16 @@ describe('insertBootstrapRow', () => {
 });
 
 describe('emitAuditLog', () => {
-  const { captured, restore } = (() => {
-    const { captured: c, restore: r } = captureAllLogs();
-    return { captured: c, restore: r };
-  })();
+  beforeEach(() => {
+    logCapture = createLogCapture();
+    __setLoggerForTesting(createLogger({ moduleId: 'cortex-bootstrap', destination: logCapture }));
+  });
 
-  afterEach(() => restore());
+  afterEach(() => {
+    __resetForTesting();
+  });
 
-  it('emits a [BOOTSTRAP-AUDIT] line with valid JSON', () => {
-    const cap = captureAllLogs();
+  it('emits a structured audit record with the expected fields', async () => {
     emitAuditLog({
       operation: 'run',
       outcome: 'ok',
@@ -180,29 +193,29 @@ describe('emitAuditLog', () => {
       duration_ms: 42,
       error_code: null,
     });
-    const line = cap.captured.find((s) => s.includes('[BOOTSTRAP-AUDIT]'));
-    expect(line).toBeDefined();
-    const json = line!.replace('[BOOTSTRAP-AUDIT] ', '');
-    const parsed = JSON.parse(json);
-    expect(parsed.operation).toBe('run');
-    expect(parsed.outcome).toBe('ok');
-    expect(parsed.env).toBe('dev');
-    expect(parsed.email).toBe('a@b.com');
-    expect(parsed.duration_ms).toBe(42);
-    expect(parsed).toHaveProperty('actor');
-    cap.restore();
+    await logCapture.flush();
+    expect(logCapture.logs).toHaveLength(1);
+    expect(logCapture.logs[0]).toMatchObject({
+      namespace: 'bootstrap-audit',
+      operation: 'run',
+      outcome: 'ok',
+      env: 'dev',
+      email: 'a@b.com',
+      duration_ms: 42,
+    });
+    expect(logCapture.logs[0]).toHaveProperty('actor');
   });
-
-  // Keep the outer captured/restore unused to silence the linter; the inner
-  // helper instantiation is the real test mechanism.
-  void captured;
 });
 
 describe('runBootstrap orchestrator', () => {
   beforeEach(() => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logCapture = createLogCapture();
+    __setLoggerForTesting(createLogger({ moduleId: 'cortex-bootstrap', destination: logCapture }));
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    __resetForTesting();
+    vi.restoreAllMocks();
+  });
 
   it('happy path: creates secret version + inserts row + emits ok audit', async () => {
     const deps: BootstrapDeps = {
@@ -250,7 +263,6 @@ describe('runBootstrap orchestrator', () => {
   });
 
   it('emits error audit when secret.put fails', async () => {
-    const cap = captureAllLogs();
     const err = Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
     const deps: BootstrapDeps = {
       db: createMockDb(),
@@ -264,14 +276,18 @@ describe('runBootstrap orchestrator', () => {
         env: 'dev',
       }),
     ).rejects.toBe(err);
-    const auditLines = cap.captured.filter((s) => s.includes('[BOOTSTRAP-AUDIT]'));
-    expect(auditLines.some((s) => s.includes('"operation":"write_secret"'))).toBe(true);
-    expect(auditLines.some((s) => s.includes('"error_code":"PERMISSION_DENIED"'))).toBe(true);
-    cap.restore();
+    await logCapture.flush();
+    expect(logCapture.logs).toContainEqual(
+      expect.objectContaining({
+        namespace: 'bootstrap-audit',
+        operation: 'write_secret',
+        outcome: 'error',
+        error_code: 'PERMISSION_DENIED',
+      }),
+    );
   });
 
   it('emits error audit when insert fails (e.g., duplicate email race)', async () => {
-    const cap = captureAllLogs();
     const err = Object.assign(new Error('dup'), { code: '23505' });
     const deps: BootstrapDeps = {
       db: createMockDb({ insertThrows: err }),
@@ -285,14 +301,18 @@ describe('runBootstrap orchestrator', () => {
         env: 'dev',
       }),
     ).rejects.toBe(err);
-    const auditLines = cap.captured.filter((s) => s.includes('[BOOTSTRAP-AUDIT]'));
-    expect(auditLines.some((s) => s.includes('"operation":"insert_row"'))).toBe(true);
-    expect(auditLines.some((s) => s.includes('"error_code":"23505"'))).toBe(true);
-    cap.restore();
+    await logCapture.flush();
+    expect(logCapture.logs).toContainEqual(
+      expect.objectContaining({
+        namespace: 'bootstrap-audit',
+        operation: 'insert_row',
+        outcome: 'error',
+        error_code: '23505',
+      }),
+    );
   });
 
   it('emits error audit when idempotency check fails', async () => {
-    const cap = captureAllLogs();
     const err = new Error('db down');
     const deps: BootstrapDeps = {
       db: createMockDb({ selectThrows: err }),
@@ -306,14 +326,19 @@ describe('runBootstrap orchestrator', () => {
         env: 'dev',
       }),
     ).rejects.toBe(err);
-    const auditLines = cap.captured.filter((s) => s.includes('[BOOTSTRAP-AUDIT]'));
-    expect(auditLines.some((s) => s.includes('"operation":"check_existing"'))).toBe(true);
-    cap.restore();
+    await logCapture.flush();
+    expect(logCapture.logs).toContainEqual(
+      expect.objectContaining({
+        namespace: 'bootstrap-audit',
+        operation: 'check_existing',
+        outcome: 'error',
+      }),
+    );
   });
 
   it('NEVER logs the password anywhere', async () => {
     const PASSWORD = 'test-password-secret-12345';
-    const cap = captureAllLogs();
+    const streamCap = captureConsoleAndStreams();
 
     const deps: BootstrapDeps = {
       db: createMockDb({ insertReturnsId: '44444444-4444-4444-4444-444444444444' }),
@@ -326,16 +351,20 @@ describe('runBootstrap orchestrator', () => {
       password: PASSWORD,
       env: 'dev',
     });
+    await logCapture.flush();
+    streamCap.restore();
 
-    const joined = cap.captured.join('\n');
-    expect(joined).not.toContain(PASSWORD);
-    expect(joined).not.toContain('test-password');
-    cap.restore();
+    const auditSerialized = JSON.stringify(logCapture.logs);
+    const streamJoined = streamCap.captured.join('\n');
+    expect(auditSerialized).not.toContain(PASSWORD);
+    expect(auditSerialized).not.toContain('test-password');
+    expect(streamJoined).not.toContain(PASSWORD);
+    expect(streamJoined).not.toContain('test-password');
   });
 
   it('NEVER logs the password on error paths either', async () => {
     const PASSWORD = 'secret-error-path-98765';
-    const cap = captureAllLogs();
+    const streamCap = captureConsoleAndStreams();
 
     const err = Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
     const deps: BootstrapDeps = {
@@ -351,10 +380,14 @@ describe('runBootstrap orchestrator', () => {
     }).catch(() => {
       /* expected */
     });
+    await logCapture.flush();
+    streamCap.restore();
 
-    const joined = cap.captured.join('\n');
-    expect(joined).not.toContain(PASSWORD);
-    expect(joined).not.toContain('secret-error-path');
-    cap.restore();
+    const auditSerialized = JSON.stringify(logCapture.logs);
+    const streamJoined = streamCap.captured.join('\n');
+    expect(auditSerialized).not.toContain(PASSWORD);
+    expect(auditSerialized).not.toContain('secret-error-path');
+    expect(streamJoined).not.toContain(PASSWORD);
+    expect(streamJoined).not.toContain('secret-error-path');
   });
 });

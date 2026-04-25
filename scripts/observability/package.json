@@ -1,0 +1,17 @@
+{
+  "name": "@cortex/observability-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "smoke": "tsx --conditions=development smoke-test.ts"
+  },
+  "dependencies": {
+    "@cortex/observability": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

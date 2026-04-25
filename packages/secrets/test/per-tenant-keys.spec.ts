@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLogger } from '@cortex/observability';
+import { createLogCapture, type LogCapture } from '@cortex/observability/test-utils';
 import { getKeyForTenant } from '../src/per-tenant-keys.js';
+import { __resetForTesting, __setLoggerForTesting } from '../src/audit.js';
 import { SecretsValidationError } from '../src/errors.js';
 
 const VALID_TENANT = '22222222-2222-2222-2222-222222222222';
+
+let logCapture: LogCapture;
 
 describe('getKeyForTenant (Phase 1 stub)', () => {
   const saved: Record<string, string | undefined> = {};
@@ -13,7 +18,8 @@ describe('getKeyForTenant (Phase 1 stub)', () => {
     process.env.GCP_PROJECT_ID = 'sevyn8-cortex-dev';
     delete process.env.CORTEX_KMS_LOCATION;
     delete process.env.CORTEX_KMS_KEYRING;
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logCapture = createLogCapture();
+    __setLoggerForTesting(createLogger({ moduleId: 'cortex-secrets', destination: logCapture }));
   });
 
   afterEach(() => {
@@ -21,6 +27,7 @@ describe('getKeyForTenant (Phase 1 stub)', () => {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
     }
+    __resetForTesting();
     vi.restoreAllMocks();
   });
 
@@ -51,24 +58,26 @@ describe('getKeyForTenant (Phase 1 stub)', () => {
     expect(key).toContain('locations/us-central1');
   });
 
-  it('emits [SECRETS-AUDIT] log on success', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  it('emits an audit log on success', async () => {
     getKeyForTenant(VALID_TENANT);
-    expect(spy).toHaveBeenCalledOnce();
-    const line = spy.mock.calls[0]?.[0] as string;
-    expect(line).toContain('[SECRETS-AUDIT]');
-    expect(line).toContain('"operation":"getKeyForTenant"');
-    expect(line).toContain('"outcome":"ok"');
-    expect(line).toContain(`"tenant_id":"${VALID_TENANT}"`);
+    await logCapture.flush();
+    expect(logCapture.logs).toHaveLength(1);
+    expect(logCapture.logs[0]).toMatchObject({
+      namespace: 'secrets-audit',
+      operation: 'getKeyForTenant',
+      outcome: 'ok',
+      tenant_id: VALID_TENANT,
+    });
   });
 
-  it('emits [SECRETS-AUDIT] error log on validation failure', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  it('emits an error audit on validation failure', async () => {
     expect(() => getKeyForTenant('bad')).toThrow();
-    expect(spy).toHaveBeenCalledOnce();
-    const line = spy.mock.calls[0]?.[0] as string;
-    expect(line).toContain('"outcome":"error"');
-    expect(line).toContain('"error_code":"VALIDATION"');
-    expect(line).toContain('"tenant_id":null');
+    await logCapture.flush();
+    expect(logCapture.logs).toHaveLength(1);
+    expect(logCapture.logs[0]).toMatchObject({
+      outcome: 'error',
+      error_code: 'VALIDATION',
+      tenant_id: null,
+    });
   });
 });

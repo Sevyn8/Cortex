@@ -1,10 +1,15 @@
 import * as crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLogger } from '@cortex/observability';
+import { createLogCapture, type LogCapture } from '@cortex/observability/test-utils';
 import { __setClientFactoryForTesting, envelope } from '../src/kms.js';
+import { __resetForTesting, __setLoggerForTesting } from '../src/audit.js';
 import { EnvelopeDecryptError, SecretsValidationError } from '../src/errors.js';
 
 const TENANT_A = '22222222-2222-2222-2222-222222222222';
 const TENANT_B = '33333333-3333-3333-3333-333333333333';
+
+let logCapture: LogCapture;
 
 /**
  * In-memory KMS stand-in: wrap = prepend a 4-byte "KMSW" magic + raw DEK.
@@ -37,7 +42,8 @@ describe('envelope', () => {
     process.env.GCP_PROJECT_ID = 'sevyn8-cortex-dev';
     delete process.env.CORTEX_KMS_LOCATION;
     delete process.env.CORTEX_KMS_KEYRING;
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logCapture = createLogCapture();
+    __setLoggerForTesting(createLogger({ moduleId: 'cortex-secrets', destination: logCapture }));
   });
 
   afterEach(() => {
@@ -46,6 +52,7 @@ describe('envelope', () => {
       else process.env[k] = saved[k];
     }
     __setClientFactoryForTesting(null);
+    __resetForTesting();
     vi.restoreAllMocks();
   });
 
@@ -183,28 +190,33 @@ describe('envelope', () => {
   });
 
   describe('audit logging', () => {
-    it('emits [SECRETS-AUDIT] on encrypt success', async () => {
+    it('emits an audit on encrypt success', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       await envelope.encrypt(TENANT_A, 'hello');
-      const line = spy.mock.calls[0]?.[0] as string;
-      expect(line).toContain('[SECRETS-AUDIT]');
-      expect(line).toContain('"operation":"encrypt"');
-      expect(line).toContain('"outcome":"ok"');
-      expect(line).toContain(`"tenant_id":"${TENANT_A}"`);
-      expect(line).toContain('"key_id":');
+      await logCapture.flush();
+      expect(logCapture.logs).toHaveLength(1);
+      expect(logCapture.logs[0]).toMatchObject({
+        namespace: 'secrets-audit',
+        operation: 'encrypt',
+        outcome: 'ok',
+        tenant_id: TENANT_A,
+      });
+      expect(logCapture.logs[0]).toHaveProperty('key_id');
     });
 
-    it('emits [SECRETS-AUDIT] on decrypt AAD-mismatch error', async () => {
+    it('emits an audit on decrypt AAD-mismatch error', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
       const ct = await envelope.encrypt(TENANT_A, 'hello');
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await logCapture.flush();
+      logCapture.reset();
       await expect(envelope.decrypt(TENANT_B, ct)).rejects.toBeDefined();
-      // The decrypt call's audit log is the last one (encrypt logged in a prior scope with no spy)
-      const line = spy.mock.calls.at(-1)?.[0] as string;
-      expect(line).toContain('"operation":"decrypt"');
-      expect(line).toContain('"outcome":"error"');
-      expect(line).toContain('"error_code":"ENVELOPE_DECRYPT_FAILED"');
+      await logCapture.flush();
+      expect(logCapture.logs).toHaveLength(1);
+      expect(logCapture.logs[0]).toMatchObject({
+        operation: 'decrypt',
+        outcome: 'error',
+        error_code: 'ENVELOPE_DECRYPT_FAILED',
+      });
     });
   });
 

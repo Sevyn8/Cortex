@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLogger } from '@cortex/observability';
+import { createLogCapture, type LogCapture } from '@cortex/observability/test-utils';
 import { __setClientFactoryForTesting, secrets } from '../src/secret-manager.js';
+import { __resetForTesting, __setLoggerForTesting } from '../src/audit.js';
 import {
   PermissionDeniedError,
   SecretNotFoundError,
@@ -9,6 +12,8 @@ import {
 
 const VALID_SECRET = 'cortex-email-sendgrid-api-key';
 const VALID_TENANT = '22222222-2222-2222-2222-222222222222';
+
+let logCapture: LogCapture;
 
 function gcpError(code: number | string, message: string): Error {
   const err = new Error(message) as Error & { code: number | string };
@@ -23,7 +28,8 @@ describe('secrets.get', () => {
   beforeEach(() => {
     for (const k of keys) saved[k] = process.env[k];
     process.env.GCP_PROJECT_ID = 'sevyn8-cortex-dev';
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logCapture = createLogCapture();
+    __setLoggerForTesting(createLogger({ moduleId: 'cortex-secrets', destination: logCapture }));
   });
 
   afterEach(() => {
@@ -32,6 +38,7 @@ describe('secrets.get', () => {
       else process.env[k] = saved[k];
     }
     __setClientFactoryForTesting(null);
+    __resetForTesting();
     vi.restoreAllMocks();
   });
 
@@ -60,10 +67,9 @@ describe('secrets.get', () => {
     };
     __setClientFactoryForTesting(() => mockClient);
 
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await secrets.get(VALID_SECRET, { tenantId: VALID_TENANT });
-    const line = spy.mock.calls[0]?.[0] as string;
-    expect(line).toContain(`"tenant_id":"${VALID_TENANT}"`);
+    await logCapture.flush();
+    expect(logCapture.logs[0]).toMatchObject({ tenant_id: VALID_TENANT });
   });
 
   it('maps GCP NOT_FOUND (code=5) to SecretNotFoundError', async () => {
@@ -122,7 +128,7 @@ describe('secrets.get', () => {
     await expect(secrets.get(VALID_SECRET)).rejects.toBeInstanceOf(SecretNotFoundError);
   });
 
-  it('emits [SECRETS-AUDIT] on success', async () => {
+  it('emits an audit on success', async () => {
     const mockClient = {
       accessSecretVersion: vi
         .fn()
@@ -131,27 +137,30 @@ describe('secrets.get', () => {
     };
     __setClientFactoryForTesting(() => mockClient);
 
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await secrets.get(VALID_SECRET);
-    const line = spy.mock.calls[0]?.[0] as string;
-    expect(line).toContain('[SECRETS-AUDIT]');
-    expect(line).toContain('"operation":"get"');
-    expect(line).toContain('"outcome":"ok"');
-    expect(line).toContain(`"secret_id":"${VALID_SECRET}"`);
+    await logCapture.flush();
+    expect(logCapture.logs).toHaveLength(1);
+    expect(logCapture.logs[0]).toMatchObject({
+      namespace: 'secrets-audit',
+      operation: 'get',
+      outcome: 'ok',
+      secret_id: VALID_SECRET,
+    });
   });
 
-  it('emits [SECRETS-AUDIT] on error with error_code', async () => {
+  it('emits an audit on error with error_code', async () => {
     const mockClient = {
       accessSecretVersion: vi.fn().mockRejectedValue(gcpError(5, 'nf')),
       addSecretVersion: vi.fn(),
     };
     __setClientFactoryForTesting(() => mockClient);
 
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await expect(secrets.get(VALID_SECRET)).rejects.toBeDefined();
-    const line = spy.mock.calls[0]?.[0] as string;
-    expect(line).toContain('"outcome":"error"');
-    expect(line).toContain('"error_code":"NOT_FOUND"');
+    await logCapture.flush();
+    expect(logCapture.logs[0]).toMatchObject({
+      outcome: 'error',
+      error_code: 'NOT_FOUND',
+    });
   });
 });
 
@@ -162,7 +171,8 @@ describe('secrets.put', () => {
   beforeEach(() => {
     for (const k of keys) saved[k] = process.env[k];
     process.env.GCP_PROJECT_ID = 'sevyn8-cortex-dev';
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logCapture = createLogCapture();
+    __setLoggerForTesting(createLogger({ moduleId: 'cortex-secrets', destination: logCapture }));
   });
 
   afterEach(() => {
@@ -171,6 +181,7 @@ describe('secrets.put', () => {
       else process.env[k] = saved[k];
     }
     __setClientFactoryForTesting(null);
+    __resetForTesting();
     vi.restoreAllMocks();
   });
 
@@ -218,17 +229,18 @@ describe('secrets.put', () => {
     await expect(secrets.put('bad', 'v')).rejects.toBeInstanceOf(SecretsValidationError);
   });
 
-  it('emits [SECRETS-AUDIT] on success', async () => {
+  it('emits an audit on success', async () => {
     const mockClient = {
       accessSecretVersion: vi.fn(),
       addSecretVersion: vi.fn().mockResolvedValue([{ name: 'projects/p/secrets/s/versions/1' }]),
     };
     __setClientFactoryForTesting(() => mockClient);
 
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await secrets.put(VALID_SECRET, 'v');
-    const line = spy.mock.calls[0]?.[0] as string;
-    expect(line).toContain('"operation":"put"');
-    expect(line).toContain('"outcome":"ok"');
+    await logCapture.flush();
+    expect(logCapture.logs[0]).toMatchObject({
+      operation: 'put',
+      outcome: 'ok',
+    });
   });
 });

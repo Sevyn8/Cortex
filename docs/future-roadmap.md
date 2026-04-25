@@ -99,6 +99,24 @@ Updated whenever a deferral is added or revisited.
 - **References:** ADR-OBS-001 §Decision 6.
 - **Owner phase:** Operator-driven post-multi-tenancy.
 
+### 1.7 OTel auto-instrumentation cost review at scale
+
+- **Item:** Cost ceiling on the SDK's default-on auto-instrumentations (HTTP / gRPC / pg / Redis / fs / dns)
+- **Current state:** `initObservabilitySdk` enables all `getNodeAutoInstrumentations()` by default; Phase 1 cost analysis assumed <10 services × <10 RPS × free-tier ingestion. At current scale the per-month export bill is $0–100.
+- **Future options:** (a) Selective opt-out via the `enableAutoInstrumentations: false` knob already exposed; (b) sampling at the collector layer; (c) per-instrumentation enable list passed through the SDK options.
+- **Triggers:** ≥50 services in production, sustained traffic, or any single month where Cloud Trace ingestion + Cloud Monitoring metric writes attributable to instrumentation cross $200. Build a cost dashboard and review monthly once F-series ships.
+- **References:** `packages/observability/src/sdk.ts` (`enableAutoInstrumentations` option), ADR-OBS-001 §Decision 1.
+- **Owner phase:** Operator-driven post-F-series; revisit at the first traffic inflection.
+
+### 1.8 Per-tenant log-emission rate limiting
+
+- **Item:** Token-bucket rate limit on log emission, sized per tenant
+- **Current state:** No per-tenant cap. A noisy tenant (debug log loop, runaway error retry) can dominate Cloud Logging quota for an entire project, masking other tenants' signals and inflating the bill.
+- **Future options:** (a) Rate-limit at the observability HTTP middleware boundary, keyed on `tenant_id` from the async-local store; (b) Cloud Logging exclusion filter at sink level; (c) tenant-aware logger child with a `child.flush` rate gate.
+- **Triggers:** First incident where a single tenant's emission rate visibly inflates ingestion cost or competes for Cloud Logging API quota; or routinely >1k log lines/sec from a single tenant.
+- **References:** `packages/observability/src/logger.ts`.
+- **Owner phase:** P0.10 audit-events sub-phase or first F-series service hitting the issue, whichever lands first.
+
 ---
 
 ## 2. Operational triggers
@@ -252,6 +270,33 @@ Updated whenever a deferral is added or revisited.
 - **Triggers:** A01 Feature Store implementation phase begins.
 - **References:** Build prompts §F05.
 - **Owner phase:** Phase 2 (A01).
+
+### 4.8 Express span lifetime hooks
+
+- **Item:** Extend the observability HTTP middleware's Express adapter to end spans on actual response completion, not on `next()` return
+- **Current state:** `buildObservabilityMiddleware().express` calls `next()` synchronously and resolves immediately, so `span.end()` fires before downstream handlers complete. Span timing is therefore entry-only on Express; correlation_id propagation via async-hooks is unaffected (the AsyncLocalStorage scope persists into downstream handlers regardless). The Hono adapter `await`s `next()` and times correctly.
+- **Future options:** Hook `res.on('finish')` and `res.on('close')` inside the Express adapter; keep the span open until either fires, then `span.end()`.
+- **Triggers:** First Express-using F-service consumes the middleware. If the F-series standardizes on Hono (per the open §10.11 question) this entry never fires.
+- **References:** `packages/observability/src/http-middleware.ts:buildObservabilityMiddleware.express`, ADR-OBS-001.
+- **Owner phase:** First Express consumer, or skip entirely if Hono is adopted.
+
+### 4.9 OTel semantic-conventions naming alignment
+
+- **Item:** Manual span attributes in the observability middlewares use legacy OTel attribute names; auto-instrumentations now emit the v1.20+ canonical names. Risk: dashboards joining manual spans + auto-instrumented spans see split keys.
+- **Current state:** HTTP middleware emits `http.method` / `http.target`; gRPC middleware emits `rpc.system` / `rpc.service` / `rpc.method`; Pub/Sub wrapper emits `messaging.system` / `messaging.destination.name`. v1.20+ semantic conventions migrated HTTP attributes to `http.request.method` / `url.path` and renamed several messaging attributes.
+- **Future options:** Sweep `packages/observability/src/{http-middleware,grpc-middleware,pubsub-wrapper}.ts` to emit v1.20+ names; consider dual-emission during a deprecation window if dashboards already exist.
+- **Triggers:** Any of (a) F-series dashboard work surfaces split-key confusion; (b) `@opentelemetry/auto-instrumentations-node` upgrade where the legacy names stop being emitted entirely; (c) ADR-OBS-002 (Cloud Run metric export, drafted post-deploy) calls out the inconsistency.
+- **References:** `packages/observability/src/http-middleware.ts`, `packages/observability/src/grpc-middleware.ts`, `packages/observability/src/pubsub-wrapper.ts`, https://opentelemetry.io/docs/specs/semconv/.
+- **Owner phase:** Follow-up sweep after F01 dashboards land.
+
+### 4.10 Subpath exports for test utilities (precedent)
+
+- **Item:** Convention for exposing test-only helpers from a workspace package without polluting the production import surface
+- **Current state:** `@cortex/observability/test-utils` subpath established in P0.6 Phase 2 (commit pending). `LogCapture` lives at `packages/observability/src/test-utils.ts`; package.json declares the subpath via `exports`. Production imports go through the default barrel; tests in other packages import via the subpath. Avoids deep-relative imports across package boundaries.
+- **Future options:** Apply the same pattern to any future package whose test consumers need shared helpers — most immediately `@cortex/auth/test-utils` when AC01 lands and downstream services need to mock auth context.
+- **Triggers:** AC01 implementation, or any future package where tests in _other_ packages need a helper.
+- **References:** `packages/observability/package.json` (`exports` map), `packages/observability/src/test-utils.ts`, P0.6 Phase 2.
+- **Owner phase:** AC01 (P2.1) and any subsequent package with cross-package test-helper needs.
 
 ---
 
@@ -528,6 +573,15 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **Triggers:** F01 design phase.
 - **References:** Build prompts §F01 §3.
 - **Owner phase:** F01 — will be a deviations.md entry when F01 lands.
+
+### 9.8 Request id field name: `request_id` → `correlation_id`
+
+- **Item:** Build prompt §P0.6 specifies `request_id` as the canonical per-request correlation field; observability shipped with `correlation_id`.
+- **Current state:** `correlation_id` everywhere — `ContextProvider` interface, log line field, OTel span attribute (`cortex.correlation_id`), HTTP header (`x-correlation-id` with `x-request-id` as a fallback extractor), `withCorrelationContext` AsyncLocalStorage key, gRPC / Pub/Sub propagation. Mirrored in `docs/deviations.md` "P0.6 / Request-id field name".
+- **Future options:** Stay on `correlation_id` (current). Alignment with broader observability convention is the upside; cost of swap is now non-trivial (consumers exist).
+- **Triggers:** Spec v2.3 update consistency check; or external partner integration that mandates the prompt's name.
+- **References:** ADR-OBS-001 §Decision 2, `packages/observability/src/correlation-context.ts`, `packages/observability/src/http-middleware.ts` (CORRELATION_HEADER + REQUEST_ID_HEADER fallback).
+- **Owner phase:** Spec reconciliation; not action-required absent external trigger.
 
 ---
 

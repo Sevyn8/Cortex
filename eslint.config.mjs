@@ -14,6 +14,7 @@ const WORKSPACE_TS = [
   'services/**/*.ts',
   'services/**/*.tsx',
   'scripts/bootstrap/**/*.ts',
+  'scripts/observability/**/*.ts',
 ];
 
 export default [

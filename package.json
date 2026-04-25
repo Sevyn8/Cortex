@@ -18,7 +18,8 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "db:migrate": "drizzle-kit migrate",
-    "bootstrap:super-admin": "tsx --conditions=development scripts/bootstrap/create-super-admin.ts"
+    "bootstrap:super-admin": "tsx --conditions=development scripts/bootstrap/create-super-admin.ts",
+    "observability:smoke": "pnpm --filter @cortex/observability-smoke smoke"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",

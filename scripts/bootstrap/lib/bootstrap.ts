@@ -11,6 +11,7 @@
  */
 import { secrets } from '@cortex/secrets';
 import { bootstrapAdmin } from '@cortex/canonical-schema';
+import { createLogger, type Logger } from '@cortex/observability';
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
@@ -130,18 +131,72 @@ export async function insertBootstrapRow(
   return row;
 }
 
+// ─── Audit emitter ─────────────────────────────────────────────────────────
+//
+// Per ADR-OBS-001 §Decision 5, audit emission goes through the
+// `@cortex/observability` structured logger. Every audit line carries:
+//   - `module_id` = `'cortex-bootstrap'` (set by the logger via mixin)
+//   - `namespace` = `'bootstrap-audit'` (filter narrowing)
+//   - the `BootstrapAuditEntry` fields
+//
+// Two consumption shapes:
+//   1. `emitAuditLog(entry)` — the existing function-level API. Backed by a
+//      module-scope default emitter. The 5 internal call sites in
+//      `runBootstrap` use this and do not change.
+//   2. `createBootstrapAuditEmitter(opts)` — factory for explicit
+//      construction or to inject a pre-configured logger.
+//
+// Tests swap the default via `__setLoggerForTesting(logger)` and restore via
+// `__resetForTesting()` — same convention as `@cortex/secrets/audit`.
+
+export interface BootstrapAuditEmitter {
+  audit(entry: Omit<BootstrapAuditEntry, 'actor'>): void;
+}
+
+export interface CreateBootstrapAuditEmitterOptions {
+  /** Pre-configured logger. Defaults to `createLogger({ moduleId: 'cortex-bootstrap' })`. */
+  logger?: Logger;
+}
+
+const NAMESPACE = 'bootstrap-audit';
+const MODULE_ID = 'cortex-bootstrap';
+
+export function createBootstrapAuditEmitter(
+  opts: CreateBootstrapAuditEmitterOptions = {},
+): BootstrapAuditEmitter {
+  const logger = opts.logger ?? createLogger({ moduleId: MODULE_ID });
+  return {
+    audit(entry) {
+      const full: BootstrapAuditEntry = { ...entry, actor: getActor() };
+      logger.info({ ...full, namespace: NAMESPACE }, NAMESPACE);
+    },
+  };
+}
+
+let defaultEmitter: BootstrapAuditEmitter = createBootstrapAuditEmitter();
+
 /**
- * Emit a single audit log line to stderr. TODO(P0.6 Phase 2): swap
- * `console.error` for `@cortex/observability` structured logger. Grep
- * marker: [BOOTSTRAP-AUDIT].
+ * Emit a single audit line. Preserved API — the 5 internal call sites in
+ * `runBootstrap` are unchanged. Backed by the module-scope default emitter.
  *
  * The raw password is NEVER accepted by this function — the AuditEntry type
  * doesn't include it. Tests verify no log line contains the password.
  */
 export function emitAuditLog(entry: Omit<BootstrapAuditEntry, 'actor'>): void {
-  const full: BootstrapAuditEntry = { ...entry, actor: getActor() };
+  defaultEmitter.audit(entry);
+}
 
-  console.error(`[BOOTSTRAP-AUDIT] ${JSON.stringify(full)}`);
+/**
+ * @internal — test-only logger swap. Pair with `__resetForTesting()` in
+ * `afterEach` to restore production defaults between tests.
+ */
+export function __setLoggerForTesting(logger: Logger): void {
+  defaultEmitter = createBootstrapAuditEmitter({ logger });
+}
+
+/** @internal — restore the production default emitter. */
+export function __resetForTesting(): void {
+  defaultEmitter = createBootstrapAuditEmitter();
 }
 
 /**

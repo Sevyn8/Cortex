@@ -1,0 +1,41 @@
+{
+  "name": "@cortex/observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./test-utils": {
+      "types": "./src/test-utils.ts",
+      "default": "./src/test-utils.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/tenant-context": "workspace:*",
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/auto-instrumentations-node": "catalog:",
+    "@opentelemetry/exporter-metrics-otlp-http": "catalog:",
+    "@opentelemetry/exporter-trace-otlp-http": "catalog:",
+    "@opentelemetry/resources": "catalog:",
+    "@opentelemetry/sdk-metrics": "catalog:",
+    "@opentelemetry/sdk-node": "catalog:",
+    "@opentelemetry/semantic-conventions": "catalog:",
+    "pino": "catalog:",
+    "prom-client": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "pino-pretty": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -25,6 +25,11 @@ desktop.ini
 *.swp
 *~
 
+# Local Claude Code session state (per-developer)
+# scheduled_tasks.lock + settings.local.json — runtime artifacts of the
+# Claude Code CLI; per-developer state, not project work.
+.claude/
+
 # Logs
 *.log
 npm-debug.log*

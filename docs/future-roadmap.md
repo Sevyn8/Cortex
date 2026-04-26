@@ -382,6 +382,30 @@ Updated whenever a deferral is added or revisited.
 - **References:** `packages/encryption/src/encrypt.ts` (the duplicate consult), `packages/secrets/src/kms.ts` (the internal call site), F01 Slice B sub-phase 4 finding.
 - **Owner phase:** F02 (P1.2).
 
+### 4.16 Logger plumbing in `@cortex/quotas` is dead code
+
+- **Item:** `@cortex/quotas` declares the `@cortex/observability` cycle-break shape (type-only `Logger` import + dynamic `await import('@cortex/observability')` resolution per CLAUDE.md "P0.10+ — library-driven emission") but emits zero operational log lines today. The wiring is present in the package's import graph but no call site uses it.
+- **Current state:** `audit-events` cycle-break pattern was reproduced in `@cortex/quotas` for symmetry with `@cortex/tenant-context` so a future log site doesn't need to re-think load-order. No log lines emit today; check-quota emissions go to `audit_event` only.
+- **Future options:**
+  1. First operational log site lands (e.g., a debug log when an upsert hits the unique-constraint retry path) → exercise the dynamic-import path; verify it doesn't re-introduce the load-order cycle.
+  2. Drop the dynamic-import wiring entirely if it remains unused at F02 ship — the symmetry argument weakens once F02-era observability requirements are concrete.
+  3. Promote it to a real `info`-level emission point (e.g., one log line per quota refill window-rollover) for FinOps visibility.
+- **Triggers:** First feature in `@cortex/quotas` that wants a structured log line, OR F02 ship time (decide-or-delete).
+- **References:** `packages/quotas/src/check-quota.ts` (where the type-only import lives but is unused), CLAUDE.md "P0.10+ — library-driven emission" subsection on the cycle-break gotcha.
+- **Owner phase:** F02 (P1.2) or first quotas-internal logging requirement.
+
+### 4.17 Retire `f02-swap-paths-for-slice-c-resolvers.md` doc
+
+- **Item:** `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` (~194 lines, authored 2026-04-26) catalogs the two Phase 1 stub resolvers shipped by Slice C (`getQuotaConfig`, `getComputePlacement`) and their planned F02 evolution path. The doc serves as a contract between Slice C and F02's tenant-lifecycle work; once F02 swaps both resolvers to their real implementations, the doc's purpose is exhausted.
+- **Current state:** Active. Slice C-era doc; cited from ADR-COMPUTE-001 §5, the convention doc, and the planning doc.
+- **Future options:**
+  1. Retire the doc when F02 ships both resolver swaps — replace with a one-line "see ADR-COMPUTE-001 §5 (Resolved)" pointer in any docs that referenced it.
+  2. Keep it as a historical record in `docs/archive/` if the swap journey provides reusable lessons (e.g., the substrate-now / real-impl-later pattern's evolution).
+  3. Refactor in place if F02 partial-swaps (only one of the two resolvers): keep the unswapped resolver section, mark the other as Resolved with a commit-hash backfill.
+- **Triggers:** F02 ships the swap of both resolvers (per the doc's "Migration steps" sections).
+- **References:** `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md`; ADR-COMPUTE-001 §5; ADR-INFRA-007 (precedent: KMS-key substrate-now / real-impl-later doc has a similar lifecycle).
+- **Owner phase:** F02 (P1.2).
+
 ---
 
 ## 5. First-consumer-driven
@@ -430,6 +454,18 @@ Updated whenever a deferral is added or revisited.
 - **Triggers:** "Enterprise only, deferred to Phase 2" per F04 build prompt §4.
 - **References:** Build prompts §F04 §4.
 - **Owner phase:** Phase 2.
+
+### 5.6 `Equals<X, Y>` compile-time type-witness helper extraction
+
+- **Item:** A two-line conditional-type helper (`type Equals<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false`) used to assert at type-check time that two type expressions are structurally identical. Slice C's compute-placement test suite uses it to lock down the `ComputePlacement` discriminated-union shape against accidental drift.
+- **Current state:** Inline in `packages/compute-placement/test/types.spec.ts` only. One consumer; the helper is short enough that duplicating it in a second consumer is the conventional second-step before extraction.
+- **Future options:**
+  1. Extract to a shared `@cortex/test-utils` (or `@cortex/internal-types`) package once a second consumer needs it. Export as `assertTypeEquals<X, Y>` to keep the call-site readable.
+  2. Inline-and-duplicate at each consumer (current). Acceptable for ≤3 consumers given the helper is two lines.
+  3. Ship as a TS-internal-only package (no JS emit) so it stays a type-system concern.
+- **Triggers:** Second consumer wants the same compile-time witness — probably `@cortex/quotas` `CheckQuotaResult` discriminated-union assertion in F02-era refactors, or any other library shipping a public discriminated-union surface.
+- **References:** `packages/compute-placement/test/types.spec.ts` (current sole site).
+- **Owner phase:** First-consumer-driven (N≥2 trigger).
 
 ---
 
@@ -636,17 +672,9 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **References:** `docs/deviations.md` row 6, ADR-OBS-001 §Decision 2.
 - **Owner phase:** F01 + AC01.
 
-### 9.7 F01 compute isolation: K8s namespace vs Cloud Run (anticipated)
+### 9.7 F01 compute isolation: K8s namespace vs Cloud Run
 
-- **Item:** F01 build prompt §3 says "Kubernetes namespace per Enterprise tenant"; Cortex platform is Cloud Run.
-- **Current state:** Not yet encountered; F01 hasn't shipped.
-- **Future options:**
-  1. Cloud Run service-per-Enterprise-tenant with per-service IAM scoping.
-  2. Per-Enterprise dedicated Cloud Run revision pool with workload identity isolation.
-  3. K8s migration if Cloud Run isolation is insufficient (significant infra change — would need its own ADR).
-- **Triggers:** F01 design phase.
-- **References:** Build prompts §F01 §3.
-- **Owner phase:** F01 — will be a deviations.md entry when F01 lands.
+**Resolved 2026-04-26** by F01 Slice C (commit `<pending sub-phase 10>`) — see "## Resolved deferrals" below.
 
 ### 9.8 Request id field name: `request_id` → `correlation_id`
 
@@ -679,26 +707,19 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.3 Tenant tier discriminator
 
-- **Item:** How does F01 know whether a tenant is Standard or Enterprise?
-- **Current state:** Spec mentions "hybrid model: shared Postgres with RLS for Standard; dedicated Cloud SQL for Enterprise" but the tier field isn't pre-defined.
-- **Future options:**
-  1. `tenant.tier text CHECK (tier IN ('STANDARD','ENTERPRISE'))`.
-  2. Enum type.
-  3. Computed from feature flags (more flexible, less explicit).
-- **Triggers:** F01 (P1.1).
-- **References:** Build prompts §F01 §2.
-- **Owner phase:** F01.
+**Resolved 2026-04-26** by F01 Slice A (substrate) + Slice C (consumer; commit `<pending sub-phase 10>`) — see "## Resolved deferrals" below.
 
 ### 10.4 DB client abstraction shape
 
 - **Item:** Per F01 §2 "abstraction layer: services never know which mode a tenant is in — the DB client picks the right instance based on tenant tier"
 - **Current state:** `packages/canonical-schema/src/db-client.ts` has a thin `createDrizzleClient(pool, schema?)` factory. No tier-aware routing.
+- **Slice C addendum (2026-04-26):** Slice C designs the F02 consumer (compute-placement reads `tenant.tier` to branch shared vs dedicated; see `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` Resolver 2) but does not ship the tier-aware DB client itself. The Phase 1 stub `getComputePlacement(params)` returns shared unconditionally and accepts no `db` context; F02 will pass an explicit `db` parameter. Whether that resolves to a single shared instance or per-Enterprise dedicated instance remains §10.4's open question.
 - **Future options:**
   1. F01 ships a `getTenantDbClient(tenantId)` that resolves to shared or dedicated based on tier.
   2. Per-tenant connection pool registry warmed on tenant provisioning.
   3. Multiple Drizzle clients pooled and selected at request time.
 - **Triggers:** F01 (P1.1).
-- **References:** Build prompts §F01 §2.
+- **References:** Build prompts §F01 §2; `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md`.
 - **Owner phase:** F01.
 
 ### 10.5 Quota enforcement implementation
@@ -879,3 +900,24 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **Current state at deferral:** `console.error` with `[BOOTSTRAP-AUDIT]` JSON-line prefix at `scripts/bootstrap/lib/bootstrap.ts`.
 - **Resolution:** Same hybrid-DI pattern as §8.1 — `createBootstrapAuditEmitter(opts)` factory + module-scope default + `__setLoggerForTesting` / `__resetForTesting`. Emissions carry `namespace: 'bootstrap-audit'`, `module_id: 'cortex-bootstrap'`. The 5 internal `emitAuditLog` call sites in `runBootstrap` are unchanged; the prior `captureAllLogs` test helper retired in favor of `LogCapture`. Password-leakage tests gain defense-in-depth: a small `captureConsoleAndStreams` helper preserves the "no password ever escapes" check across both the structured-logger path and any stray write to console / stderr / stdout.
 - **References:** `scripts/bootstrap/lib/bootstrap.ts`, `scripts/bootstrap/lib/bootstrap.test.ts`.
+
+### 9.7 F01 compute isolation: K8s namespace vs Cloud Run — Resolved 2026-04-26 / commit `<pending sub-phase 10>`
+
+- **Item:** F01 build prompt §3 says "Kubernetes namespace per Enterprise tenant"; Cortex platform is Cloud Run.
+- **Current state at deferral:** Anticipated deviation; F01 had not shipped its compute-isolation surface. Three options were live: per-Enterprise Cloud Run service, dedicated revision pool with workload-identity isolation, or K8s migration.
+- **Resolution:** F01 Slice C — **ADR-COMPUTE-001** locks Cloud Run service-per-Enterprise-tenant (option 1) plus a single shared service for Standard tenants. Service-name format: `{workload}-shared` (Standard) or `{workload}-tenant-{uuid}` (Enterprise) — fits the 63-char Cloud Run service-name budget with a 19-char workload cap. The `@cortex/compute-placement` package ships `getComputePlacement` (Phase 1 stub returns shared unconditionally) and `parseCloudRunServiceName` (parses both formats for forensics). Per-Enterprise dedicated services are provisioned at the F02 layer; Slice C ships only the resolver substrate. K8s migration is a future-trigger if Cloud Run isolation proves insufficient (would require a new ADR superseding ADR-COMPUTE-001).
+- **References:** `docs/architecture/decisions/ADR-COMPUTE-001-cloud-run-vs-k8s-compute-isolation.md`, `packages/compute-placement/src/get-placement.ts`, `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` (F02 swap contract).
+
+### 10.3 Tenant tier discriminator — Resolved 2026-04-26 / commit `<pending sub-phase 10>`
+
+- **Item:** How does F01 know whether a tenant is Standard or Enterprise?
+- **Current state at deferral:** Spec mentioned "hybrid model: shared Postgres with RLS for Standard; dedicated Cloud SQL for Enterprise" but the tier field wasn't pre-defined. Three options live: typed text column with CHECK, enum type, or feature-flag-derived.
+- **Resolution:** Substrate landed in **F01 Slice A** (commit `4811821`) — `tenant.tier text NOT NULL CHECK (tier IN ('STANDARD', 'ENTERPRISE'))` per migration 0007 (option 1). Default at insert time is `'STANDARD'`. Slice C confirms the consumer model: `@cortex/compute-placement` reads `tenant.tier` to branch shared vs dedicated placement (per ADR-COMPUTE-001 §3 and the F02 swap-path doc Resolver 2). Quotas use the same column for tier-default lookup (`@cortex/quotas` `getQuotaConfig(tier, resourceClass)` reads `DEFAULT_TIER_QUOTAS[tier]` per planning Decision 7). Enum type was rejected: text + CHECK is easier to evolve and inspect; feature-flag-derived was rejected: tier is a commercial-contract property and belongs on the row, not in flag config.
+- **References:** `services/foundation/migrations/0007_control_plane_tables.sql` (CHECK constraint), `packages/quotas/src/types.ts` (DEFAULT_TIER_QUOTAS keyed by `QuotaTier`), `packages/compute-placement/src/get-placement.ts` (Phase 1 stub; F02 will branch on tier), `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` Resolver 2.
+
+### 10.5 Quota enforcement implementation — Resolved 2026-04-26 / commit `<pending sub-phase 10>`
+
+- **Item:** Token bucket per tenant per resource class (DB connections, CPU seconds, RAM MB, API calls/min)
+- **Current state at deferral:** Not implemented. F01 prompt §6 specified the requirement. Three options live: in-memory + Redis-backed shared state, Memorystore Redis with Lua scripts, or Cloud-native API Gateway / Apigee.
+- **Resolution:** F01 Slice C — `@cortex/quotas` ships token-bucket runtime backed by Postgres `tenant_quota_usage` (RLS-protected) using atomic `INSERT ... ON CONFLICT DO UPDATE` upserts as the per-window concurrency primitive. No Redis (option 1's shared-state half rejected: PG is already the cross-instance source of truth and the upsert primitive is atomic at row-level without an additional dependency). 4 resource classes shipped: `api_calls_per_minute` + `db_connections` (60s windows), `cpu_seconds` + `ram_mb` (3600s windows). Window boundaries are `date_trunc('minute' | 'hour', clock_timestamp() AT TIME ZONE 'UTC')` for cross-region determinism. Strict-greater (`>`) `current_value > quota_limit` enforces "exceeded" semantic. On rejection: returns a discriminated `CheckQuotaResult` (return-not-throw — caller's transaction owns the audit emission, so a thrown rejection would roll back the audit row alongside the upsert; see convention doc §1). HTTP middleware (framework-agnostic core + Hono/Express adapters) translates rejection to 429 + Retry-After + `QUOTA_EXCEEDED` audit event (REJECT verb per ADR-AU-001 Decision 3). Per-tier defaults from `DEFAULT_TIER_QUOTAS` table (`getQuotaConfig` Phase 1 stub); F02 will swap to `tenant_config_version`-backed per-tenant overrides per the swap-path doc Resolver 1. BigInt-native counters at the API surface (DB returns text from raw `db.execute`, coerced via explicit `BigInt()`).
+- **References:** `packages/quotas/src/check-quota.ts`, `packages/quotas/src/middleware.ts`, `packages/quotas/src/config.ts`, `services/foundation/migrations/0007_control_plane_tables.sql` (`tenant_quota_usage` table + RLS), `docs/architecture/quotas-compute-placement-convention.md`, `docs/planning/f01-slice-c-quotas-compute-isolation-scope.md` Decisions 6–9.

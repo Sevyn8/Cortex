@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-26 (F01 Slice B encryption + blob isolation shipped — dev applied; staging + prod queued for separate approval cycles)
+Last updated: 2026-04-26 (F01 Slice C quotas + compute isolation shipped — closes P1.1 F01)
 
 ## Pre-flight
 
@@ -44,7 +44,11 @@ Last updated: 2026-04-26 (F01 Slice B encryption + blob isolation shipped — de
   - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
   - [x] Slice B — Encryption + GCS isolation (2026-04-26, commit `c64192f`)
     - dev applied; staging + prod queued for separate cycles
-  - [ ] Slice C — Quotas + Compute isolation
+  - [x] Slice C — Quotas + Compute isolation (2026-04-26, commit `<pending sub-phase 10>`)
+    - Workspace: 464 active tests (was 408 pre-Slice-C; +56 quotas, +30 compute-placement)
+    - 2 packages shipped: `@cortex/quotas` (56 tests), `@cortex/compute-placement` (30 tests)
+    - ADR-COMPUTE-001 (Cloud Run vs K8s) + F02 swap-paths doc + convention doc landed
+    - Substrate: NONE NEEDED (`tenant_quota_usage` RLS already correctly shaped from Slice A)
 - [ ] P1.2 F02 Tenant Lifecycle
 - [ ] P1.3 F03 Temporal Data Engine
 - [ ] P1.4 F04 Configuration Plane

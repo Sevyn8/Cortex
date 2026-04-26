@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-25 (P0.6 Phase 2 `@cortex/observability` library complete; remaining Phase 0: P0.10; F01 Slices B/C next)
+Last updated: 2026-04-26 (P0.10 `@cortex/audit-events` library shipped — Phase 0 closes; F01 Slices B/C next)
 
 ## Pre-flight
 
@@ -34,7 +34,7 @@ Last updated: 2026-04-25 (P0.6 Phase 2 `@cortex/observability` library complete;
   - [ ] Phase 3 dashboards — DEFERRED indefinitely (no hard consumer; trigger on operator ask)
 - [x] P0.7 Secret Manager + KMS (2026-04-24)
 - [x] P0.9 Super Admin bootstrap (2026-04-24)
-- [ ] P0.10 Audit event emission convention
+- [x] P0.10 Audit event emission convention (2026-04-26, commit `0f4a99b`)
 
 ## Phase 1 — Display Data Go-Live
 

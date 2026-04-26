@@ -42,7 +42,7 @@ Last updated: 2026-04-26 (F01 Slice B encryption + blob isolation shipped — de
 
 - [ ] P1.1 F01 Multi-Tenancy ← IN PROGRESS
   - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
-  - [x] Slice B — Encryption + GCS isolation (2026-04-26, commit `<pending sub-phase 10>`)
+  - [x] Slice B — Encryption + GCS isolation (2026-04-26, commit `c64192f`)
     - dev applied; staging + prod queued for separate cycles
   - [ ] Slice C — Quotas + Compute isolation
 - [ ] P1.2 F02 Tenant Lifecycle

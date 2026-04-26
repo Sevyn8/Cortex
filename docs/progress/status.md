@@ -44,7 +44,7 @@ Last updated: 2026-04-26 (F01 Slice C quotas + compute isolation shipped — clo
   - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
   - [x] Slice B — Encryption + GCS isolation (2026-04-26, commit `c64192f`)
     - dev applied; staging + prod queued for separate cycles
-  - [x] Slice C — Quotas + Compute isolation (2026-04-26, commit `<pending sub-phase 10>`)
+  - [x] Slice C — Quotas + Compute isolation (2026-04-26, commit `dcc503c`)
     - Workspace: 464 active tests (was 408 pre-Slice-C; +56 quotas, +30 compute-placement)
     - 2 packages shipped: `@cortex/quotas` (56 tests), `@cortex/compute-placement` (30 tests)
     - ADR-COMPUTE-001 (Cloud Run vs K8s) + F02 swap-paths doc + convention doc landed

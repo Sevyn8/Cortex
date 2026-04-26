@@ -674,7 +674,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 9.7 F01 compute isolation: K8s namespace vs Cloud Run
 
-**Resolved 2026-04-26** by F01 Slice C (commit `<pending sub-phase 10>`) — see "## Resolved deferrals" below.
+**Resolved 2026-04-26** by F01 Slice C (commit `dcc503c`) — see "## Resolved deferrals" below.
 
 ### 9.8 Request id field name: `request_id` → `correlation_id`
 
@@ -707,7 +707,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.3 Tenant tier discriminator
 
-**Resolved 2026-04-26** by F01 Slice A (substrate) + Slice C (consumer; commit `<pending sub-phase 10>`) — see "## Resolved deferrals" below.
+**Resolved 2026-04-26** by F01 Slice A (substrate) + Slice C (consumer; commit `dcc503c`) — see "## Resolved deferrals" below.
 
 ### 10.4 DB client abstraction shape
 
@@ -724,15 +724,7 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 ### 10.5 Quota enforcement implementation
 
-- **Item:** Token bucket per tenant per resource class (DB connections, CPU seconds, RAM MB, API calls/min)
-- **Current state:** Not implemented. F01 prompt §6 specifies the requirement.
-- **Future options:**
-  1. In-memory token bucket per Cloud Run instance + Redis-backed shared state.
-  2. Memorystore Redis with Lua scripts for atomic decrement.
-  3. Cloud-native quota via API Gateway / Apigee (heavier, longer to land).
-- **Triggers:** F01 (P1.1).
-- **References:** Build prompts §F01 §6.
-- **Owner phase:** F01.
+**Resolved 2026-04-26** by F01 Slice C (commit `dcc503c`) — see "## Resolved deferrals" below.
 
 ### 10.6 Async-local context propagation library
 
@@ -901,21 +893,21 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **Resolution:** Same hybrid-DI pattern as §8.1 — `createBootstrapAuditEmitter(opts)` factory + module-scope default + `__setLoggerForTesting` / `__resetForTesting`. Emissions carry `namespace: 'bootstrap-audit'`, `module_id: 'cortex-bootstrap'`. The 5 internal `emitAuditLog` call sites in `runBootstrap` are unchanged; the prior `captureAllLogs` test helper retired in favor of `LogCapture`. Password-leakage tests gain defense-in-depth: a small `captureConsoleAndStreams` helper preserves the "no password ever escapes" check across both the structured-logger path and any stray write to console / stderr / stdout.
 - **References:** `scripts/bootstrap/lib/bootstrap.ts`, `scripts/bootstrap/lib/bootstrap.test.ts`.
 
-### 9.7 F01 compute isolation: K8s namespace vs Cloud Run — Resolved 2026-04-26 / commit `<pending sub-phase 10>`
+### 9.7 F01 compute isolation: K8s namespace vs Cloud Run — Resolved 2026-04-26 / commit `dcc503c`
 
 - **Item:** F01 build prompt §3 says "Kubernetes namespace per Enterprise tenant"; Cortex platform is Cloud Run.
 - **Current state at deferral:** Anticipated deviation; F01 had not shipped its compute-isolation surface. Three options were live: per-Enterprise Cloud Run service, dedicated revision pool with workload-identity isolation, or K8s migration.
 - **Resolution:** F01 Slice C — **ADR-COMPUTE-001** locks Cloud Run service-per-Enterprise-tenant (option 1) plus a single shared service for Standard tenants. Service-name format: `{workload}-shared` (Standard) or `{workload}-tenant-{uuid}` (Enterprise) — fits the 63-char Cloud Run service-name budget with a 19-char workload cap. The `@cortex/compute-placement` package ships `getComputePlacement` (Phase 1 stub returns shared unconditionally) and `parseCloudRunServiceName` (parses both formats for forensics). Per-Enterprise dedicated services are provisioned at the F02 layer; Slice C ships only the resolver substrate. K8s migration is a future-trigger if Cloud Run isolation proves insufficient (would require a new ADR superseding ADR-COMPUTE-001).
 - **References:** `docs/architecture/decisions/ADR-COMPUTE-001-cloud-run-vs-k8s-compute-isolation.md`, `packages/compute-placement/src/get-placement.ts`, `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` (F02 swap contract).
 
-### 10.3 Tenant tier discriminator — Resolved 2026-04-26 / commit `<pending sub-phase 10>`
+### 10.3 Tenant tier discriminator — Resolved 2026-04-26 / commit `dcc503c`
 
 - **Item:** How does F01 know whether a tenant is Standard or Enterprise?
 - **Current state at deferral:** Spec mentioned "hybrid model: shared Postgres with RLS for Standard; dedicated Cloud SQL for Enterprise" but the tier field wasn't pre-defined. Three options live: typed text column with CHECK, enum type, or feature-flag-derived.
 - **Resolution:** Substrate landed in **F01 Slice A** (commit `4811821`) — `tenant.tier text NOT NULL CHECK (tier IN ('STANDARD', 'ENTERPRISE'))` per migration 0007 (option 1). Default at insert time is `'STANDARD'`. Slice C confirms the consumer model: `@cortex/compute-placement` reads `tenant.tier` to branch shared vs dedicated placement (per ADR-COMPUTE-001 §3 and the F02 swap-path doc Resolver 2). Quotas use the same column for tier-default lookup (`@cortex/quotas` `getQuotaConfig(tier, resourceClass)` reads `DEFAULT_TIER_QUOTAS[tier]` per planning Decision 7). Enum type was rejected: text + CHECK is easier to evolve and inspect; feature-flag-derived was rejected: tier is a commercial-contract property and belongs on the row, not in flag config.
 - **References:** `services/foundation/migrations/0007_control_plane_tables.sql` (CHECK constraint), `packages/quotas/src/types.ts` (DEFAULT_TIER_QUOTAS keyed by `QuotaTier`), `packages/compute-placement/src/get-placement.ts` (Phase 1 stub; F02 will branch on tier), `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` Resolver 2.
 
-### 10.5 Quota enforcement implementation — Resolved 2026-04-26 / commit `<pending sub-phase 10>`
+### 10.5 Quota enforcement implementation — Resolved 2026-04-26 / commit `dcc503c`
 
 - **Item:** Token bucket per tenant per resource class (DB connections, CPU seconds, RAM MB, API calls/min)
 - **Current state at deferral:** Not implemented. F01 prompt §6 specified the requirement. Three options live: in-memory + Redis-backed shared state, Memorystore Redis with Lua scripts, or Cloud-native API Gateway / Apigee.

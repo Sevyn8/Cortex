@@ -57,6 +57,13 @@
       "when": 1777181493185,
       "tag": "0008_audit_event_actor_type_agent",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777214360380,
+      "tag": "0009_tenant_kms_key_writes_policy",
+      "breakpoints": true
     }
   ]
 }

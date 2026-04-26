@@ -41,6 +41,12 @@ describe('tenants CRUD', () => {
   const createdTenantIds: string[] = [];
 
   beforeAll(async () => {
+    // tenants.create now calls buildKeyResourceName from @cortex/secrets
+    // (per ADR-INFRA-007) which requires GCP_PROJECT_ID. The KMS key
+    // resource string is informational at Phase 1 — no live KMS API
+    // call — so a placeholder value is sufficient when the env doesn't
+    // already supply one (local dev fallback).
+    process.env.GCP_PROJECT_ID ??= 'sevyn8-cortex-dev';
     pool = getPool();
     db = drizzle(pool);
     await forceRlsOnAuditEvent(pool);
@@ -51,6 +57,10 @@ describe('tenants CRUD', () => {
       try {
         await withBoundClient(pool, id, async (client) => {
           await client.query('DELETE FROM tenant_config_version WHERE tenant_id = $1', [id]);
+          // tenant_kms_key has ON DELETE RESTRICT FK; child rows must
+          // go before the tenant DELETE. RLS on tenant_kms_key now
+          // permits writes via migration 0009 under tenant binding.
+          await client.query('DELETE FROM tenant_kms_key WHERE tenant_id = $1', [id]);
         });
       } catch {
         // tenant may not exist (e.g., atomicity test rolled back); ignore.
@@ -73,7 +83,7 @@ describe('tenants CRUD', () => {
   // ───────────────────────────────────────────────────────────────────
 
   describe('create', () => {
-    it('happy path: returns full row, status defaults to PROVISIONING, emits TENANT_CREATED', async () => {
+    it('happy path: returns full row, status defaults to PROVISIONING, emits TENANT_CREATED + TENANT_KMS_KEY_BOUND', async () => {
       const externalId = externalIdFor('create-happy');
       const created = await tenants.create(
         db,
@@ -89,7 +99,7 @@ describe('tenants CRUD', () => {
       expect(created.id).toMatch(/^[0-9a-f-]{36}$/);
 
       const events = await fetchAuditEvents(db, created.id);
-      expect(events.map((e) => e.action)).toEqual(['TENANT_CREATED']);
+      expect(events.map((e) => e.action)).toEqual(['TENANT_CREATED', 'TENANT_KMS_KEY_BOUND']);
       expect(events[0]?.payload).toMatchObject({
         after_state: {
           external_id: externalId,
@@ -98,9 +108,41 @@ describe('tenants CRUD', () => {
           status: 'PROVISIONING',
         },
       });
+
+      // Sub-resource event TENANT_KMS_KEY_BOUND lands AFTER the parent
+      // TENANT_CREATED per ADR-INFRA-007 Decision 1 audit ordering.
+      const kmsBindEvent = events.find((e) => e.action === 'TENANT_KMS_KEY_BOUND');
+      expect(kmsBindEvent).toBeDefined();
+      expect(kmsBindEvent?.resource).toBe(`tenant_kms_key:${created.id}`);
+      expect(kmsBindEvent?.payload).toMatchObject({
+        after_state: {
+          kms_key_resource_name: expect.stringContaining('cortex-general-key'),
+        },
+      });
     });
 
-    it('with initialConfig also emits TENANT_CONFIG_VERSION_CREATED, ordered after TENANT_CREATED', async () => {
+    it('tenant_kms_key row exists after create() with kms_key_resource_name pointing at cortex-general-key', async () => {
+      const externalId = externalIdFor('create-kms-row');
+      const created = await tenants.create(
+        db,
+        { externalId, displayName: 'KMS Row', tier: 'STANDARD' },
+        { actor: ACTOR },
+      );
+      trackTenant(created.id);
+
+      const result = await db.transaction(async (tx) => {
+        await bindTenantToDbSession(tx, created.id);
+        return tx.execute<{ tenant_id: string; kms_key_resource_name: string }>(sql`
+          SELECT tenant_id, kms_key_resource_name
+          FROM tenant_kms_key
+          WHERE tenant_id = ${created.id}
+        `);
+      });
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0]?.kms_key_resource_name).toContain('cortex-general-key');
+    });
+
+    it('with initialConfig also emits TENANT_CONFIG_VERSION_CREATED, ordered after TENANT_KMS_KEY_BOUND', async () => {
       const externalId = externalIdFor('create-with-config');
       const created = await tenants.create(
         db,
@@ -117,9 +159,11 @@ describe('tenants CRUD', () => {
       const events = await fetchAuditEvents(db, created.id);
       expect(events.map((e) => e.action)).toEqual([
         'TENANT_CREATED',
+        'TENANT_KMS_KEY_BOUND',
         'TENANT_CONFIG_VERSION_CREATED',
       ]);
-      expect(events[1]?.payload).toMatchObject({
+      const configEvent = events.find((e) => e.action === 'TENANT_CONFIG_VERSION_CREATED');
+      expect(configEvent?.payload).toMatchObject({
         after_state: {
           version_number: 1,
           config: { feature_flags: { x: true } },
@@ -139,7 +183,7 @@ describe('tenants CRUD', () => {
       expect(configCount).toBe('1');
     });
 
-    it('two events committed atomically — both rows visible after the txn', async () => {
+    it('three events committed atomically — all rows visible after the txn', async () => {
       const externalId = externalIdFor('create-atomic-commit');
       const created = await tenants.create(
         db,
@@ -157,12 +201,15 @@ describe('tenants CRUD', () => {
       expect(tenantRow.id).toBe(created.id);
 
       const events = await fetchAuditEvents(db, created.id);
-      expect(events).toHaveLength(2);
-      // occurred_at is server-defaulted to now() per row, so they should
-      // be monotonically non-decreasing in insertion order.
+      expect(events).toHaveLength(3);
+      // occurred_at is library-stamped via clock_timestamp() per row
+      // (P0.10 Decision 11), so they should be monotonically increasing
+      // in insertion order.
       const t0 = new Date(events[0]!.occurred_at).getTime();
       const t1 = new Date(events[1]!.occurred_at).getTime();
+      const t2 = new Date(events[2]!.occurred_at).getTime();
       expect(t1).toBeGreaterThanOrEqual(t0);
+      expect(t2).toBeGreaterThanOrEqual(t1);
     });
 
     it('duplicate external_id raises Postgres unique-violation (23505)', async () => {
@@ -202,12 +249,14 @@ describe('tenants CRUD', () => {
       expect((captured as TenantValidationError).cause).toBeInstanceOf(ZodError);
     });
 
-    it('atomicity: forced throw on second emitAuditEvent rolls back tenant + config rows', async () => {
+    it('atomicity: forced throw on third emitAuditEvent rolls back tenant + kms_key + config rows', async () => {
       const externalId = externalIdFor('create-atomic-rollback');
-      // First call (TENANT_CREATED): no-op success — skip the actual audit
-      // write so we can isolate the rollback behavior of the surrounding
-      // tenant + config inserts. Second call (TENANT_CONFIG_VERSION_CREATED):
-      // throw to trigger the txn rollback.
+      // Calls 1+2 (TENANT_CREATED, TENANT_KMS_KEY_BOUND): no-op success
+      // — skip the actual audit writes so we can isolate the rollback
+      // behavior of the surrounding row INSERTs. Call 3
+      // (TENANT_CONFIG_VERSION_CREATED): throw to trigger the txn
+      // rollback after every preceding row INSERT has landed.
+      emitAuditEventSpy.mockImplementationOnce(() => Promise.resolve());
       emitAuditEventSpy.mockImplementationOnce(() => Promise.resolve());
       emitAuditEventSpy.mockImplementationOnce(() =>
         Promise.reject(new Error('forced rollback for atomicity test')),
@@ -237,12 +286,12 @@ describe('tenants CRUD', () => {
       );
       expect(tenantCount.rows[0]?.count).toBe('0');
 
-      // tenant_config_version FK is REFERENCES tenant(id) ON DELETE
-      // RESTRICT — a config row cannot exist without a matching tenant
-      // row. Since the tenant rolled back to count=0, any config row
-      // inserted in the same txn also rolled back (FK + atomicity). No
-      // separate bound query needed (and we don't know the rolled-back
-      // tenant_id to bind to anyway).
+      // tenant_config_version + tenant_kms_key FKs both REFERENCE
+      // tenant(id) ON DELETE RESTRICT — child rows cannot exist without
+      // a matching tenant row. Since the tenant rolled back to count=0,
+      // any child row inserted in the same txn also rolled back (FK +
+      // atomicity). No separate bound query needed (and we don't know
+      // the rolled-back tenant_id to bind to anyway).
     });
   });
 
@@ -507,6 +556,7 @@ describe('tenants CRUD', () => {
 
 type AuditEventRow = {
   action: string;
+  resource: string;
   occurred_at: string;
   payload: Record<string, unknown>;
 } & Record<string, unknown>;
@@ -517,17 +567,15 @@ async function fetchAuditEvents(
 ): Promise<AuditEventRow[]> {
   return db.transaction(async (tx) => {
     await bindTenantToDbSession(tx, tenantId);
-    // occurred_at defaults to transaction_timestamp() which is CONSTANT
-    // within a single transaction — two audit emits inside the same
-    // db.transaction(...) (e.g., TENANT_CREATED + TENANT_CONFIG_VERSION_CREATED
-    // from tenants.create) receive identical occurred_at, so sorting by
-    // it alone is ambiguous. ctid is Postgres's physical row identifier,
-    // monotonic for sequential INSERTs on the same backend within a txn,
-    // used here as a reliable tiebreaker. The hash chain
+    // occurred_at is library-stamped via clock_timestamp() per row
+    // (P0.10 Decision 11), so rows within the same txn have distinct
+    // timestamps. ctid is retained as a defensive tiebreaker — it's
+    // Postgres's physical row identifier, monotonic for sequential
+    // INSERTs on the same backend within a txn. The hash chain
     // (prev_hash → curr_hash) encodes canonical event order in
     // production; this ordering is purely for test row-recovery.
     const result = await tx.execute<AuditEventRow>(
-      sql`SELECT action, occurred_at, payload FROM audit_event
+      sql`SELECT action, resource, occurred_at, payload FROM audit_event
             WHERE tenant_id = ${tenantId}
             ORDER BY occurred_at ASC, ctid ASC`,
     );

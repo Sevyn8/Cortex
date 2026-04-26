@@ -49,6 +49,18 @@ import { bindTenantToDbSession } from './db-session.js';
 import { TenantNotFoundError, TenantStatusError, TenantValidationError } from './errors.js';
 import type { TenantStatus, TenantTier } from './types.js';
 
+// Note on the dynamic `@cortex/secrets` import inside `create()`:
+// Static `import { buildKeyResourceName } from '@cortex/secrets'` would
+// close a module-load cycle:
+//   observability → tenant-context → secrets → observability
+// because @cortex/secrets/src/audit.ts top-level instantiates a
+// secrets-audit emitter via @cortex/observability's createLogger. The
+// cycle's pre-existing first leg (observability → tenant-context) is
+// tracked in roadmap §4.13; Slice B's secrets dep extends it. Mirroring
+// P0.10 emit.ts's break, we resolve `@cortex/secrets` lazily on first
+// `create()` call — by which time every package's exports are
+// initialized. Cost is one cached `import()` per process; negligible.
+
 // ─────────────────────────────────────────────────────────────────────
 // Validation schemas
 // ─────────────────────────────────────────────────────────────────────
@@ -163,17 +175,26 @@ const msNow = sql`date_trunc('millisecond', now())`;
 
 /**
  * Create a new tenant. The new row is inserted with status=PROVISIONING
- * (DB default). If `initialConfig` is supplied, a v=1 row in
- * `tenant_config_version` is also inserted, and a second audit event
- * (`TENANT_CONFIG_VERSION_CREATED`) is emitted in the same transaction.
+ * (DB default). A `tenant_kms_key` substrate row is provisioned in the
+ * same transaction per ADR-INFRA-007 Decision 1; its
+ * `kms_key_resource_name` points at the env's `cortex-general-key` in
+ * Phase 1 (F02 swaps to a real per-tenant key without changing envelope
+ * format). If `initialConfig` is supplied, a v=1 row in
+ * `tenant_config_version` is also inserted.
  *
  * Transaction sequence:
  *   1. INSERT into `tenant` (no RLS — control plane).
- *   2. Bind `app.tenant_id` to the new id (so audit RLS write policy
- *      passes).
- *   3. (optional) INSERT into `tenant_config_version` v=1.
- *   4. Emit `TENANT_CREATED` audit event.
- *   5. (optional) Emit `TENANT_CONFIG_VERSION_CREATED` audit event.
+ *   2. Bind `app.tenant_id` to the new id (so RLS write policies on
+ *      `audit_event` and `tenant_kms_key` pass).
+ *   3. Emit `TENANT_CREATED` audit event (parent lifecycle event;
+ *      `after_state` captures the tenant row pre-substrate-binding).
+ *   4. INSERT into `tenant_kms_key` (resolves env's KMS key resource
+ *      name via `buildKeyResourceName('cortex-general-key')`).
+ *   5. Emit `TENANT_KMS_KEY_BOUND` audit event (sub-resource event,
+ *      ordered AFTER `TENANT_CREATED` so audit-chain readers see the
+ *      parent before the child substrate row).
+ *   6. (optional) INSERT into `tenant_config_version` v=1.
+ *   7. (optional) Emit `TENANT_CONFIG_VERSION_CREATED` audit event.
  *
  * RLS: this method does NOT require caller-side tenant context to be
  * set. It binds the DB session itself, mid-transaction.
@@ -206,19 +227,6 @@ async function create(
 
     await bindTenantToDbSession(tx, row.id);
 
-    let configVersionId: string | undefined;
-    if (parsedInput.initialConfig !== undefined) {
-      const configRows = await tx
-        .insert(tenantConfigVersion)
-        .values({
-          tenant_id: row.id,
-          version_number: 1,
-          config_json: parsedInput.initialConfig,
-        })
-        .returning();
-      configVersionId = configRows[0]?.id;
-    }
-
     await emitAuditEvent(tx, {
       tenantId: row.id,
       actorType: parsedActor.type,
@@ -235,23 +243,61 @@ async function create(
       },
     });
 
-    if (configVersionId !== undefined) {
-      await emitAuditEvent(tx, {
-        tenantId: row.id,
-        actorType: parsedActor.type,
-        actorId: parsedActor.id,
-        ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
-        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CONFIG_VERSION_CREATED'),
-        verb: 'CREATE',
-        resource: `tenant_config_version:${configVersionId}`,
-        // initialConfig comes through as `Record<string, unknown>` per the
-        // input schema; the audit layer's zod re-validates JSON-safety at
-        // parse time, so the cast is safe modulo runtime caller-honor.
-        after_state: {
+    // Provision tenant_kms_key row per ADR-INFRA-007 Decision 1.
+    // Phase 1: kms_key_resource_name points at env's cortex-general-key.
+    // F02 swaps to real per-tenant keys; envelope format unchanged.
+    const { buildKeyResourceName } = (await import('@cortex/secrets')) as {
+      buildKeyResourceName: (keyId: string) => string;
+    };
+    const kmsKeyResourceName = buildKeyResourceName('cortex-general-key');
+    await tx.execute(sql`
+      INSERT INTO tenant_kms_key (tenant_id, kms_key_resource_name)
+      VALUES (${row.id}, ${kmsKeyResourceName})
+    `);
+
+    await emitAuditEvent(tx, {
+      tenantId: row.id,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_KMS_KEY_BOUND'),
+      verb: 'CREATE',
+      resource: `tenant_kms_key:${row.id}`,
+      after_state: {
+        kms_key_resource_name: kmsKeyResourceName,
+      },
+    });
+
+    if (parsedInput.initialConfig !== undefined) {
+      const configRows = await tx
+        .insert(tenantConfigVersion)
+        .values({
+          tenant_id: row.id,
           version_number: 1,
-          config: (parsedInput.initialConfig ?? {}) as Record<string, never>,
-        },
-      });
+          config_json: parsedInput.initialConfig,
+        })
+        .returning();
+      const configVersionId = configRows[0]?.id;
+      if (configVersionId !== undefined) {
+        await emitAuditEvent(tx, {
+          tenantId: row.id,
+          actorType: parsedActor.type,
+          actorId: parsedActor.id,
+          ...(parsedActor.description !== undefined && {
+            actorDescription: parsedActor.description,
+          }),
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CONFIG_VERSION_CREATED'),
+          verb: 'CREATE',
+          resource: `tenant_config_version:${configVersionId}`,
+          // initialConfig comes through as `Record<string, unknown>` per the
+          // input schema; the audit layer's zod re-validates JSON-safety at
+          // parse time, so the cast is safe modulo runtime caller-honor.
+          after_state: {
+            version_number: 1,
+            config: (parsedInput.initialConfig ?? {}) as Record<string, never>,
+          },
+        });
+      }
     }
 
     return row;

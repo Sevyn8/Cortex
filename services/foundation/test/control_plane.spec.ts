@@ -223,10 +223,9 @@ describe('control-plane tables (migration 0007)', () => {
   });
 
   it('UNIQUE on tenant_kms_key.tenant_id is declared in the schema', async () => {
-    // tenant_kms_key has a SELECT-only RLS policy by design (writes flow
-    // through privileged F02 lifecycle paths). test_user's INSERT is
-    // denied — so verify the UNIQUE constraint exists via the catalog
-    // rather than by attempting an INSERT.
+    // Verify the UNIQUE constraint exists via the catalog. (Migration
+    // 0009 widened the policy from SELECT-only to FOR ALL, but the
+    // catalog-level check remains the authoritative shape assertion.)
     const { rows } = await pool.query<{
       conname: string;
       contype: string;
@@ -245,6 +244,34 @@ describe('control-plane tables (migration 0007)', () => {
       (r) => r.attnames.length === 1 && r.attnames[0] === 'tenant_id',
     );
     expect(tenantIdUnique).toBeDefined();
+  });
+
+  it('tenant_kms_key permits INSERT/SELECT under tenant binding (migration 0009)', async () => {
+    const tenantId = randomUUID();
+    await pool.query(
+      `INSERT INTO tenant (id, external_id, display_name, tier)
+         VALUES ($1, $2, 'KMS Bind Test', 'STANDARD')`,
+      [tenantId, `cp-test-${RUN_TAG}-kms-${tenantId.slice(0, 8)}`],
+    );
+    try {
+      await withBoundClient(pool, tenantId, async (client) => {
+        await client.query(
+          `INSERT INTO tenant_kms_key (tenant_id, kms_key_resource_name) VALUES ($1, $2)`,
+          [tenantId, 'projects/test/locations/asia-south1/keyRings/r/cryptoKeys/k'],
+        );
+        const r = await client.query<{ kms_key_resource_name: string }>(
+          `SELECT kms_key_resource_name FROM tenant_kms_key WHERE tenant_id = $1`,
+          [tenantId],
+        );
+        expect(r.rows).toHaveLength(1);
+        expect(r.rows[0]?.kms_key_resource_name).toContain('cryptoKeys/k');
+      });
+    } finally {
+      await withBoundClient(pool, tenantId, async (client) => {
+        await client.query(`DELETE FROM tenant_kms_key WHERE tenant_id = $1`, [tenantId]);
+      });
+      await pool.query(`DELETE FROM tenant WHERE id = $1`, [tenantId]);
+    }
   });
 
   it('CHECK constraints reject invalid tier and status values (23514)', async () => {

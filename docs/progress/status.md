@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-26 (P0.10 `@cortex/audit-events` library shipped — Phase 0 closes; F01 Slices B/C next)
+Last updated: 2026-04-26 (F01 Slice B encryption + blob isolation shipped — dev applied; staging + prod queued for separate approval cycles)
 
 ## Pre-flight
 
@@ -42,7 +42,8 @@ Last updated: 2026-04-26 (P0.10 `@cortex/audit-events` library shipped — Phase
 
 - [ ] P1.1 F01 Multi-Tenancy ← IN PROGRESS
   - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
-  - [ ] Slice B — Encryption + GCS isolation
+  - [x] Slice B — Encryption + GCS isolation (2026-04-26, commit `<pending sub-phase 10>`)
+    - dev applied; staging + prod queued for separate cycles
   - [ ] Slice C — Quotas + Compute isolation
 - [ ] P1.2 F02 Tenant Lifecycle
 - [ ] P1.3 F03 Temporal Data Engine

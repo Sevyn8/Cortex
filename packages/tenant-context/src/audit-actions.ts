@@ -20,6 +20,7 @@ export const TENANT_AUDIT_ACTIONS = registerAuditActions([
   { name: 'TENANT_UPDATED', verb: 'UPDATE' },
   { name: 'TENANT_STATUS_CHANGED', verb: 'UPDATE' },
   { name: 'TENANT_CONFIG_VERSION_CREATED', verb: 'CREATE' },
+  { name: 'TENANT_KMS_KEY_BOUND', verb: 'CREATE' },
 ] as const);
 
 /**

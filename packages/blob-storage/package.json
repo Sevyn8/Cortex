@@ -1,10 +1,16 @@
 {
-  "name": "@cortex/tenant-context",
+  "name": "@cortex/blob-storage",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
@@ -12,15 +18,13 @@
   },
   "dependencies": {
     "@cortex/audit-events": "workspace:*",
-    "@cortex/canonical-schema": "workspace:*",
-    "@cortex/secrets": "workspace:*",
-    "drizzle-orm": "catalog:",
-    "pg": "catalog:",
+    "@google-cloud/storage": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "vitest": "catalog:",
-    "@types/pg": "catalog:",
-    "@types/node": "^22.0.0"
+    "@cortex/observability": "workspace:*",
+    "@cortex/tenant-context": "workspace:*",
+    "@types/node": "^22.0.0",
+    "vitest": "catalog:"
   }
 }

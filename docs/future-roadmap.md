@@ -189,6 +189,17 @@ Updated whenever a deferral is added or revisited.
 - **References:** ADR-INFRA-003 §Firewall posture, `infra/terraform/modules/networking/main.tf:178` (`TODO(P11.x)`).
 - **Owner phase:** P11.x Display Data hardening pass, or operator-driven if earlier trigger.
 
+### 2.5 Migrate inline `@google-cloud/*` deps to pnpm catalog
+
+- **Item:** `@google-cloud/secret-manager` and `@google-cloud/kms` are inline-pinned in `packages/secrets/package.json`; `@google-cloud/storage` is in the pnpm-workspace catalog (newer convention, F01 Slice B). The convention drift is benign but inconsistent.
+- **Current state:** Two patterns coexist — inline major-version pins (`"^5.6.0"`, `"^4.5.0"`) for older deps, `"catalog:"` refs for newer ones.
+- **Future options:**
+  1. Add `@google-cloud/secret-manager` and `@google-cloud/kms` to the catalog at the currently-resolved versions; flip both to `"catalog:"` in `packages/secrets/package.json`. Single source of truth across the workspace.
+  2. Leave as-is permanently — pnpm doesn't enforce uniformity.
+- **Triggers:** Any dependency update cycle that touches `@google-cloud/*` packages, OR a third-party @google-cloud consumer arrives in the workspace and needs version-coupling with the existing two.
+- **References:** `pnpm-workspace.yaml`, `packages/secrets/package.json`, `packages/blob-storage/package.json` (catalog precedent), F01 Slice B sub-phase 7 finding.
+- **Owner phase:** Operator-driven; low priority.
+
 ---
 
 ## 3. Regulatory / contractual triggers
@@ -341,11 +352,35 @@ Updated whenever a deferral is added or revisited.
 ### 4.13 Decouple `@cortex/observability`'s `defaultContextProvider` from `@cortex/tenant-context`
 
 - **Item:** Remove the `getTenantId` import from `@cortex/observability/src/context-provider.ts` and the `@cortex/tenant-context` workspace dep, leaving observability with `stubContextProvider` semantics by default
-- **Current state:** `defaultContextProvider` imports `getTenantId` from `@cortex/tenant-context` at module-load time. This created a load-order cycle once `@cortex/tenant-context` began consuming `@cortex/audit-events` in P0.10 sub-phase 7: `tenant-context → audit-events → observability → tenant-context`. The cycle is currently broken on the `audit-events → observability` edge — `audit-events/src/emit.ts` imports `Logger` type-only and resolves `createLogger` via dynamic `await import('@cortex/observability')` on first WARN emission. Works but indirect; the architecturally cleaner fix is to remove the reverse-direction observability → tenant-context edge entirely.
+- **Current state:** `defaultContextProvider` imports `getTenantId` from `@cortex/tenant-context` at module-load time. This created a load-order cycle once `@cortex/tenant-context` began consuming `@cortex/audit-events` in P0.10 sub-phase 7: `tenant-context → audit-events → observability → tenant-context`. The cycle is currently broken on the `audit-events → observability` edge — `audit-events/src/emit.ts` imports `Logger` type-only and resolves `createLogger` via dynamic `await import('@cortex/observability')` on first WARN emission. F01 Slice B sub-phase 2 expanded the cycle topology by introducing a second triangle: `observability → tenant-context → secrets → observability` (closed because `secrets/src/audit.ts` instantiates a logger at top-level via `createLogger`). The same dynamic-import pattern resolves it — `tenant-context/src/tenants.ts:create()` imports `buildKeyResourceName` from `@cortex/secrets` lazily on first call. Works but indirect; the architecturally cleaner fix is to remove the reverse-direction observability → tenant-context edge entirely.
 - **Future options:** (a) Rewrite `defaultContextProvider` to stub `getTenantId` (observability has zero dep on tenant-context); ship a `tenantContextProvider` from `@cortex/tenant-context` that callers spread into their own provider when they want tenant-id auto-injection. (b) Introduce a thin bridge package (`@cortex/observability-tenant-bridge`) that owns the wiring, so neither end has the edge. (c) Late-binding via a setter (`registerTenantIdSource(fn)`) called by tenant-context at its own init — runtime side effect, but breaks the static import.
-- **Triggers:** First time someone refactors observability and trips on the cycle, OR a future cross-package test fails because of it. The dynamic-import workaround is fragile to removal of `await import()` — any consumer who tries to make `createAuditEventEmitter` synchronous-only would re-introduce the cycle.
-- **References:** `packages/observability/src/context-provider.ts` (the offending import), `packages/audit-events/src/emit.ts` (current cycle-break via lazy logger), P0.10 sub-phase 7 finding.
+- **Triggers:** First time someone refactors observability and trips on the cycle, OR a future cross-package test fails because of it. The dynamic-import workaround is fragile to removal of `await import()` — any consumer who tries to make `createAuditEventEmitter` or `tenants.create` synchronous-only would re-introduce the cycle. **Each new package that consumes observability AND is consumed by tenant-context (directly or transitively) re-asserts a fresh cycle edge; F02's per-tenant key creation path is likely to add another.**
+- **References:** `packages/observability/src/context-provider.ts` (the offending import), `packages/audit-events/src/emit.ts` (Decision 11 cycle break), `packages/tenant-context/src/tenants.ts` (Slice B sub-phase 2 cycle break in `create()`), P0.10 sub-phase 7 finding, F01 Slice B sub-phase 2 finding.
 - **Owner phase:** First observability refactor, or first cross-package test that surfaces a cycle regression.
+
+### 4.14 AC01 swap of hardcoded service actor in `@cortex/encryption`
+
+- **Item:** Replace the hardcoded `actorId='cortex-encryption'` (with `actorType='service'`) on `PII_ENCRYPTED` / `PII_DECRYPTED` audit emissions with a request-scoped actor resolved from async-local context.
+- **Current state:** `encryptForTenant` and `decryptForTenant` emit `audit_event` rows with `actorType='service'`, `actorId='cortex-encryption'`. Useful for "which subsystem touched this PII" forensics; less useful for "which user triggered the encryption" attribution. The higher-level audit (e.g., `TENANT_UPDATED` from a request handler) carries user-attribution today; encryption-layer events do not.
+- **Future options:**
+  1. Add an optional `actor` field to `EncryptParams` / `DecryptParams`; explicit caller supply.
+  2. Wire AC01's request-scoped actor resolver via async-local — encryption library reads from the store on each emit.
+  3. Both — caller-supplied wins; async-local fallback when not provided.
+- **Triggers:** AC01 (P2.1) ships its actor resolver.
+- **References:** `packages/encryption/src/encrypt.ts` (the hardcoded site), F01 Slice B sub-phase 4 finding, `docs/architecture/encryption-blob-storage-convention.md` "Audit emission for encryption operations".
+- **Owner phase:** AC01 (P2.1).
+
+### 4.15 Redundant `getKeyForTenant` consult in `@cortex/encryption`
+
+- **Item:** `encryptForTenant` calls `getKeyForTenant(tenantId)` explicitly to populate the audit event's `key_resource_name` field, AND `envelope.encrypt` calls `buildKeyResourceName('cortex-general-key')` internally — two lookups per encrypt op. Each `getKeyForTenant` call also emits a `[SECRETS-AUDIT]` operational pino log, doubling the operational log volume per encrypt.
+- **Current state:** Redundant in Phase 1 (both deterministic to the same env key). When F02 swaps `getKeyForTenant` to query `tenant_kms_key` per tenant, the redundancy becomes more visible (per-tenant lookup latency × 2).
+- **Future options:**
+  1. `envelope.encrypt` accepts a pre-resolved `keyResourceName`; `@cortex/encryption` resolves once and threads it through.
+  2. `envelope.encrypt` returns the resolved key in its result tuple; `@cortex/encryption` reads from the result.
+  3. Merge the lookup paths in F02 alongside the resolver swap.
+- **Triggers:** F02 (P1.2) swaps `getKeyForTenant` to per-tenant resolution.
+- **References:** `packages/encryption/src/encrypt.ts` (the duplicate consult), `packages/secrets/src/kms.ts` (the internal call site), F01 Slice B sub-phase 4 finding.
+- **Owner phase:** F02 (P1.2).
 
 ---
 

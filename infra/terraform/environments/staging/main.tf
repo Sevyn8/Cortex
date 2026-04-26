@@ -85,6 +85,11 @@ data "google_kms_crypto_key" "secrets" {
   key_ring = data.google_kms_key_ring.cortex.id
 }
 
+data "google_kms_crypto_key" "gcs" {
+  name     = "cortex-gcs-key"
+  key_ring = data.google_kms_key_ring.cortex.id
+}
+
 module "cloud_sql" {
   source = "../../modules/cloud-sql"
 
@@ -180,6 +185,23 @@ module "secret_super_admin_initial" {
     environment = "staging"
     prompt      = "p0-9"
   }
+
+  depends_on = [module.project_baseline]
+}
+
+# ─── Tenant-data bucket (F01 Slice B) ───────────────────────────────────────
+# Per F01 §1.5 + slice-B planning Decision 4: shared bucket per env,
+# tenant prefix isolation enforced application-side via @cortex/blob-storage.
+# Bucket-per-tenant for ENTERPRISE deferred to F02 (ADR-INFRA-007).
+module "tenant_data_bucket" {
+  source = "../../modules/tenant-data-bucket"
+
+  project_id     = var.project_id
+  environment    = "staging"
+  region         = var.region
+  gcs_kms_key_id = data.google_kms_crypto_key.gcs.id
+
+  common_labels = merge(var.common_labels, { prompt = "p1-1-slice-b" })
 
   depends_on = [module.project_baseline]
 }

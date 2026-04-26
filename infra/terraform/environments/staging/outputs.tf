@@ -67,3 +67,13 @@ output "cloud_sql_database_name" {
   description = "Default application database on the staging instance (cortex)."
   value       = module.cloud_sql.database_name
 }
+
+output "tenant_data_bucket_name" {
+  description = "Name of the staging tenant-data bucket (F01 Slice B)."
+  value       = module.tenant_data_bucket.bucket_name
+}
+
+output "tenant_data_runtime_sa_email" {
+  description = "Runtime SA email — services impersonate this for tenant blob I/O on the staging bucket."
+  value       = module.tenant_data_bucket.runtime_service_account_email
+}

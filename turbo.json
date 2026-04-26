@@ -19,7 +19,16 @@
     "test": {
       "dependsOn": ["^build"],
       "outputs": ["coverage/**"],
-      "env": ["PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"]
+      "env": [
+        "PGHOST",
+        "PGPORT",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGDATABASE",
+        "GCP_PROJECT_ID",
+        "CORTEX_KMS_LOCATION",
+        "CORTEX_KMS_KEYRING"
+      ]
     },
     "clean": {
       "cache": false

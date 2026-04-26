@@ -115,7 +115,34 @@ Updated whenever a deferral is added or revisited.
 - **Future options:** (a) Rate-limit at the observability HTTP middleware boundary, keyed on `tenant_id` from the async-local store; (b) Cloud Logging exclusion filter at sink level; (c) tenant-aware logger child with a `child.flush` rate gate.
 - **Triggers:** First incident where a single tenant's emission rate visibly inflates ingestion cost or competes for Cloud Logging API quota; or routinely >1k log lines/sec from a single tenant.
 - **References:** `packages/observability/src/logger.ts`.
-- **Owner phase:** P0.10 audit-events sub-phase or first F-series service hitting the issue, whichever lands first.
+- **Owner phase:** First F-series service hitting the issue.
+
+### 1.9 Audit payload size enforcement
+
+- **Item:** Hard cap on `audit_event.payload` size (currently soft 64 KB WARN-only)
+- **Current state:** `@cortex/audit-events` logs `WARN` via `@cortex/observability` when canonicalized payload exceeds 64 KB (Decision 2 of P0.10 planning doc). No throw, no truncation. Threshold is a heuristic; observed distribution unknown until F-series consumers emit at volume.
+- **Future options:** (a) Hard cap with `AuditEventValidationError` at the library boundary; (b) automatic truncation with a `payload_truncated: true` flag; (c) separate `audit_event_payload_overflow` table for large blobs, FK from `audit_event`; (d) raise the threshold based on observed P95.
+- **Triggers:** Sustained WARN rate exceeding ~1% of audit emissions over a month, OR Cloud Logging row-size pressure on `audit_event`, OR a single tenant exceeds 64 KB on >10% of emissions.
+- **References:** `docs/planning/p0-10-audit-events-scope.md` Decision 2 (authoritative source for the 64 KB threshold — update this entry if the threshold changes there), `packages/audit-events/src/` (when implemented).
+- **Owner phase:** Operator-driven post-F-series; revisit at first observed pressure signal.
+
+### 1.10 p09-repro `__drizzle_migrations` tracking backfill
+
+- **Item:** Reconcile p09-repro's empty `__drizzle_migrations` tracking table with the migrations actually applied via `psql -f`
+- **Current state:** p09-repro is psql-bootstrapped — F01 Slice A and P0.10 migrations were applied directly via `psql -f` and the `__drizzle_migrations` table is empty (0 rows). Production envs (dev / staging / prod) go through `make db-migrate-{env}` which uses drizzle-kit and tracks in this table. Result: dev p09-repro and production-apply paths diverge silently. New migrations work in both, but any future operation that depends on tracked state (replay, baseline) would fail differently across environments.
+- **Future options:** (a) Backfill `__drizzle_migrations` rows in p09-repro's bootstrap script with synthetic hashes matching what drizzle-kit would write; (b) Migrate p09-repro to drizzle-kit-driven apply (requires reset + replay of all migrations); (c) Document the divergence and accept it for dev convenience.
+- **Triggers:** First operator action that depends on tracked-state alignment between dev and production (e.g., a forensic replay of migration order, or a baseline-from-existing-DB workflow). Or any new contributor confused by `pnpm db:migrate` failing locally while succeeding in CI.
+- **References:** `services/foundation/migrations/meta/_journal.json`, `drizzle.config.ts`, `Makefile` (db-migrate-\* targets), P0.10 sub-phase 2 finding #1.
+- **Owner phase:** First operator-driven trigger.
+
+### 1.11 Unicode-literal hygiene in test fixtures
+
+- **Item:** Convention for using escape-form (`\uXXXX`) instead of bare literals when test fixtures depend on specific Unicode normalization forms
+- **Current state:** P0.10 sub-phase 6.4 surfaced silent NFC normalization of bare combining-character literals (`'café'` decomposed → composed) by the editor / write pipeline. The fix is escape sequences (`'cafe\u0301'` for decomposed, `'caf\u00e9'` for composed) — pure ASCII bytes that JavaScript parses to the intended codepoints at runtime, immune to source-file normalization. `packages/audit-events/test/canonicalize.spec.ts` documents the pattern; `schemas.spec.ts` migrated to match (sub-phase 6.4 follow-up).
+- **Future options:** (a) Add an ESLint rule banning bare combining characters in `*.spec.ts` files; (b) Document the convention in CLAUDE.md test-conventions section; (c) Convert any future test that depends on specific normalization forms to escape sequences. The bare-literal form is fine for tests that don't depend on the specific normalization (most don't).
+- **Triggers:** Any future package adding NFC-dependent tests (Indian-script payloads, accented text validation, hash-determinism asserts). When AC02 / future modules emit logs with international content, this comes up.
+- **References:** `packages/audit-events/test/canonicalize.spec.ts` (canonical pattern), `packages/audit-events/test/schemas.spec.ts` (migrated reference).
+- **Owner phase:** Convention captured here; future test authors apply where applicable.
 
 ---
 
@@ -292,6 +319,33 @@ Updated whenever a deferral is added or revisited.
 - **Triggers:** AC01 implementation, or any future package where tests in _other_ packages need a helper.
 - **References:** `packages/observability/package.json` (`exports` map), `packages/observability/src/test-utils.ts`, P0.6 Phase 2.
 - **Owner phase:** AC01 (P2.1) and any subsequent package with cross-package test-helper needs.
+
+### 4.11 `audit_event` indexes for SCR-22 elevated-review queries
+
+- **Item:** Indexes on `audit_event` to support SCR-22 Compliance Operations elevated-review filters (per spec SCR-20-FR-012)
+- **Current state:** Migration 0004 ships a single index `audit_event_tenant_time` on `(tenant_id, occurred_at DESC, event_id)` — sufficient for "recent events for tenant" lookups. SCR-22 queries (permission grants to high-privilege roles, cross-tenant access flagged by SCR-24, consent withdrawals not followed by successful cascade, large export operations, audit-source disable events) need additional indexes whose shape depends on the actual filter set. Migration 0008 (P0.10) deliberately does NOT add indexes — single-purpose CHECK extension only.
+- **Future options:** Composite indexes on `(action, tenant_id, occurred_at)` for action-scoped scans; partial indexes `WHERE action IN (...)` for the elevated-review category list; expression indexes on `payload->>'severity'` for severity-flagged scans; `action_verb` column promotion (per ADR-AU-001 Consequences) plus index. Choice depends on which SCR-22 filter combinations dominate.
+- **Triggers:** SCR-22 build prompt active OR query observability shows sequential scans of `audit_event` with `tenant_id` filter alone exceeding ~100ms P95.
+- **References:** Cortex v2.2 Spec §SCR-20-FR-012, §SCR-22, ADR-DB-003, ADR-AU-001 Consequences (verb-query CASE), migration `services/foundation/migrations/0004_audit_chain.sql`, `docs/planning/p0-10-audit-events-scope.md` Decision 6 / Sub-phase 2.
+- **Owner phase:** SCR-22 (Phase 2+).
+
+### 4.12 Pub/Sub fan-out for downstream audit consumers
+
+- **Item:** Read-only async fan-out from `audit_event` to Pub/Sub for analytics / SIEM / BigQuery consumers
+- **Current state:** P0.10 ships direct DB INSERT only (per ADR-AU-001 Decision). No async fan-out — real-time analytics and SIEM consumers cannot subscribe to audit events. The synchronous DB write is the source of truth and remains the chain of custody.
+- **Future options:** (a) Postgres LISTEN/NOTIFY trigger publishing to Pub/Sub; (b) Logical-decoding consumer (Debezium-style) reading WAL and publishing; (c) Scheduled batch export from `audit_event` to BigQuery (lower latency cost). All paths are READ-ONLY relative to `audit_event` — they republish committed rows; they do not write back. This is critical for chain integrity.
+- **Triggers:** First non-DB consumer materializes — likely SCR-20 dashboard real-time view, A07 BigQuery Decision Log mirror, or a Phase 5 SIEM integration. Pick the path based on consumer's latency needs and write-volume.
+- **References:** ADR-AU-001 Decision (direct INSERT) + Alternatives considered (Pub/Sub-only, dual-write, LISTEN/NOTIFY); P0.10 planning doc Decision 1; spec SCR-20-FR-002 (event coverage), A07-FR-002 (BigQuery Decision Log, 7-year retention), O04-FR-009 (Action Audit Log, 7-year retention).
+- **Owner phase:** First non-DB consumer (SCR-20 / A07 / SIEM).
+
+### 4.13 Decouple `@cortex/observability`'s `defaultContextProvider` from `@cortex/tenant-context`
+
+- **Item:** Remove the `getTenantId` import from `@cortex/observability/src/context-provider.ts` and the `@cortex/tenant-context` workspace dep, leaving observability with `stubContextProvider` semantics by default
+- **Current state:** `defaultContextProvider` imports `getTenantId` from `@cortex/tenant-context` at module-load time. This created a load-order cycle once `@cortex/tenant-context` began consuming `@cortex/audit-events` in P0.10 sub-phase 7: `tenant-context → audit-events → observability → tenant-context`. The cycle is currently broken on the `audit-events → observability` edge — `audit-events/src/emit.ts` imports `Logger` type-only and resolves `createLogger` via dynamic `await import('@cortex/observability')` on first WARN emission. Works but indirect; the architecturally cleaner fix is to remove the reverse-direction observability → tenant-context edge entirely.
+- **Future options:** (a) Rewrite `defaultContextProvider` to stub `getTenantId` (observability has zero dep on tenant-context); ship a `tenantContextProvider` from `@cortex/tenant-context` that callers spread into their own provider when they want tenant-id auto-injection. (b) Introduce a thin bridge package (`@cortex/observability-tenant-bridge`) that owns the wiring, so neither end has the edge. (c) Late-binding via a setter (`registerTenantIdSource(fn)`) called by tenant-context at its own init — runtime side effect, but breaks the static import.
+- **Triggers:** First time someone refactors observability and trips on the cycle, OR a future cross-package test fails because of it. The dynamic-import workaround is fragile to removal of `await import()` — any consumer who tries to make `createAuditEventEmitter` synchronous-only would re-introduce the cycle.
+- **References:** `packages/observability/src/context-provider.ts` (the offending import), `packages/audit-events/src/emit.ts` (current cycle-break via lazy logger), P0.10 sub-phase 7 finding.
+- **Owner phase:** First observability refactor, or first cross-package test that surfaces a cycle regression.
 
 ---
 

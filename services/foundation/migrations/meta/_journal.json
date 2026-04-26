@@ -50,6 +50,13 @@
       "when": 1777108613546,
       "tag": "0007_control_plane_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777181493185,
+      "tag": "0008_audit_event_actor_type_agent",
+      "breakpoints": true
     }
   ]
 }

@@ -110,6 +110,37 @@ importers:
 
   packages/api-client: {}
 
+  packages/audit-events:
+    dependencies:
+      '@cortex/canonical-schema':
+        specifier: workspace:*
+        version: link:../canonical-schema
+      '@cortex/observability':
+        specifier: workspace:*
+        version: link:../observability
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.37.0(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.20.0)
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      '@cortex/tenant-context':
+        specifier: workspace:*
+        version: link:../tenant-context
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
+      vitest:
+        specifier: 'catalog:'
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/auth: {}
 
   packages/canonical-schema:
@@ -202,6 +233,9 @@ importers:
 
   packages/tenant-context:
     dependencies:
+      '@cortex/audit-events':
+        specifier: workspace:*
+        version: link:../audit-events
       '@cortex/canonical-schema':
         specifier: workspace:*
         version: link:../canonical-schema

@@ -44,12 +44,8 @@ export interface TenantContextSnapshot {
   tenantId: string;
 }
 
-/**
- * Lifecycle action names emitted as audit_event.action. Column-aligned with
- * migration 0004 schema.
- */
-export type AuditAction =
-  | 'TENANT_CREATED'
-  | 'TENANT_UPDATED'
-  | 'TENANT_STATUS_CHANGED'
-  | 'TENANT_CONFIG_VERSION_CREATED';
+// `AuditAction` literal-union retired in P0.10 sub-phase 7. The
+// canonical tenant-lifecycle action set is now `TENANT_AUDIT_ACTIONS`
+// in `./audit.js` (registered via `@cortex/audit-events`); the
+// literal-union name type is `TenantAuditAction = (typeof
+// TENANT_AUDIT_ACTIONS)[number]['name']`.

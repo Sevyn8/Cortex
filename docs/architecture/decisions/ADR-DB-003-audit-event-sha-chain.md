@@ -189,6 +189,7 @@ Specifically:
 ## Implementation notes
 
 - **Concurrent-write race accepted.** Two audits for the same tenant committing in overlapping transactions can fork the chain. Verification (when built) detects; prevention is Phase-B-deferred. Revisit trigger: when any tenant's audit write rate exceeds ~10/sec sustained, OR when SCR-20 ships and verification surfaces forks.
+- **Same-transaction sequential INSERTs (broader case of the fork failure).** The "concurrent-write race" framing above describes two transactions racing for the chain tail. A broader failure case exists: two sequential INSERTs within a single transaction sharing `now()` as their `occurred_at` default value. The trigger's tail-lookup `ORDER BY occurred_at DESC, event_id DESC` ties on `occurred_at` and selects by UUID byte order — not insertion order — producing a fork. Both same-txn and cross-txn forks share the same root cause (chain-tail ambiguity under timestamp ties) and the same eventual mitigation paths (per-tenant advisory lock, partial unique index on `(tenant_id, prev_hash)`, sequence column). The `@cortex/audit-events` library (P0.10) addresses the same-txn case immediately by stamping `clock_timestamp()` on every INSERT (per ADR-AU-001 §Rationale + planning doc Decision 11). Cross-transaction races remain on the same revisit trigger as before. Reference: planning doc Decision 11, ADR-AU-001 §Rationale.
 - **`verify_chain(tenant_id uuid)` deferred.** Shape when added:
   ```sql
   -- Future: cortex.verify_audit_chain(p_tenant_id uuid)

@@ -91,10 +91,12 @@ describe('tenants CRUD', () => {
       const events = await fetchAuditEvents(db, created.id);
       expect(events.map((e) => e.action)).toEqual(['TENANT_CREATED']);
       expect(events[0]?.payload).toMatchObject({
-        external_id: externalId,
-        display_name: 'Happy Path',
-        tier: 'STANDARD',
-        status: 'PROVISIONING',
+        after_state: {
+          external_id: externalId,
+          display_name: 'Happy Path',
+          tier: 'STANDARD',
+          status: 'PROVISIONING',
+        },
       });
     });
 
@@ -118,8 +120,10 @@ describe('tenants CRUD', () => {
         'TENANT_CONFIG_VERSION_CREATED',
       ]);
       expect(events[1]?.payload).toMatchObject({
-        version_number: 1,
-        config: { feature_flags: { x: true } },
+        after_state: {
+          version_number: 1,
+          config: { feature_flags: { x: true } },
+        },
       });
 
       // Both events landed in the same per-tenant chain — verify config
@@ -385,8 +389,8 @@ describe('tenants CRUD', () => {
       const updateEvent = events.find((e) => e.action === 'TENANT_UPDATED');
       expect(updateEvent).toBeDefined();
       expect(updateEvent?.payload).toMatchObject({
-        changes: { displayName: 'New Name' },
-        before: { displayName: 'Original Name' },
+        before_state: { displayName: 'Original Name' },
+        after_state: { displayName: 'New Name' },
       });
     });
 
@@ -449,8 +453,8 @@ describe('tenants CRUD', () => {
       const events = await fetchAuditEvents(db, created.id);
       const statusEvent = events.find((e) => e.action === 'TENANT_STATUS_CHANGED');
       expect(statusEvent?.payload).toMatchObject({
-        from: 'PROVISIONING',
-        to: 'ACTIVE',
+        before_state: { status: 'PROVISIONING' },
+        after_state: { status: 'ACTIVE' },
       });
     });
 

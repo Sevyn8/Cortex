@@ -9,13 +9,7 @@ export {
 export type { TenantContextErrorCode } from './errors.js';
 
 // Public types
-export type {
-  AuditAction,
-  TenantContextSnapshot,
-  TenantStatus,
-  TenantSummary,
-  TenantTier,
-} from './types.js';
+export type { TenantContextSnapshot, TenantStatus, TenantSummary, TenantTier } from './types.js';
 
 // Async-local context
 export {
@@ -28,9 +22,10 @@ export {
 // DB session binding
 export { bindTenantToDbSession, ensureBoundToTenant } from './db-session.js';
 
-// Audit emission
+// Audit emission — thin facade over @cortex/audit-events.
 export { emitAuditEvent } from './audit.js';
-export type { AuditParams } from './audit.js';
+export { TENANT_AUDIT_ACTIONS } from './audit-actions.js';
+export type { TenantAuditAction } from './audit-actions.js';
 
 // Tenant CRUD
 export { tenants } from './tenants.js';

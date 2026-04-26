@@ -42,6 +42,8 @@ import { count, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
 import { tenant, tenantConfigVersion, type Tenant } from '@cortex/canonical-schema';
+import { getActionByName } from '@cortex/audit-events';
+import { TENANT_AUDIT_ACTIONS } from './audit-actions.js';
 import { emitAuditEvent } from './audit.js';
 import { bindTenantToDbSession } from './db-session.js';
 import { TenantNotFoundError, TenantStatusError, TenantValidationError } from './errors.js';
@@ -221,10 +223,11 @@ async function create(
       tenantId: row.id,
       actorType: parsedActor.type,
       actorId: parsedActor.id,
-      actorDescription: parsedActor.description,
-      action: 'TENANT_CREATED',
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+      verb: 'CREATE',
       resource: `tenant:${row.id}`,
-      payload: {
+      after_state: {
         external_id: row.external_id,
         display_name: row.display_name,
         tier: row.tier,
@@ -237,12 +240,16 @@ async function create(
         tenantId: row.id,
         actorType: parsedActor.type,
         actorId: parsedActor.id,
-        actorDescription: parsedActor.description,
-        action: 'TENANT_CONFIG_VERSION_CREATED',
+        ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CONFIG_VERSION_CREATED'),
+        verb: 'CREATE',
         resource: `tenant_config_version:${configVersionId}`,
-        payload: {
+        // initialConfig comes through as `Record<string, unknown>` per the
+        // input schema; the audit layer's zod re-validates JSON-safety at
+        // parse time, so the cast is safe modulo runtime caller-honor.
+        after_state: {
           version_number: 1,
-          config: parsedInput.initialConfig ?? {},
+          config: (parsedInput.initialConfig ?? {}) as Record<string, never>,
         },
       });
     }
@@ -355,9 +362,11 @@ async function update(
       throw new TenantStatusError(parsedId, 'TERMINATED', ['PROVISIONING', 'ACTIVE', 'SUSPENDED']);
     }
 
-    const before: Record<string, unknown> = {};
+    const before: Record<string, string> = {};
+    const after: Record<string, string> = {};
     if (parsedPatch.displayName !== undefined && parsedPatch.displayName !== current.display_name) {
       before.displayName = current.display_name;
+      after.displayName = parsedPatch.displayName;
     }
 
     const updated = await tx
@@ -379,13 +388,12 @@ async function update(
       tenantId: parsedId,
       actorType: parsedActor.type,
       actorId: parsedActor.id,
-      actorDescription: parsedActor.description,
-      action: 'TENANT_UPDATED',
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_UPDATED'),
+      verb: 'UPDATE',
       resource: `tenant:${parsedId}`,
-      payload: {
-        changes: parsedPatch,
-        before,
-      },
+      before_state: before,
+      after_state: after,
     });
 
     return next;
@@ -450,10 +458,12 @@ async function setStatus(
       tenantId: parsedId,
       actorType: parsedActor.type,
       actorId: parsedActor.id,
-      actorDescription: parsedActor.description,
-      action: 'TENANT_STATUS_CHANGED',
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_STATUS_CHANGED'),
+      verb: 'UPDATE',
       resource: `tenant:${parsedId}`,
-      payload: { from: current.status, to: parsedStatus },
+      before_state: { status: current.status },
+      after_state: { status: parsedStatus },
     });
 
     return next;

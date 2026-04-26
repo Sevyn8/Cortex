@@ -4,9 +4,14 @@ import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { ZodError } from 'zod';
+import {
+  AuditEventEmissionError,
+  AuditEventValidationError,
+  getActionByName,
+} from '@cortex/audit-events';
 import { emitAuditEvent } from '../src/audit.js';
+import { TENANT_AUDIT_ACTIONS } from '../src/audit-actions.js';
 import { bindTenantToDbSession } from '../src/db-session.js';
-import { TenantValidationError } from '../src/errors.js';
 import { forceRlsOnAuditEvent, getPool, withBoundClient } from './helpers/db.js';
 
 const TENANT_ID = randomUUID();
@@ -31,28 +36,23 @@ describe('audit', () => {
   });
 
   afterAll(async () => {
-    // audit_event has no FK to tenant; rows orphan but are tagged to a
-    // unique TENANT_ID per run, so they don't interfere with future runs.
-    // DELETE on audit_event is blocked by the 2F002 trigger; we accept the
-    // accumulation and keep tests parallel-file-safe.
     await pool.query('DELETE FROM tenant WHERE id = $1', [TENANT_ID]);
     await pool.end();
   });
 
-  it('inserts a row with all 7 application fields populated', async () => {
-    const params = {
-      tenantId: TENANT_ID,
-      actorType: 'service' as const,
-      actorId: 'test-actor-1',
-      actorDescription: 'unit test',
-      action: 'TENANT_CREATED' as const,
-      resource: `tenant:${TENANT_ID}`,
-      payload: { hello: 'world' },
-    };
-
+  it('inserts a row with the expected stable columns and after_state in payload', async () => {
     await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, TENANT_ID);
-      await emitAuditEvent(tx, params);
+      await emitAuditEvent(tx, {
+        tenantId: TENANT_ID,
+        actorType: 'service',
+        actorId: 'test-actor-1',
+        actorDescription: 'unit test',
+        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+        verb: 'CREATE',
+        resource: `tenant:${TENANT_ID}`,
+        after_state: { hello: 'world' },
+      });
     });
 
     const fetched = await db.transaction(async (tx) => {
@@ -64,7 +64,7 @@ describe('audit', () => {
         actor_description: string | null;
         action: string;
         resource: string;
-        payload: unknown;
+        payload: Record<string, unknown>;
       }>(
         sql`SELECT tenant_id, actor_type, actor_id, actor_description,
                    action, resource, payload
@@ -76,7 +76,6 @@ describe('audit', () => {
       return result.rows[0];
     });
 
-    expect(fetched).toBeDefined();
     expect(fetched).toMatchObject({
       tenant_id: TENANT_ID,
       actor_type: 'service',
@@ -84,8 +83,8 @@ describe('audit', () => {
       actor_description: 'unit test',
       action: 'TENANT_CREATED',
       resource: `tenant:${TENANT_ID}`,
-      payload: { hello: 'world' },
     });
+    expect(fetched?.payload.after_state).toEqual({ hello: 'world' });
   });
 
   it('audit_chain trigger auto-fills prev_hash and curr_hash', async () => {
@@ -106,9 +105,10 @@ describe('audit', () => {
           tenantId: chainTenantId,
           actorType: 'system',
           actorId: 'sys-1',
-          action: 'TENANT_CREATED',
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+          verb: 'CREATE',
           resource: `tenant:${chainTenantId}`,
-          payload: { n: 1 },
+          after_state: { n: 1 },
         });
       });
 
@@ -118,9 +118,11 @@ describe('audit', () => {
           tenantId: chainTenantId,
           actorType: 'system',
           actorId: 'sys-1',
-          action: 'TENANT_UPDATED',
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_UPDATED'),
+          verb: 'UPDATE',
           resource: `tenant:${chainTenantId}`,
-          payload: { n: 2 },
+          before_state: { n: 1 },
+          after_state: { n: 2 },
         });
       });
 
@@ -142,15 +144,14 @@ describe('audit', () => {
       expect(Buffer.isBuffer(rows[0]?.curr_hash)).toBe(true);
       expect(rows[0]?.curr_hash.length).toBe(32);
       expect(Buffer.isBuffer(rows[1]?.prev_hash)).toBe(true);
-      // Second row's prev_hash must equal first row's curr_hash.
       expect(rows[1]?.prev_hash?.equals(rows[0]!.curr_hash)).toBe(true);
     } finally {
       await pool.query('DELETE FROM tenant WHERE id = $1', [chainTenantId]);
     }
   });
 
-  it('without bound tenant raises 42501 from RLS write policy', async () => {
-    let captured: { code?: string } | undefined;
+  it('without bound tenant: RLS denial wraps as AuditEventEmissionError with cause.code 42501', async () => {
+    let captured: unknown;
     try {
       await db.transaction(async (tx) => {
         // No bindTenantToDbSession call — RLS policy will deny the INSERT.
@@ -158,15 +159,18 @@ describe('audit', () => {
           tenantId: TENANT_ID,
           actorType: 'service',
           actorId: 'unbound-actor',
-          action: 'TENANT_CREATED',
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+          verb: 'CREATE',
           resource: `tenant:${TENANT_ID}`,
-          payload: {},
+          after_state: {},
         });
       });
     } catch (err) {
-      captured = err as { code?: string };
+      captured = err;
     }
-    expect(captured?.code).toBe('42501');
+    expect(captured).toBeInstanceOf(AuditEventEmissionError);
+    const cause = (captured as { cause?: { code?: unknown } }).cause;
+    expect(cause?.code).toBe('42501');
   });
 
   it('inside a bound transaction emits successfully (row count increments)', async () => {
@@ -178,9 +182,11 @@ describe('audit', () => {
         tenantId: TENANT_ID,
         actorType: 'service',
         actorId: 'count-test',
-        action: 'TENANT_UPDATED',
+        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_UPDATED'),
+        verb: 'UPDATE',
         resource: `tenant:${TENANT_ID}`,
-        payload: {},
+        before_state: { v: 0 },
+        after_state: { v: 1 },
       });
     });
 
@@ -188,35 +194,41 @@ describe('audit', () => {
     expect(after - before).toBe(1);
   });
 
-  it('invalid params throw TenantValidationError with ZodError cause', async () => {
+  it('invalid params throw AuditEventValidationError with ZodError cause', async () => {
     const cases: { label: string; params: unknown }[] = [
       {
         label: 'missing actorId',
         params: {
           tenantId: TENANT_ID,
           actorType: 'service',
-          action: 'TENANT_CREATED',
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+          verb: 'CREATE',
           resource: `tenant:${TENANT_ID}`,
+          after_state: {},
         },
       },
       {
         label: 'invalid actorType',
         params: {
           tenantId: TENANT_ID,
-          actorType: 'robot',
+          actorType: 'robot', // not in (service|user|system|agent)
           actorId: 'a',
-          action: 'TENANT_CREATED',
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+          verb: 'CREATE',
           resource: `tenant:${TENANT_ID}`,
+          after_state: {},
         },
       },
       {
-        label: 'action not in enum',
+        label: 'action name fails regex (defense-in-depth past the catalog)',
         params: {
           tenantId: TENANT_ID,
           actorType: 'service',
           actorId: 'a',
-          action: 'TENANT_OBLITERATED',
+          action: { name: 'tenant_obliterated', verb: 'CREATE' }, // lowercase name
+          verb: 'CREATE',
           resource: `tenant:${TENANT_ID}`,
+          after_state: {},
         },
       },
     ];
@@ -232,13 +244,13 @@ describe('audit', () => {
       } catch (err) {
         captured = err;
       }
-      expect(captured, c.label).toBeInstanceOf(TenantValidationError);
-      expect((captured as TenantValidationError).cause, c.label).toBeInstanceOf(ZodError);
+      expect(captured, c.label).toBeInstanceOf(AuditEventValidationError);
+      expect((captured as AuditEventValidationError).cause, c.label).toBeInstanceOf(ZodError);
     }
   });
 
-  it('accepts all 3 actorTypes (service, user, system)', async () => {
-    for (const actorType of ['service', 'user', 'system'] as const) {
+  it('accepts all 4 actorTypes (service, user, system, agent)', async () => {
+    for (const actorType of ['service', 'user', 'system', 'agent'] as const) {
       const actorId = `actor-${actorType}-1`;
       await db.transaction(async (tx) => {
         await bindTenantToDbSession(tx, TENANT_ID);
@@ -246,9 +258,10 @@ describe('audit', () => {
           tenantId: TENANT_ID,
           actorType,
           actorId,
-          action: 'TENANT_CREATED',
+          action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+          verb: 'CREATE',
           resource: `tenant:${TENANT_ID}`,
-          payload: {},
+          after_state: {},
         });
       });
 
@@ -273,17 +286,19 @@ describe('audit', () => {
         actorType: 'service',
         actorId: 'with-desc',
         actorDescription: 'a description',
-        action: 'TENANT_CREATED',
+        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+        verb: 'CREATE',
         resource: `tenant:${TENANT_ID}`,
-        payload: {},
+        after_state: {},
       });
       await emitAuditEvent(tx, {
         tenantId: TENANT_ID,
         actorType: 'service',
         actorId: 'no-desc',
-        action: 'TENANT_CREATED',
+        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+        verb: 'CREATE',
         resource: `tenant:${TENANT_ID}`,
-        payload: {},
+        after_state: {},
       });
     });
 
@@ -307,16 +322,16 @@ describe('audit', () => {
   });
 
   it('UPDATE on audit_event raises SQLSTATE 2F002 (append-only)', async () => {
-    // Insert one row first, then attempt UPDATE inside a bound transaction.
     await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, TENANT_ID);
       await emitAuditEvent(tx, {
         tenantId: TENANT_ID,
         actorType: 'service',
         actorId: 'append-only-test',
-        action: 'TENANT_CREATED',
+        action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CREATED'),
+        verb: 'CREATE',
         resource: `tenant:${TENANT_ID}`,
-        payload: { tag: 'before' },
+        after_state: { tag: 'before' },
       });
     });
 

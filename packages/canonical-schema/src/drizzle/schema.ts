@@ -7,6 +7,8 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  customType,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -22,6 +24,14 @@ import {
 // ─────────────────────────────────────────────────────────────────────
 
 const msNow = sql`date_trunc('millisecond', now())`;
+
+// ─────────────────────────────────────────────────────────────────────
+// Custom type — bytea ↔ Buffer for hash columns on `audit_event`.
+// ─────────────────────────────────────────────────────────────────────
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
 
 // ─────────────────────────────────────────────────────────────────────
 // Pre-AC01 super-admin placeholder (P0.9 / migration 0005)
@@ -171,3 +181,65 @@ export const tenantKmsKey = pgTable('tenant_kms_key', {
 
 export type TenantKmsKey = typeof tenantKmsKey.$inferSelect;
 export type NewTenantKmsKey = typeof tenantKmsKey.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────
+// Audit substrate (migrations 0004 + 0008)
+//
+// Tamper-evident audit log per ADR-DB-003. Per-tenant SHA chain stamped
+// by `cortex.audit_chain_trigger` (BEFORE INSERT); UPDATE/DELETE raise
+// SQLSTATE 2F002. RLS enabled — reads/writes scoped by `app.tenant_id`.
+//
+// `actor_type` extends to `'agent'` per migration 0008 (P0.10 §Decision 6
+// in the planning doc + ADR-AU-001).
+//
+// Caller contract for INSERT (the `@cortex/audit-events` library wraps
+// this in the production path):
+//   - Bind `app.tenant_id` to the DB session via `bindTenantToDbSession`
+//     so the RLS write policy authorizes the INSERT.
+//   - Insert inside an open transaction; the chain trigger reads the
+//     prev_hash from the live tail under the same MVCC snapshot.
+//   - Do NOT supply `prev_hash` / `curr_hash` — the trigger overwrites
+//     caller-supplied values with the chain-derived ones.
+//   - Do NOT supply `occurred_at` from a JS `Date` — the column is µs-
+//     precision and `Date` round-trips truncate to ms, breaking the
+//     hash. Either let the column default fire (`now()` server-side) or
+//     pass an ISO-8601 µs string. See ADR-DB-003 §3 caller contract.
+//
+// Reading caveats:
+//   - `occurred_at` is `timestamptz` with µs precision. The `pg` default
+//     parser converts to JS `Date` (ms precision) — sufficient for
+//     display, INSUFFICIENT for re-computing canonical hashes client-
+//     side. Hash verification must be done server-side via
+//     `cortex.audit_canonical_hash(...)`.
+//   - `prev_hash` / `curr_hash` are `bytea` mapped to `Buffer`. Use
+//     `buf.toString('hex')` for display; binary equality for chain
+//     verification.
+export const auditEvent = pgTable(
+  'audit_event',
+  {
+    event_id: uuid('event_id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id').notNull(),
+    actor_type: text('actor_type', {
+      enum: ['service', 'user', 'system', 'agent'],
+    }).notNull(),
+    actor_id: text('actor_id').notNull(),
+    actor_description: text('actor_description'),
+    action: text('action').notNull(),
+    resource: text('resource').notNull(),
+    payload: jsonb('payload').notNull().$type<Record<string, unknown>>().default({}),
+    occurred_at: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+    prev_hash: bytea('prev_hash'),
+    curr_hash: bytea('curr_hash').notNull(),
+    inserted_at: timestamp('inserted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    tenantTimeIdx: index('audit_event_tenant_time').on(
+      t.tenant_id,
+      t.occurred_at.desc(),
+      t.event_id,
+    ),
+  }),
+);
+
+export type AuditEvent = typeof auditEvent.$inferSelect;
+export type NewAuditEvent = typeof auditEvent.$inferInsert;

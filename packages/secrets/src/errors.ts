@@ -65,3 +65,22 @@ export class KmsUnavailableError extends SecretsError {
     this.name = 'KmsUnavailableError';
   }
 }
+
+/**
+ * Raised by `getKeyForTenant` (F02 swap) when no `tenant_kms_key` row
+ * exists for the given tenantId. Causes:
+ * - Tenant id is wrong / not provisioned (caller bug).
+ * - Provisioning rollback ran (`cleanupFailedProvisioning`) — operator
+ *   should resubmit via `tenants.provision`.
+ * - RLS bind missing — caller didn't `bindTenantToDbSession` so the
+ *   row exists but the read returned 0 rows under the tenant policy.
+ *
+ * Distinct from `SecretNotFoundError` (Secret Manager secrets) — this
+ * is specifically about per-tenant CMEK key bindings.
+ */
+export class TenantKmsKeyNotFoundError extends SecretsError {
+  constructor(tenantId: string, options?: { cause?: Error }) {
+    super('NOT_FOUND', `tenant_kms_key row not found for tenant ${tenantId}`, options);
+    this.name = 'TenantKmsKeyNotFoundError';
+  }
+}

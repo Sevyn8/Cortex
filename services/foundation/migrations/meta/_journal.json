@@ -64,6 +64,13 @@
       "when": 1777214360380,
       "tag": "0009_tenant_kms_key_writes_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777278576675,
+      "tag": "0010_tenant_lifecycle_metadata",
+      "breakpoints": true
     }
   ]
 }

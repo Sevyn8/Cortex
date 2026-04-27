@@ -2,7 +2,6 @@ import { KeyManagementServiceClient } from '@google-cloud/kms';
 import * as crypto from 'node:crypto';
 import { z } from 'zod';
 import { auditLog } from './audit.js';
-import { buildKeyResourceName } from './config.js';
 import {
   SecretsError,
   SecretsValidationError,
@@ -58,22 +57,37 @@ function mapGcpError(err: unknown, operation: 'encrypt' | 'decrypt'): SecretsErr
 }
 
 /**
- * Envelope-encrypt plaintext using env's `cortex-general-key` as the KEK.
+ * Envelope-encrypt plaintext using a caller-supplied KMS key resource
+ * name as the KEK.
  *
  * Wire format (big-endian): [ver(1)] [wrap_len(u16)] [wrapped_DEK(L)]
  *                           [IV(12)] [auth_tag(16)] [ciphertext(N)]
  *
  * AEAD: AES-256-GCM. AAD: utf8(tenantId) — binds ciphertext to tenant context.
  *
+ * Per planning-doc §4.15 cleanup vector (sub-phase 6.1, 2026-04-27):
+ * `keyResourceName` is now a required parameter rather than being
+ * derived internally via `buildKeyResourceName('cortex-general-key')`.
+ * Callers resolve once via `getKeyForTenant(db, tenantId)` and thread
+ * the result through to both this function and any audit-row recording.
+ * This eliminates the dual-lookup that latently broke once
+ * `getKeyForTenant` started returning real per-tenant keys (the
+ * audit-recorded key would have differed from the actual KEK).
+ *
  * @param tenantId UUID; used as AAD
  * @param plaintext Buffer or UTF-8 string
+ * @param keyResourceName fully-qualified KMS key resource name (caller-resolved)
  * @throws SecretsValidationError invalid tenantId
  * @throws EnvelopeEncryptError   KMS wrap failure or local crypto failure
  * @throws KmsUnavailableError    transient GCP failure
  */
-async function encryptEnvelope(tenantId: string, plaintext: Buffer | string): Promise<Buffer> {
+async function encryptEnvelope(
+  tenantId: string,
+  plaintext: Buffer | string,
+  keyResourceName: string,
+): Promise<Buffer> {
   const start = Date.now();
-  const keyName = buildKeyResourceName('cortex-general-key');
+  const keyName = keyResourceName;
 
   const tenantParsed = tenantIdSchema.safeParse(tenantId);
   if (!tenantParsed.success) {
@@ -161,15 +175,26 @@ async function encryptEnvelope(tenantId: string, plaintext: Buffer | string): Pr
  * Reverse of `encryptEnvelope`. `tenantId` MUST match the encrypt-time value
  * or the AAD check fails and throws EnvelopeDecryptError.
  *
+ * Per planning-doc §4.15 (sub-phase 6.1): `keyResourceName` is now a
+ * required parameter. Callers thread the value recorded in the
+ * `EncryptedPayload.keyResourceName` field at encrypt time, ensuring
+ * decrypt uses the same KEK that encrypt used.
+ *
  * @param tenantId UUID; must match AAD used at encrypt
  * @param ciphertext Buffer in the wire format produced by encryptEnvelope
+ * @param keyResourceName fully-qualified KMS key resource name (the
+ *   value recorded by the caller at encrypt time)
  * @throws SecretsValidationError malformed wire format, version mismatch, or invalid tenantId
  * @throws EnvelopeDecryptError   auth-tag failure (tampered / wrong tenant) or KMS unwrap failure
  * @throws KmsUnavailableError    transient GCP failure
  */
-async function decryptEnvelope(tenantId: string, ciphertext: Buffer): Promise<Buffer> {
+async function decryptEnvelope(
+  tenantId: string,
+  ciphertext: Buffer,
+  keyResourceName: string,
+): Promise<Buffer> {
   const start = Date.now();
-  const keyName = buildKeyResourceName('cortex-general-key');
+  const keyName = keyResourceName;
 
   const tenantParsed = tenantIdSchema.safeParse(tenantId);
   if (!tenantParsed.success) {

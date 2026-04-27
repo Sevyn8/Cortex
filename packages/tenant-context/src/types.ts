@@ -16,12 +16,38 @@ import type { Tenant } from '@cortex/canonical-schema';
 export type TenantTier = 'STANDARD' | 'ENTERPRISE';
 
 /**
- * Tenant lifecycle status. Transitions managed by F02 lifecycle state
- * machine: REQUESTED → PROVISIONING → ACTIVE → (SUSPENDED) → OFFBOARDING
- * → TERMINATED. Phase 1 (Slice A) sets PROVISIONING on create + supports
- * setStatus to ACTIVE; full state machine is F02 scope.
+ * Tenant lifecycle status. Full F02 lifecycle state machine per
+ * ADR-LIFECYCLE-001:
+ *
+ *   REQUESTED → PROVISIONING → READY → ACTIVE
+ *                                         ↓
+ *                                    SUSPENDED ↔ ACTIVE
+ *                                         ↓
+ *                                    OFFBOARDING → TERMINATED
+ *
+ * State semantics:
+ * - REQUESTED: provisioning kickoff awaited. Enterprise tenants also await
+ *   `dedicated_db_approved=true` (per Q-OPEN-6).
+ * - PROVISIONING: in-flight pipeline (KMS, GCS, control plane, etc.).
+ * - READY: provisioning success; smoke test pending (per SA5).
+ * - ACTIVE: tenant is live and serving traffic.
+ * - SUSPENDED: write-blocked, reads allowed (data export still works).
+ * - OFFBOARDING: export pending; grace-period clock running.
+ * - TERMINATED: hard-deleted (post-termination queries return
+ *   tenant-not-found via application-layer filtering).
+ *
+ * Allowed transitions are enforced in `tenants.ts`'s `ALLOWED_TRANSITIONS`
+ * map. The DB CHECK constraint (`tenant_status_check` per migration 0010)
+ * is the value-set guard; transition guards are in-code.
  */
-export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'TERMINATED';
+export type TenantStatus =
+  | 'REQUESTED'
+  | 'PROVISIONING'
+  | 'READY'
+  | 'ACTIVE'
+  | 'SUSPENDED'
+  | 'OFFBOARDING'
+  | 'TERMINATED';
 
 /**
  * Public-shape tenant projection. Excludes timestamps which most callers

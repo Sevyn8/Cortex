@@ -1,13 +1,14 @@
 /**
- * Phase 1 compute-placement resolver for `@cortex/compute-placement`.
+ * Compute-placement resolver for `@cortex/compute-placement`.
  *
  * Two surfaces:
  *
- *   - `getComputePlacement(params)` — returns the placement for a
- *     `(tenantId, workload, env)` triple. Phase 1: always `'shared'`.
- *     F02 will branch on `tenant.tier` and return `'dedicated'` for
- *     ENTERPRISE-tier tenants (purely additive per ADR-COMPUTE-001
- *     Decision 5).
+ *   - `getComputePlacement(params, db)` — returns the placement for a
+ *     `(tenantId, workload, env)` triple. F02 Slice A swap (sub-phase
+ *     5.4): branches on `tenant.tier`. ENTERPRISE tenants → dedicated
+ *     Cloud Run service (`{workload}-tenant-{tenantId}`); STANDARD →
+ *     shared (`{workload}-shared`). Phase 1 stub returned shared
+ *     unconditionally; F02 actually consults the tier.
  *
  *   - `parseCloudRunServiceName(name)` — inverse for forensics;
  *     extracts `(workload, tenantId|null)` from a service name.
@@ -22,59 +23,80 @@
  * path (`projects/sevyn8-cortex-{env}/...`). The resolver accepts
  * `env` for caller-side observability context but doesn't embed it.
  *
- * The resolver is `async` for forward compatibility — F02 will need
- * to query `tenant.tier` from the DB, so the signature already
- * accommodates the async path. Phase 1 implementation is synchronous
- * but wrapped in `Promise.resolve` semantics via `async`.
+ * RLS: the `tenant` table has NO RLS policy (control plane). The
+ * SELECT for `tenant.tier` works without `bindTenantToDbSession`.
+ *
+ * `db` is passed as a separate argument (not embedded in `params`)
+ * because Drizzle DB instances aren't trivially zod-validatable; the
+ * params zod schema validates `tenantId`, `workload`, `env` cleanly
+ * without dealing with the `db` object's shape.
  */
 
-import { ComputePlacementValidationError } from './errors.js';
+import { eq } from 'drizzle-orm';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { tenant } from '@cortex/canonical-schema';
+import { ComputePlacementConfigError, ComputePlacementValidationError } from './errors.js';
 import { getComputePlacementParamsSchema } from './schemas.js';
 import type { ComputePlacement, CortexWorkload, GetComputePlacementParams } from './types.js';
 
 /**
  * Resolve compute placement for a tenant + workload + env.
  *
- * Phase 1: always returns `'shared'` placement with
- * `cloudRunService: '{workload}-shared'`. No real ENTERPRISE tenants
- * exist yet; this stub lets callers code against the API surface
- * today without waiting for F02's per-tenant Cloud Run provisioning.
+ * Queries `tenant.tier` to branch the placement decision. ENTERPRISE
+ * tenants get dedicated services per ADR-COMPUTE-001; STANDARD tenants
+ * share. The `env` field is validated but NOT embedded in the service
+ * name (encoded in the GCP project path).
  *
- * F02: will consult `tenant.tier` (via `@cortex/canonical-schema`'s
- * `tenant` table). For `tier='ENTERPRISE'`, returns `'dedicated'`
- * with `{workload}-tenant-{tenantId}` as the service name. For
- * `tier='STANDARD'`, returns `'shared'` as today.
- *
- * @throws ComputePlacementValidationError on malformed params
+ * @throws ComputePlacementValidationError on malformed `params` (zod).
+ * @throws ComputePlacementConfigError when no `tenant` row matches the
+ *   supplied `tenantId` — tenant must be provisioned before placement
+ *   resolution; F02 Slice A's `tenants.provision` populates the row.
  */
-export function getComputePlacement(params: GetComputePlacementParams): Promise<ComputePlacement> {
-  // Phase 1 implementation is synchronous; the Promise return type is
-  // forward-compat for F02 (which will query tenant.tier from the DB).
-  // The function deliberately is NOT `async` to avoid the
-  // @typescript-eslint/require-await rule on a body with no await —
-  // `Promise.resolve(...)` gives the same caller-side Promise return.
+export async function getComputePlacement(
+  params: GetComputePlacementParams,
+  db: NodePgDatabase<Record<string, never>>,
+): Promise<ComputePlacement> {
   const parsed = getComputePlacementParamsSchema.safeParse(params);
   if (!parsed.success) {
-    return Promise.reject(
-      new ComputePlacementValidationError(
-        `Invalid getComputePlacement params: ${parsed.error.message}`,
-        { cause: parsed.error },
-      ),
+    throw new ComputePlacementValidationError(
+      `Invalid getComputePlacement params: ${parsed.error.message}`,
+      { cause: parsed.error },
     );
   }
 
-  const { workload } = parsed.data;
-  // env is validated above but NOT used in the service name — see
-  // file header. Retained in params for forward-compat (F02 may use
-  // it for placement-decision logging) and to keep the API
-  // signature stable across the F02 swap.
+  const { tenantId, workload } = parsed.data;
+  // env is validated above but NOT used in the service name — see file
+  // header. Retained in params for caller-side observability context
+  // and to keep the API signature stable.
 
-  // Phase 1: always shared. F02 will branch on tenant.tier here.
-  return Promise.resolve({
+  const rows = await db
+    .select({ tier: tenant.tier })
+    .from(tenant)
+    .where(eq(tenant.id, tenantId))
+    .limit(1);
+
+  const row = rows[0];
+  if (row === undefined) {
+    throw new ComputePlacementConfigError(
+      `Tenant ${tenantId} not found in compute-placement resolver — provision via tenants.provision before requesting placement.`,
+    );
+  }
+
+  if (row.tier === 'ENTERPRISE') {
+    return {
+      kind: 'dedicated',
+      cloudRunService: `${workload}-tenant-${tenantId}`,
+      placementLabel: 'dedicated',
+      tenantId,
+    };
+  }
+
+  // STANDARD: shared placement.
+  return {
     kind: 'shared',
     cloudRunService: `${workload}-shared`,
     placementLabel: 'shared',
-  });
+  };
 }
 
 /**

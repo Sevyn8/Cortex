@@ -38,10 +38,6 @@
 
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-// `Logger` is imported type-only and `createLogger` via dynamic import to
-// avoid closing any future load-order cycle through observability — same
-// pattern as `@cortex/audit-events/src/emit.ts`. See roadmap §4.13.
-import type { Logger } from '@cortex/observability';
 import { emitAuditEvent, getActionByName } from '@cortex/audit-events';
 import { QUOTA_AUDIT_ACTIONS } from './catalog.js';
 import { QuotaConfigError, QuotaExecutionError, QuotaValidationError } from './errors.js';
@@ -54,8 +50,6 @@ import {
   type QuotaTier,
   type WindowAlignment,
 } from './types.js';
-
-const MODULE_ID = 'cortex-quotas';
 
 // ─────────────────────────────────────────────────────────────────────
 // Public API
@@ -83,16 +77,6 @@ export interface CheckQuota {
     params: CheckQuotaParams,
     opts: CheckQuotaCallOptions,
   ): Promise<CheckQuotaResult>;
-}
-
-export interface CreateQuotaCheckerOptions {
-  /**
-   * Pre-configured logger for diagnostic output. When omitted, a
-   * default logger with `moduleId: 'cortex-quotas'` is constructed
-   * lazily on first use via dynamic import (cycle break — see file
-   * header).
-   */
-  logger?: Logger;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -131,34 +115,16 @@ function retryAfterFromWindow(windowEndIso: string): number {
  * legacy / convention callers continue to use the module-scope
  * `checkQuota` convenience export.
  *
- * @throws QuotaConfigError if `opts.logger` is supplied but invalid
+ * Per planning-doc §4.16 cleanup vector (sub-phase 6.2, 2026-04-27):
+ * the previous `opts.logger` field + dynamic-import logger plumbing
+ * was removed as dead code. The cycle-defensive pattern that
+ * motivated the lazy-logger shape is gone (resolved by §4.13 / commit
+ * `ebb14ca`); no real WARN-level emit site exists in `@cortex/quotas`
+ * today. If a future feature wants structured logging here, add it
+ * with a static `import { createLogger } from '@cortex/observability'`
+ * — the cycle topology supports static imports now.
  */
-export function createQuotaChecker(opts: CreateQuotaCheckerOptions = {}): CheckQuota {
-  if (opts.logger !== undefined && typeof opts.logger.warn !== 'function') {
-    throw new QuotaConfigError(
-      'createQuotaChecker: opts.logger does not implement the Logger interface',
-    );
-  }
-
-  // Lazy logger: avoid eager import of @cortex/observability at module
-  // load. Same pattern as @cortex/audit-events/src/emit.ts. The dynamic
-  // import resolves at first use; cached thereafter.
-  let cachedLogger: Logger | null = opts.logger ?? null;
-  async function getLogger(): Promise<Logger> {
-    if (cachedLogger === null) {
-      const observability = (await import('@cortex/observability')) as {
-        createLogger: (options: { moduleId: string }) => Logger;
-      };
-      cachedLogger = observability.createLogger({ moduleId: MODULE_ID });
-    }
-    return cachedLogger;
-  }
-  // The logger is plumbed but not currently used in the hot path —
-  // sub-phase 4's middleware will surface it for non-fatal diagnostic
-  // notes (e.g., "tenant approached 90% of quota"). Keep the reference
-  // to avoid lint flagging it as unused.
-  void getLogger;
-
+export function createQuotaChecker(): CheckQuota {
   return {
     async check(db, params, callOpts) {
       // 1. Validate params.

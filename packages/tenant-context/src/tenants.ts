@@ -46,6 +46,7 @@ import { getActionByName } from '@cortex/audit-events';
 import { buildKeyResourceName } from '@cortex/secrets';
 import { TENANT_AUDIT_ACTIONS } from './audit-actions.js';
 import { emitAuditEvent } from './audit.js';
+import { dispatchCloudTask } from './cloud-tasks.js';
 import { bindTenantToDbSession } from './db-session.js';
 import { TenantNotFoundError, TenantStatusError, TenantValidationError } from './errors.js';
 import type { TenantStatus, TenantTier } from './types.js';
@@ -72,9 +73,12 @@ const displayNameSchema = z.string().min(1).max(255);
 const tierSchema = z.enum(['STANDARD', 'ENTERPRISE'] as const satisfies readonly TenantTier[]);
 
 const statusSchema = z.enum([
+  'REQUESTED',
   'PROVISIONING',
+  'READY',
   'ACTIVE',
   'SUSPENDED',
+  'OFFBOARDING',
   'TERMINATED',
 ] as const satisfies readonly TenantStatus[]);
 
@@ -89,6 +93,13 @@ const createInputSchema = z.object({
   displayName: displayNameSchema,
   tier: tierSchema,
   initialConfig: z.record(z.string(), z.unknown()).optional(),
+  // Optional initial status override. tenants.provision sets this to
+  // 'REQUESTED' for ENTERPRISE tenants awaiting manual approval
+  // (Q-OPEN-6); other callers leave it undefined → DB default
+  // 'PROVISIONING' applies. zod validates against the 7-value
+  // TenantStatus union; the DB CHECK (`tenant_status_check` per
+  // migration 0010) is the second-layer guard.
+  initialStatus: statusSchema.optional(),
 });
 
 const updateInputSchema = z
@@ -119,13 +130,37 @@ export interface TenantListResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Status transition policy (Slice A — replaced by full F02 state machine)
+// Status transition policy (F02 lifecycle state machine per
+// ADR-LIFECYCLE-001). Migration 0010 extended the DB CHECK to allow the
+// new states; this map adds the transition edges that connect them.
+//
+// Forward path:
+//   REQUESTED → PROVISIONING → READY → ACTIVE
+// Suspension cycle (reversible):
+//   ACTIVE → SUSPENDED → ACTIVE
+// Offboarding/termination (terminal):
+//   ACTIVE → OFFBOARDING → TERMINATED
+//   SUSPENDED → OFFBOARDING (alt path: suspended tenant skips re-active)
+//   SUSPENDED → TERMINATED  (alt path: suspended tenant terminates direct;
+//                            kept for backward compat with Slice A
+//                            transitions and operator escape hatch)
+//
+// PROVISIONING → ACTIVE retained as a backward-compat edge for existing
+// Slice A test fixtures and bootstrap code paths that don't yet route
+// through READY. F02 provisioning workflow uses the explicit
+// PROVISIONING → READY → ACTIVE path; legacy PROVISIONING → ACTIVE is
+// permitted but discouraged. Convention doc §1 documents the dual-path
+// tolerance and the migration plan to retire the direct edge once all
+// fixtures route via READY.
 // ─────────────────────────────────────────────────────────────────────
 
 const ALLOWED_TRANSITIONS: ReadonlyMap<TenantStatus, readonly TenantStatus[]> = new Map([
-  ['PROVISIONING', ['ACTIVE']],
-  ['ACTIVE', ['SUSPENDED', 'TERMINATED']],
-  ['SUSPENDED', ['ACTIVE', 'TERMINATED']],
+  ['REQUESTED', ['PROVISIONING']],
+  ['PROVISIONING', ['READY', 'ACTIVE']],
+  ['READY', ['ACTIVE']],
+  ['ACTIVE', ['SUSPENDED', 'OFFBOARDING', 'TERMINATED']],
+  ['SUSPENDED', ['ACTIVE', 'OFFBOARDING', 'TERMINATED']],
+  ['OFFBOARDING', ['TERMINATED']],
   ['TERMINATED', []],
 ]);
 
@@ -212,6 +247,14 @@ async function create(
         external_id: parsedInput.externalId,
         display_name: parsedInput.displayName,
         tier: parsedInput.tier,
+        // tenants.provision sets initialStatus='REQUESTED' for ENTERPRISE
+        // tenants awaiting Q-OPEN-6 approval; other callers leave it
+        // undefined and the DB default ('PROVISIONING') applies. Drizzle
+        // omits the field from the INSERT when undefined, preserving the
+        // DB default behavior.
+        ...(parsedInput.initialStatus !== undefined && {
+          status: parsedInput.initialStatus,
+        }),
       })
       .returning();
     const row = inserted[0];
@@ -508,6 +551,94 @@ async function setStatus(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 lifecycle workflow — provision (Slice A)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Provision a new tenant via the F02 lifecycle workflow.
+ *
+ * Inserts the tenant row at `status='REQUESTED'` (ENTERPRISE awaiting
+ * manual approval per Q-OPEN-6) or `'PROVISIONING'` (Standard, ready to
+ * advance), then enqueues a Cloud Task to drive the async provisioning
+ * workflow. Returns immediately after enqueue per planning-doc SA3 —
+ * caller polls `tenant.status` via `tenants.get(tenantId)`.
+ *
+ * Standard path: REQUESTED is skipped; tenant lands at PROVISIONING and
+ * the worker advances PROVISIONING → READY → ACTIVE.
+ *
+ * Enterprise path: tenant lands at REQUESTED. The worker is enqueued
+ * but no-ops while `tenant.dedicated_db_approved=false`. An operator
+ * marks the flag true via the control plane (HTTP API in Slice D); the
+ * worker is then re-enqueued (TBD — Slice A workflow code lands sub-
+ * phase 4.3). Convention doc §4 captures the operator workflow.
+ *
+ * Idempotency: Cloud Tasks `taskId='provisioning-{tenantId}'` dedups
+ * duplicate enqueue attempts within ~1h. Worker also pre-checks
+ * `tenant.status` per planning-doc SA11 so a duplicate that slips
+ * through dedup becomes a no-op.
+ *
+ * Failure: hard rollback per planning-doc SA10. Substrate INSERTs
+ * (tenant + tenant_kms_key + optional tenant_config_version) commit
+ * atomically inside `tenants.create`; if `tenants.create` throws, the
+ * txn rolls back and no row exists. If Cloud Tasks dispatch fails
+ * AFTER the substrate commit, the tenant row exists at `REQUESTED` /
+ * `PROVISIONING` with no scheduled worker — operator must run
+ * `cleanupFailedProvisioning` (lands sub-phase 4.5) before retrying.
+ *
+ * Audit emission: `tenants.create` already emits `TENANT_CREATED` +
+ * `TENANT_KMS_KEY_BOUND` (+ optional `TENANT_CONFIG_VERSION_CREATED`).
+ * `TENANT_PROVISIONED` is NOT emitted here — it fires in the worker
+ * when status reaches READY.
+ *
+ * Requires env: `GCP_PROJECT_ID`, `PROVISIONING_WORKER_URL`. Optional:
+ * `GCP_LOCATION` (defaults to `asia-south1`).
+ *
+ * @throws TenantValidationError invalid input or actor.
+ * @throws Postgres unique-violation if `externalId` already exists
+ *   (caller layer should map to a 409).
+ * @throws Error if `PROVISIONING_WORKER_URL` env is missing.
+ * @throws Error from Cloud Tasks SDK on dispatch failure — caller MUST
+ *   reconcile (see "Failure" above).
+ */
+async function provision(
+  db: NodePgDatabase<Record<string, never>>,
+  input: CreateTenantInput,
+  ctx: { actor: Actor },
+): Promise<{ tenantId: string; status: TenantStatus }> {
+  // ENTERPRISE → REQUESTED (worker awaits dedicated_db_approved).
+  // STANDARD   → PROVISIONING (worker advances immediately).
+  const initialStatus: TenantStatus = input.tier === 'ENTERPRISE' ? 'REQUESTED' : 'PROVISIONING';
+
+  // Re-uses tenants.create for substrate INSERTs + audit emission chain
+  // (TENANT_CREATED + TENANT_KMS_KEY_BOUND + optional
+  // TENANT_CONFIG_VERSION_CREATED). The initialStatus override (added
+  // to CreateTenantInput in this same sub-phase) flows through to the
+  // tenant INSERT.
+  const created = await create(db, { ...input, initialStatus }, ctx);
+
+  // Enqueue provisioning task. Worker URL is configured per env; the
+  // actual worker function lands in sub-phase 4.3.
+  const targetUrl = process.env.PROVISIONING_WORKER_URL;
+  if (targetUrl === undefined || targetUrl === '') {
+    throw new Error('PROVISIONING_WORKER_URL env required for tenants.provision');
+  }
+
+  await dispatchCloudTask({
+    queueName: 'provisioning-queue',
+    taskId: `provisioning-${created.id}`,
+    targetUrl,
+    payload: {
+      tenantId: created.id,
+      actorType: ctx.actor.type,
+      actorId: ctx.actor.id,
+      ...(ctx.actor.description !== undefined && { actorDescription: ctx.actor.description }),
+    },
+  });
+
+  return { tenantId: created.id, status: initialStatus };
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Public namespace
 // ─────────────────────────────────────────────────────────────────────
 
@@ -518,4 +649,5 @@ export const tenants = {
   list,
   update,
   setStatus,
+  provision,
 };

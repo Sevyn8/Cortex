@@ -16,11 +16,20 @@
 import { registerAuditActions } from '@cortex/audit-events';
 
 export const TENANT_AUDIT_ACTIONS = registerAuditActions([
+  // Slice A (initial; pre-F02)
   { name: 'TENANT_CREATED', verb: 'CREATE' },
   { name: 'TENANT_UPDATED', verb: 'UPDATE' },
   { name: 'TENANT_STATUS_CHANGED', verb: 'UPDATE' },
   { name: 'TENANT_CONFIG_VERSION_CREATED', verb: 'CREATE' },
   { name: 'TENANT_KMS_KEY_BOUND', verb: 'CREATE' },
+  // F02 lifecycle additions per planning-doc D6 (hybrid catalog —
+  // domain actions for irreversible/compliance events; reversible
+  // suspend/resume keeps using TENANT_STATUS_CHANGED + before/after).
+  { name: 'TENANT_PROVISIONED', verb: 'CREATE' },
+  { name: 'TENANT_OFFBOARDING_STARTED', verb: 'UPDATE' },
+  { name: 'TENANT_TERMINATED', verb: 'DELETE' },
+  { name: 'TENANT_KEY_ROTATED', verb: 'UPDATE' },
+  { name: 'TENANT_CONFIG_VERSION_UPDATED', verb: 'UPDATE' },
 ] as const);
 
 /**

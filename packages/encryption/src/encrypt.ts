@@ -134,16 +134,22 @@ export function createEncryptionEmitter(
 
       // 3. Resolve the tenant's KMS key. Per ADR-INFRA-007 Decision 2,
       //    the resolver MUST be consulted on every call (no caching).
-      //    Phase 1 stub returns env's cortex-general-key regardless of
-      //    tenantId; F02 swaps to a real per-tenant key.
-      const keyResourceName = getKeyForTenant(data.tenantId);
+      //    Sub-phase 6.1 (§4.15 cleanup) merged the dual-lookup: the
+      //    resolved `keyResourceName` is threaded into
+      //    `envelope.encrypt` as a required parameter rather than
+      //    being independently re-derived inside `envelope`. This
+      //    closes the latent bug where post-F02 (real per-tenant keys)
+      //    `envelope` would have wrapped the DEK with the env-level
+      //    key while encrypt.ts recorded the per-tenant key on the
+      //    audit row.
+      const keyResourceName = await getKeyForTenant(db, data.tenantId);
 
       // 4. Envelope-encrypt. AAD = utf8(tenantId) is set inside
       //    @cortex/secrets.envelope.encrypt — the cryptographic
       //    tenant-isolation property is established at the AEAD layer.
       let envelopeBuf: Buffer;
       try {
-        envelopeBuf = await envelope.encrypt(data.tenantId, plaintextBuf);
+        envelopeBuf = await envelope.encrypt(data.tenantId, plaintextBuf, keyResourceName);
       } catch (err) {
         throw classifyExecutionError(err, 'encrypt');
       }
@@ -227,9 +233,19 @@ export function createEncryptionEmitter(
       //    surfaces as an EnvelopeDecryptError from @cortex/secrets;
       //    we map it (and any other secrets-layer error) to
       //    EncryptionExecutionError with the original cause attached.
+      // Sub-phase 6.1 (§4.15 cleanup): pass the encrypt-time
+      // keyResourceName recorded in payload.keyResourceName so
+      // envelope.decrypt uses the same KEK that envelope.encrypt
+      // wrapped the DEK with. Pre-cleanup, envelope.decrypt
+      // re-derived the env-level key internally; post-§4.15 it
+      // requires the caller-supplied resource name.
       let plaintextBuf: Buffer;
       try {
-        plaintextBuf = await envelope.decrypt(data.tenantId, data.payload.envelope);
+        plaintextBuf = await envelope.decrypt(
+          data.tenantId,
+          data.payload.envelope,
+          data.payload.keyResourceName,
+        );
       } catch (err) {
         throw classifyExecutionError(err, 'decrypt');
       }

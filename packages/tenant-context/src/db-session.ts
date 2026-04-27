@@ -9,7 +9,8 @@
  */
 
 import { sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Pool } from 'pg';
 import { z } from 'zod';
 import { getTenantOrThrow } from './context.js';
 import { TenantValidationError } from './errors.js';
@@ -59,4 +60,53 @@ export async function ensureBoundToTenant(
 ): Promise<void> {
   const tenantId = getTenantOrThrow();
   await bindTenantToDbSession(db, tenantId);
+}
+
+/**
+ * Acquire a Drizzle DB instance with `app.tenant_id` bound for the given
+ * tenantId, run the callback, and release the connection cleanly.
+ *
+ * Per planning-doc §10.4 (forcing function): eliminates the "did caller
+ * bind?" friction at call sites that touch RLS-protected tables. The
+ * callback receives an already-bound transaction handle; commit / rollback
+ * + connection release happen automatically via Drizzle's
+ * `db.transaction(...)`.
+ *
+ * Scope-bound shape (planning-doc SA16): the bound state lives only for
+ * the callback's duration. Callback throws → txn rolls back, partial
+ * writes undone, connection released. Callback returns → txn commits,
+ * connection released, return value propagated to the caller.
+ *
+ * Convention doc §3 captures the bind requirement; this helper makes
+ * forgetting it impossible at call sites that compose around it.
+ *
+ * Validates `tenantId` BEFORE acquiring a connection (fail-fast on bad
+ * input; no wasted pool connection on validation errors).
+ *
+ * @param pool — the shared `pg.Pool` connection pool.
+ * @param tenantId — UUID; the tenant whose RLS scope binds the txn.
+ * @param callback — receives a bound `NodePgDatabase` transaction
+ *   handle; return value propagates to the caller.
+ * @throws TenantValidationError if `tenantId` is not a valid UUID
+ *   (thrown before any connection is acquired).
+ * @throws any error the callback throws (after txn rollback +
+ *   connection release).
+ */
+export async function withTenantDbClient<T>(
+  pool: Pool,
+  tenantId: string,
+  callback: (tx: NodePgDatabase<Record<string, never>>) => Promise<T>,
+): Promise<T> {
+  const parsed = tenantIdSchema.safeParse(tenantId);
+  if (!parsed.success) {
+    throw new TenantValidationError(`Invalid tenant ID for DB binding: ${parsed.error.message}`, {
+      cause: parsed.error,
+    });
+  }
+
+  const db = drizzle(pool);
+  return db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsed.data);
+    return callback(tx);
+  });
 }

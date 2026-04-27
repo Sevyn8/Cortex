@@ -1,9 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { ZodError } from 'zod';
-import { bindTenantToDbSession, ensureBoundToTenant } from '../src/db-session.js';
+import {
+  bindTenantToDbSession,
+  ensureBoundToTenant,
+  withTenantDbClient,
+} from '../src/db-session.js';
 import { withTenantContext } from '../src/context.js';
 import { TenantContextMissingError, TenantValidationError } from '../src/errors.js';
 import { getPool, withBoundClient } from './helpers/db.js';
@@ -145,5 +150,151 @@ describe('db-session', () => {
       return result.rows[0]?.count ?? null;
     });
     expect(verifyCount).toBe('1');
+  });
+
+  // ───────────────────────────────────────────────────────────────────
+  // withTenantDbClient (planning-doc §10.4 forcing function + SA16)
+  // ───────────────────────────────────────────────────────────────────
+
+  describe('withTenantDbClient', () => {
+    it('runs callback with a bound transaction; commits; propagates return value', async () => {
+      const observed = await withTenantDbClient(pool, TENANT_ID, async (tx) => {
+        const result = await tx.execute<{ value: string | null }>(
+          sql`SELECT current_setting('app.tenant_id', true) AS value`,
+        );
+        return result.rows[0]?.value ?? null;
+      });
+      expect(observed).toBe(TENANT_ID);
+    });
+
+    it('rolls back the transaction when the callback throws (partial writes undone)', async () => {
+      // Use a fresh version_number that won't collide with prior tests.
+      const VERSION = 7777;
+
+      let captured: unknown;
+      try {
+        await withTenantDbClient(pool, TENANT_ID, async (tx) => {
+          await tx.execute(
+            sql`INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
+                VALUES (${TENANT_ID}, ${VERSION}, '{"forced":"rollback"}'::jsonb)`,
+          );
+          throw new Error('forced rollback');
+        });
+      } catch (err) {
+        captured = err;
+      }
+      expect(captured).toBeInstanceOf(Error);
+      expect((captured as Error).message).toBe('forced rollback');
+
+      // Verify the INSERT was rolled back (RLS-bound SELECT).
+      const count = await db.transaction(async (tx) => {
+        await bindTenantToDbSession(tx, TENANT_ID);
+        const result = await tx.execute<{ count: string }>(
+          sql`SELECT count(*)::text AS count FROM tenant_config_version
+                WHERE tenant_id = ${TENANT_ID} AND version_number = ${VERSION}`,
+        );
+        return result.rows[0]?.count ?? null;
+      });
+      expect(count).toBe('0');
+    });
+
+    it('rejects a non-UUID tenantId BEFORE acquiring a pool connection (fail-fast)', async () => {
+      let captured: unknown;
+      const beforeTotal = pool.totalCount;
+      try {
+        await withTenantDbClient(pool, 'not-a-uuid', () => Promise.resolve('never reached'));
+      } catch (err) {
+        captured = err;
+      }
+      expect(captured).toBeInstanceOf(TenantValidationError);
+      expect((captured as TenantValidationError).cause).toBeInstanceOf(ZodError);
+      // Pool's totalCount should not have grown — validation happened
+      // before any connect() call.
+      expect(pool.totalCount).toBe(beforeTotal);
+    });
+
+    it('returns the connection to the pool on callback success', async () => {
+      // Drive a few calls; verify in-use count returns to zero each time.
+      for (let i = 0; i < 3; i++) {
+        await withTenantDbClient(pool, TENANT_ID, () => Promise.resolve(i));
+        // pool.totalCount - pool.idleCount = "checked-out" (in-use) connections.
+        // After the txn commits + connection is released, in-use returns to 0.
+        expect(pool.totalCount - pool.idleCount).toBe(0);
+      }
+    });
+
+    it('returns the connection to the pool on callback throw', async () => {
+      for (let i = 0; i < 3; i++) {
+        try {
+          await withTenantDbClient(pool, TENANT_ID, () => Promise.reject(new Error(`boom ${i}`)));
+        } catch {
+          // expected
+        }
+        expect(pool.totalCount - pool.idleCount).toBe(0);
+      }
+    });
+
+    it('binding is genuinely scoped to the callback (post-call query has empty app.tenant_id)', async () => {
+      const insideValue = await withTenantDbClient(pool, TENANT_ID, async (tx) => {
+        const r = await tx.execute<{ value: string | null }>(
+          sql`SELECT current_setting('app.tenant_id', true) AS value`,
+        );
+        return r.rows[0]?.value ?? null;
+      });
+      expect(insideValue).toBe(TENANT_ID);
+
+      // After the helper returns, a fresh query (no txn, no bind) sees
+      // empty app.tenant_id — the bind was txn-local and didn't leak.
+      const outsideValue = await db.execute<{ value: string | null }>(
+        sql`SELECT current_setting('app.tenant_id', true) AS value`,
+      );
+      expect(outsideValue.rows[0]?.value).toBe('');
+    });
+
+    it('integrates with RLS — a tenant_config_version INSERT inside the helper succeeds', async () => {
+      const VERSION = 7778;
+      const result = await withTenantDbClient(pool, TENANT_ID, async (tx) => {
+        await tx.execute(
+          sql`INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
+              VALUES (${TENANT_ID}, ${VERSION}, '{"k":"v-via-with-tenant-db-client"}'::jsonb)`,
+        );
+        const r = await tx.execute<{ count: string }>(
+          sql`SELECT count(*)::text AS count FROM tenant_config_version
+                WHERE tenant_id = ${TENANT_ID} AND version_number = ${VERSION}`,
+        );
+        return r.rows[0]?.count ?? null;
+      });
+      expect(result).toBe('1');
+      // Cleanup so afterAll's RLS-bound DELETE catches it.
+    });
+
+    it('different tenantIds in successive calls produce correctly-scoped binds', async () => {
+      // Insert a second tenant for cross-tenant isolation testing.
+      const otherTenantId = randomUUID();
+      try {
+        await pool.query(
+          `INSERT INTO tenant (id, external_id, display_name, tier)
+             VALUES ($1, $2, 'Other', 'STANDARD')`,
+          [otherTenantId, `test-with-tenant-${otherTenantId.slice(0, 8)}`],
+        );
+
+        const a = await withTenantDbClient(pool, TENANT_ID, async (tx) => {
+          const r = await tx.execute<{ value: string | null }>(
+            sql`SELECT current_setting('app.tenant_id', true) AS value`,
+          );
+          return r.rows[0]?.value;
+        });
+        const b = await withTenantDbClient(pool, otherTenantId, async (tx) => {
+          const r = await tx.execute<{ value: string | null }>(
+            sql`SELECT current_setting('app.tenant_id', true) AS value`,
+          );
+          return r.rows[0]?.value;
+        });
+        expect(a).toBe(TENANT_ID);
+        expect(b).toBe(otherTenantId);
+      } finally {
+        await pool.query('DELETE FROM tenant WHERE id = $1', [otherTenantId]);
+      }
+    });
   });
 });

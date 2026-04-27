@@ -392,15 +392,13 @@ Updated whenever a deferral is added or revisited.
 
 ### 4.17 Retire `f02-swap-paths-for-slice-c-resolvers.md` doc
 
-- **Item:** `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` (~194 lines, authored 2026-04-26) catalogs the two Phase 1 stub resolvers shipped by Slice C (`getQuotaConfig`, `getComputePlacement`) and their planned F02 evolution path. The doc serves as a contract between Slice C and F02's tenant-lifecycle work; once F02 swaps both resolvers to their real implementations, the doc's purpose is exhausted.
-- **Current state:** Active. Slice C-era doc; cited from ADR-COMPUTE-001 §5, the convention doc, and the planning doc.
-- **Future options:**
-  1. Retire the doc when F02 ships both resolver swaps — replace with a one-line "see ADR-COMPUTE-001 §5 (Resolved)" pointer in any docs that referenced it.
-  2. Keep it as a historical record in `docs/archive/` if the swap journey provides reusable lessons (e.g., the substrate-now / real-impl-later pattern's evolution).
-  3. Refactor in place if F02 partial-swaps (only one of the two resolvers): keep the unswapped resolver section, mark the other as Resolved with a commit-hash backfill.
-- **Triggers:** F02 ships the swap of both resolvers (per the doc's "Migration steps" sections).
-- **References:** `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md`; ADR-COMPUTE-001 §5; ADR-INFRA-007 (precedent: KMS-key substrate-now / real-impl-later doc has a similar lifecycle).
-- **Owner phase:** F02 (P1.2).
+**Resolved 2026-04-27** by F02 Slice A sub-phase 7.3 — content absorbed
+into `docs/architecture/tenant-lifecycle-convention.md` Appendix A; the
+standalone doc is deleted. All three resolvers covered (`getKeyForTenant`,
+`getQuotaConfig`, `getComputePlacement`) shipped real implementations in
+F02 Slice A sub-phases 5.2 / 5.3 / 5.4. References in companion docs
+(quotas-compute-placement-convention.md, this roadmap) updated to point
+at the convention doc Appendix A.
 
 ---
 
@@ -709,13 +707,13 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 
 - **Item:** Per F01 §2 "abstraction layer: services never know which mode a tenant is in — the DB client picks the right instance based on tenant tier"
 - **Current state:** `packages/canonical-schema/src/db-client.ts` has a thin `createDrizzleClient(pool, schema?)` factory. No tier-aware routing.
-- **Slice C addendum (2026-04-26):** Slice C designs the F02 consumer (compute-placement reads `tenant.tier` to branch shared vs dedicated; see `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` Resolver 2) but does not ship the tier-aware DB client itself. The Phase 1 stub `getComputePlacement(params)` returns shared unconditionally and accepts no `db` context; F02 will pass an explicit `db` parameter. Whether that resolves to a single shared instance or per-Enterprise dedicated instance remains §10.4's open question.
+- **Slice C addendum (2026-04-26):** Slice C designs the F02 consumer (compute-placement reads `tenant.tier` to branch shared vs dedicated; see `docs/architecture/tenant-lifecycle-convention.md` Appendix A.4) but does not ship the tier-aware DB client itself. The Phase 1 stub `getComputePlacement(params)` returns shared unconditionally and accepts no `db` context; F02 will pass an explicit `db` parameter. Whether that resolves to a single shared instance or per-Enterprise dedicated instance remains §10.4's open question.
 - **Future options:**
   1. F01 ships a `getTenantDbClient(tenantId)` that resolves to shared or dedicated based on tier.
   2. Per-tenant connection pool registry warmed on tenant provisioning.
   3. Multiple Drizzle clients pooled and selected at request time.
 - **Triggers:** F01 (P1.1).
-- **References:** Build prompts §F01 §2; `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md`.
+- **References:** Build prompts §F01 §2; `docs/architecture/tenant-lifecycle-convention.md` Appendix A (absorbed the retired swap-paths doc).
 - **Owner phase:** F01.
 
 ### 10.5 Quota enforcement implementation
@@ -894,14 +892,14 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 - **Item:** F01 build prompt §3 says "Kubernetes namespace per Enterprise tenant"; Cortex platform is Cloud Run.
 - **Current state at deferral:** Anticipated deviation; F01 had not shipped its compute-isolation surface. Three options were live: per-Enterprise Cloud Run service, dedicated revision pool with workload-identity isolation, or K8s migration.
 - **Resolution:** F01 Slice C — **ADR-COMPUTE-001** locks Cloud Run service-per-Enterprise-tenant (option 1) plus a single shared service for Standard tenants. Service-name format: `{workload}-shared` (Standard) or `{workload}-tenant-{uuid}` (Enterprise) — fits the 63-char Cloud Run service-name budget with a 19-char workload cap. The `@cortex/compute-placement` package ships `getComputePlacement` (Phase 1 stub returns shared unconditionally) and `parseCloudRunServiceName` (parses both formats for forensics). Per-Enterprise dedicated services are provisioned at the F02 layer; Slice C ships only the resolver substrate. K8s migration is a future-trigger if Cloud Run isolation proves insufficient (would require a new ADR superseding ADR-COMPUTE-001).
-- **References:** `docs/architecture/decisions/ADR-COMPUTE-001-cloud-run-vs-k8s-compute-isolation.md`, `packages/compute-placement/src/get-placement.ts`, `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` (F02 swap contract).
+- **References:** `docs/architecture/decisions/ADR-COMPUTE-001-cloud-run-vs-k8s-compute-isolation.md`, `packages/compute-placement/src/get-placement.ts`, `docs/architecture/tenant-lifecycle-convention.md` Appendix A (F02 swap contract; absorbed the retired swap-paths doc).
 
 ### 10.3 Tenant tier discriminator — Resolved 2026-04-26 / commit `dcc503c`
 
 - **Item:** How does F01 know whether a tenant is Standard or Enterprise?
 - **Current state at deferral:** Spec mentioned "hybrid model: shared Postgres with RLS for Standard; dedicated Cloud SQL for Enterprise" but the tier field wasn't pre-defined. Three options live: typed text column with CHECK, enum type, or feature-flag-derived.
 - **Resolution:** Substrate landed in **F01 Slice A** (commit `4811821`) — `tenant.tier text NOT NULL CHECK (tier IN ('STANDARD', 'ENTERPRISE'))` per migration 0007 (option 1). Default at insert time is `'STANDARD'`. Slice C confirms the consumer model: `@cortex/compute-placement` reads `tenant.tier` to branch shared vs dedicated placement (per ADR-COMPUTE-001 §3 and the F02 swap-path doc Resolver 2). Quotas use the same column for tier-default lookup (`@cortex/quotas` `getQuotaConfig(tier, resourceClass)` reads `DEFAULT_TIER_QUOTAS[tier]` per planning Decision 7). Enum type was rejected: text + CHECK is easier to evolve and inspect; feature-flag-derived was rejected: tier is a commercial-contract property and belongs on the row, not in flag config.
-- **References:** `services/foundation/migrations/0007_control_plane_tables.sql` (CHECK constraint), `packages/quotas/src/types.ts` (DEFAULT_TIER_QUOTAS keyed by `QuotaTier`), `packages/compute-placement/src/get-placement.ts` (Phase 1 stub; F02 will branch on tier), `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` Resolver 2.
+- **References:** `services/foundation/migrations/0007_control_plane_tables.sql` (CHECK constraint), `packages/quotas/src/types.ts` (DEFAULT_TIER_QUOTAS keyed by `QuotaTier`), `packages/compute-placement/src/get-placement.ts` (post-F02-swap; branches on tier), `docs/architecture/tenant-lifecycle-convention.md` Appendix A.4 (post-retirement target).
 
 ### 10.5 Quota enforcement implementation — Resolved 2026-04-26 / commit `dcc503c`
 

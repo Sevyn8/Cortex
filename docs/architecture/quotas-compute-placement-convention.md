@@ -10,7 +10,10 @@ Companion documents: ADR-COMPUTE-001 (Cloud Run vs K8s),
 ADR-INFRA-007 (substrate-now / real-impl-later precedent),
 ADR-AU-001 (audit emission),
 `docs/planning/f01-slice-c-quotas-compute-isolation-scope.md`,
-`docs/architecture/f02-swap-paths-for-slice-c-resolvers.md`.
+`docs/architecture/tenant-lifecycle-convention.md` Appendix A
+(absorbed the retired `f02-swap-paths-for-slice-c-resolvers.md`
+2026-04-27 per F02 planning-doc D11; the three stub resolvers are
+all RESOLVED via F02 Slice A).
 
 ## 1. Scope
 
@@ -40,7 +43,11 @@ Out of scope (deferred):
 - AC01 actor resolution — Phase 1 audit emissions are
   service-attributed (`actorId='cortex-quotas'`).
 - Per-tenant quota config in `tenant_config_version` — F02 swap
-  path documented in `f02-swap-paths-for-slice-c-resolvers.md`.
+  RESOLVED 2026-04-27 (F02 Slice A sub-phase 5.3); `getQuotaConfig`
+  now consults `tenant_config_version.config_json.quotas[resource_class]`
+  with fallback to defaults. See
+  `docs/architecture/tenant-lifecycle-convention.md` Appendix A.3
+  for the swap contract.
 
 ## 2. The return-not-throw rule (HIGHEST PRIORITY)
 
@@ -337,7 +344,7 @@ shipping new code in this area:
 - ADR-INFRA-007 — substrate-now / real-impl-later precedent (Slice B / KMS)
 - ADR-AU-001 — audit-events library; REJECT verb scope
 - ADR-DB-002 — RLS posture (`tenant_quota_usage` already FOR ALL with WITH CHECK from Slice A)
-- `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` — F02 evolution contracts
+- `docs/architecture/tenant-lifecycle-convention.md` Appendix A — F02 evolution contracts (absorbed the retired `f02-swap-paths-for-slice-c-resolvers.md` 2026-04-27)
 - `docs/architecture/encryption-blob-storage-convention.md` — Slice B precedent for this doc's structure
 - Migration `services/foundation/migrations/0007_control_plane_tables.sql` — substrate
 - `packages/quotas/src/`, `packages/compute-placement/src/` — implementations

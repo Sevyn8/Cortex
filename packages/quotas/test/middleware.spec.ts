@@ -36,18 +36,40 @@ function setMockChecker(canned: CheckQuotaResult): Mock {
 
 /**
  * Standard middleware-options stub. Tests pick & override fields they
- * care about. `getDb` returns a sentinel — the mock checker doesn't
- * use it (we mock checkQuota end-to-end).
+ * care about. `getDb` returns the no-override mock — the mock checker
+ * doesn't use the db, but `getQuotaConfig`'s F02-swap path (called by
+ * the middleware to consult `tenant_config_version` for per-tenant
+ * overrides) does. Returning empty rows from the select chain
+ * preserves the per-tier-default behavior these tests assume.
  */
 function baseOpts(overrides: Partial<QuotaMiddlewareOptions> = {}): QuotaMiddlewareOptions {
   return {
     resolveResourceClass: () => 'api_calls_per_minute',
     resolveTenantId: () => TENANT_ID,
     resolveTier: () => Promise.resolve('STANDARD'),
-    getDb: () => ({}) as never,
+    getDb: () => noOverrideDb,
     ...overrides,
   };
 }
+
+/**
+ * Mock db that returns empty rows for `getQuotaConfig`'s select chain
+ * (`select().from().where().orderBy().limit()` → []). Lets `getQuotaConfig`'s
+ * F02-swap branch fall through to `DEFAULT_TIER_QUOTAS` cleanly. Tests
+ * that need to exercise per-tenant overrides build a richer mock that
+ * returns the override row.
+ */
+const noOverrideDb = {
+  select: () => ({
+    from: () => ({
+      where: () => ({
+        orderBy: () => ({
+          limit: () => Promise.resolve([]),
+        }),
+      }),
+    }),
+  }),
+} as never;
 
 /** Hono context mock matching the structural HonoContextLike interface. */
 function makeHonoCtx(opts: { method: string; path: string }): {
@@ -114,7 +136,7 @@ describe('buildQuotaMiddlewareCore — happy paths', () => {
       method: 'GET',
       path: '/health',
       tenantId: TENANT_ID,
-      db: {} as never,
+      db: noOverrideDb,
       increment: 1n,
     });
 
@@ -133,7 +155,7 @@ describe('buildQuotaMiddlewareCore — happy paths', () => {
       method: 'GET',
       path: '/whatever',
       tenantId: TENANT_ID,
-      db: {} as never,
+      db: noOverrideDb,
       increment: 1n,
     });
 
@@ -152,7 +174,7 @@ describe('buildQuotaMiddlewareCore — happy paths', () => {
       method: 'POST',
       path: '/api/widgets',
       tenantId: TENANT_ID,
-      db: {} as never,
+      db: noOverrideDb,
       increment: 1n,
     });
 
@@ -177,7 +199,7 @@ describe('buildQuotaMiddlewareCore — rejection', () => {
       method: 'POST',
       path: '/api/widgets',
       tenantId: TENANT_ID,
-      db: {} as never,
+      db: noOverrideDb,
       increment: 1n,
     });
 
@@ -206,7 +228,7 @@ describe('buildQuotaMiddlewareCore — resolveQuotaLimit override', () => {
       method: 'POST',
       path: '/api/widgets',
       tenantId: TENANT_ID,
-      db: {} as never,
+      db: noOverrideDb,
       increment: 1n,
     });
 

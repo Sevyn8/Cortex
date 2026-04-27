@@ -9,6 +9,13 @@ import { EnvelopeDecryptError, SecretsValidationError } from '../src/errors.js';
 const TENANT_A = '22222222-2222-2222-2222-222222222222';
 const TENANT_B = '33333333-3333-3333-3333-333333333333';
 
+// Per planning-doc §4.15 (sub-phase 6.1): envelope.encrypt/decrypt now
+// require a caller-supplied keyResourceName. Tests use a synthetic
+// resource name — the in-memory KMS stub doesn't validate the name
+// (just round-trips the DEK bytes), so any well-formed string works.
+const KEY_RES =
+  'projects/sevyn8-cortex-dev/locations/asia-south1/keyRings/cortex-keyring/cryptoKeys/cortex-general-key';
+
 let logCapture: LogCapture;
 
 /**
@@ -59,13 +66,13 @@ describe('envelope', () => {
   describe('wire format', () => {
     it('encrypt produces buffer with version byte 0x01', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello');
+      const ct = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       expect(ct.readUInt8(0)).toBe(0x01);
     });
 
     it('encrypt produces big-endian wrap_len matching actual wrapped DEK length', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello');
+      const ct = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       const wrapLen = ct.readUInt16BE(1);
       // Our in-memory KMS wraps 32-byte DEK with 4-byte magic = 36 bytes
       expect(wrapLen).toBe(36);
@@ -74,7 +81,7 @@ describe('envelope', () => {
     it('encrypt output length matches: 1 + 2 + wrap_len + 12 + 16 + plaintext.length', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
       const plaintext = 'hello';
-      const ct = await envelope.encrypt(TENANT_A, plaintext);
+      const ct = await envelope.encrypt(TENANT_A, plaintext, KEY_RES);
       const wrapLen = ct.readUInt16BE(1);
       expect(ct.length).toBe(1 + 2 + wrapLen + 12 + 16 + plaintext.length);
     });
@@ -83,30 +90,30 @@ describe('envelope', () => {
   describe('round-trip', () => {
     it('encrypt then decrypt returns original plaintext (string input)', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello world');
-      const pt = await envelope.decrypt(TENANT_A, ct);
+      const ct = await envelope.encrypt(TENANT_A, 'hello world', KEY_RES);
+      const pt = await envelope.decrypt(TENANT_A, ct, KEY_RES);
       expect(pt.toString('utf8')).toBe('hello world');
     });
 
     it('encrypt then decrypt returns original plaintext (Buffer input)', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
       const original = Buffer.from([0x01, 0x02, 0x03, 0xff, 0xfe, 0x00]);
-      const ct = await envelope.encrypt(TENANT_A, original);
-      const pt = await envelope.decrypt(TENANT_A, ct);
+      const ct = await envelope.encrypt(TENANT_A, original, KEY_RES);
+      const pt = await envelope.decrypt(TENANT_A, ct, KEY_RES);
       expect(pt.equals(original)).toBe(true);
     });
 
     it('empty plaintext round-trips', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, '');
-      const pt = await envelope.decrypt(TENANT_A, ct);
+      const ct = await envelope.encrypt(TENANT_A, '', KEY_RES);
+      const pt = await envelope.decrypt(TENANT_A, ct, KEY_RES);
       expect(pt.length).toBe(0);
     });
 
     it('produces different ciphertexts for same plaintext (random DEK + IV)', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct1 = await envelope.encrypt(TENANT_A, 'hello');
-      const ct2 = await envelope.encrypt(TENANT_A, 'hello');
+      const ct1 = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
+      const ct2 = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       expect(ct1.equals(ct2)).toBe(false);
     });
   });
@@ -114,33 +121,35 @@ describe('envelope', () => {
   describe('AAD binding (cross-tenant protection)', () => {
     it('decrypt with different tenantId fails with EnvelopeDecryptError', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'secret-for-tenant-A');
-      await expect(envelope.decrypt(TENANT_B, ct)).rejects.toBeInstanceOf(EnvelopeDecryptError);
+      const ct = await envelope.encrypt(TENANT_A, 'secret-for-tenant-A', KEY_RES);
+      await expect(envelope.decrypt(TENANT_B, ct, KEY_RES)).rejects.toBeInstanceOf(
+        EnvelopeDecryptError,
+      );
     });
   });
 
   describe('tamper detection', () => {
     it('flipped byte in ciphertext fails auth tag', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello world');
+      const ct = await envelope.encrypt(TENANT_A, 'hello world', KEY_RES);
       // Flip a byte in the ciphertext region (after the header + wrapped_DEK + IV + tag)
       const wrapLen = ct.readUInt16BE(1);
       const ciphertextStart = 1 + 2 + wrapLen + 12 + 16;
       const tampered = Buffer.from(ct);
       tampered[ciphertextStart] = (tampered[ciphertextStart] ?? 0) ^ 0xff;
-      await expect(envelope.decrypt(TENANT_A, tampered)).rejects.toBeInstanceOf(
+      await expect(envelope.decrypt(TENANT_A, tampered, KEY_RES)).rejects.toBeInstanceOf(
         EnvelopeDecryptError,
       );
     });
 
     it('flipped byte in auth tag fails', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello');
+      const ct = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       const wrapLen = ct.readUInt16BE(1);
       const tagStart = 1 + 2 + wrapLen + 12;
       const tampered = Buffer.from(ct);
       tampered[tagStart] = (tampered[tagStart] ?? 0) ^ 0xff;
-      await expect(envelope.decrypt(TENANT_A, tampered)).rejects.toBeInstanceOf(
+      await expect(envelope.decrypt(TENANT_A, tampered, KEY_RES)).rejects.toBeInstanceOf(
         EnvelopeDecryptError,
       );
     });
@@ -149,50 +158,54 @@ describe('envelope', () => {
   describe('wire-format validation on decrypt', () => {
     it('rejects unsupported version byte', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello');
+      const ct = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       const bad = Buffer.from(ct);
       bad[0] = 0x02;
-      await expect(envelope.decrypt(TENANT_A, bad)).rejects.toBeInstanceOf(SecretsValidationError);
+      await expect(envelope.decrypt(TENANT_A, bad, KEY_RES)).rejects.toBeInstanceOf(
+        SecretsValidationError,
+      );
     });
 
     it('rejects ciphertext shorter than minimum header size', async () => {
       const tooShort = Buffer.alloc(10);
       tooShort[0] = 0x01;
-      await expect(envelope.decrypt(TENANT_A, tooShort)).rejects.toBeInstanceOf(
+      await expect(envelope.decrypt(TENANT_A, tooShort, KEY_RES)).rejects.toBeInstanceOf(
         SecretsValidationError,
       );
     });
 
     it('rejects truncated ciphertext (wrap_len claims more than buffer has)', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello');
+      const ct = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       // Write a fake huge wrap_len
       const bad = Buffer.from(ct);
       bad.writeUInt16BE(0xfff0, 1);
-      await expect(envelope.decrypt(TENANT_A, bad)).rejects.toBeInstanceOf(SecretsValidationError);
+      await expect(envelope.decrypt(TENANT_A, bad, KEY_RES)).rejects.toBeInstanceOf(
+        SecretsValidationError,
+      );
     });
   });
 
   describe('input validation', () => {
     it('encrypt rejects non-UUID tenantId', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      await expect(envelope.encrypt('not-a-uuid', 'x')).rejects.toBeInstanceOf(
+      await expect(envelope.encrypt('not-a-uuid', 'x', KEY_RES)).rejects.toBeInstanceOf(
         SecretsValidationError,
       );
     });
 
     it('decrypt rejects non-UUID tenantId', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      await expect(envelope.decrypt('not-a-uuid', Buffer.alloc(64))).rejects.toBeInstanceOf(
-        SecretsValidationError,
-      );
+      await expect(
+        envelope.decrypt('not-a-uuid', Buffer.alloc(64), KEY_RES),
+      ).rejects.toBeInstanceOf(SecretsValidationError);
     });
   });
 
   describe('audit logging', () => {
     it('emits an audit on encrypt success', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      await envelope.encrypt(TENANT_A, 'hello');
+      await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       await logCapture.flush();
       expect(logCapture.logs).toHaveLength(1);
       expect(logCapture.logs[0]).toMatchObject({
@@ -206,10 +219,10 @@ describe('envelope', () => {
 
     it('emits an audit on decrypt AAD-mismatch error', async () => {
       __setClientFactoryForTesting(() => inMemoryKms() as never);
-      const ct = await envelope.encrypt(TENANT_A, 'hello');
+      const ct = await envelope.encrypt(TENANT_A, 'hello', KEY_RES);
       await logCapture.flush();
       logCapture.reset();
-      await expect(envelope.decrypt(TENANT_B, ct)).rejects.toBeDefined();
+      await expect(envelope.decrypt(TENANT_B, ct, KEY_RES)).rejects.toBeDefined();
       await logCapture.flush();
       expect(logCapture.logs).toHaveLength(1);
       expect(logCapture.logs[0]).toMatchObject({

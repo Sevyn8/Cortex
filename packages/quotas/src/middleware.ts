@@ -210,7 +210,13 @@ export function buildQuotaMiddlewareCore(opts: QuotaMiddlewareOptions): QuotaMid
         opts.resolveQuotaLimit !== undefined
           ? await opts.resolveQuotaLimit(tenantId, resourceClass)
           : undefined;
-      const quotaLimit = override ?? getQuotaConfig(tier, resourceClass);
+      // F02 Slice A swap (sub-phase 5.3): getQuotaConfig now consults
+      // tenant_config_version for per-tenant overrides when ctx supplies
+      // tenantId + db. Both are already in scope from the middleware's
+      // request context, so per-tenant overrides light up automatically.
+      // resolveQuotaLimit (caller-supplied override) still wins via the
+      // `??` short-circuit.
+      const quotaLimit = override ?? (await getQuotaConfig(tier, resourceClass, { tenantId, db }));
 
       // checkQuota returns a discriminated result (no throw on
       // exceedance — see types.ts CheckQuotaResult JSDoc). Translate

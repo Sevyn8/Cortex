@@ -18,7 +18,6 @@ import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { bindTenantToDbSession } from '@cortex/tenant-context';
 import { __setClientFactoryForTesting } from '@cortex/secrets';
-import { AuditEventEmissionError } from '@cortex/audit-events';
 import { createLogger } from '@cortex/observability';
 import { createLogCapture } from '@cortex/observability/test-utils';
 import {
@@ -74,7 +73,71 @@ beforeAll(async () => {
   __setClientFactoryForTesting(() => inMemoryKms() as never);
 });
 
+// Tenants seeded by `seedTenantKmsKey` for tests that exercise
+// `encryptForTenant` (which now consults `tenant_kms_key` per F02 Slice
+// A's `getKeyForTenant` swap). Cleaned in afterAll.
+const seededTenantIds: string[] = [];
+
+/**
+ * Seed a `tenant` row + `tenant_kms_key` row for the given tenantId.
+ * Required for every test that invokes `encryptForTenant` /
+ * `decryptForTenant` post-F02-swap — the resolver queries
+ * `tenant_kms_key` and throws `TenantKmsKeyNotFoundError` if no row
+ * exists. The `tenant` insert is needed because `tenant_kms_key.tenant_id`
+ * has a FK to `tenant.id`. Idempotent via ON CONFLICT for the
+ * tenant-reuse case (e.g., the hybrid-DI test that uses one tenantId
+ * across two transactions).
+ */
+async function seedTenantKmsKey(tenantId: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO tenant (id, external_id, display_name, tier)
+     VALUES ($1, $2, 'Test', 'STANDARD')
+     ON CONFLICT (id) DO NOTHING`,
+    [tenantId, `test-encrypt-${tenantId.slice(0, 8)}`],
+  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
+    await client.query(
+      `INSERT INTO tenant_kms_key (tenant_id, kms_key_resource_name)
+       VALUES ($1, $2)
+       ON CONFLICT (tenant_id) DO NOTHING`,
+      [
+        tenantId,
+        'projects/sevyn8-cortex-dev/locations/asia-south1/keyRings/cortex-keyring/cryptoKeys/cortex-general-key',
+      ],
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+  if (!seededTenantIds.includes(tenantId)) {
+    seededTenantIds.push(tenantId);
+  }
+}
+
 afterAll(async () => {
+  // Cleanup substrate seeded by tests. tenant_kms_key has FK ON DELETE
+  // RESTRICT; child rows go first under tenant binding. tenant table
+  // has no RLS; direct DELETE.
+  for (const id of seededTenantIds) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [id]);
+      await client.query('DELETE FROM tenant_kms_key WHERE tenant_id = $1', [id]);
+      await client.query('COMMIT');
+    } catch {
+      await client.query('ROLLBACK').catch(() => undefined);
+    } finally {
+      client.release();
+    }
+    await pool.query('DELETE FROM tenant WHERE id = $1', [id]);
+  }
   __setClientFactoryForTesting(null);
   await pool.end();
 });
@@ -112,6 +175,7 @@ async function fetchAuditRows(tenantId: string): Promise<AuditRow[]> {
 describe('encryptForTenant — happy path', () => {
   it('encrypts string plaintext, returns valid EncryptedPayload structure', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const payload = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
       return encryptForTenant(tx, { tenantId, plaintext: 'sensitive PII string' });
@@ -127,6 +191,7 @@ describe('encryptForTenant — happy path', () => {
 
   it('encrypts Buffer plaintext, returns valid EncryptedPayload structure', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const buf = Buffer.from([0x01, 0x02, 0x03, 0xff, 0xfe, 0x00]);
     const payload = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
@@ -138,6 +203,7 @@ describe('encryptForTenant — happy path', () => {
 
   it('NFC-normalizes string plaintext before encryption (round-trip yields composed form)', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const decomposed = 'cafe\u0301'; // c-a-f-e + combining acute (5 code units)
     const composed = 'caf\u00e9'; // c-a-f-é (4 code units)
     expect(decomposed.length).toBe(5);
@@ -165,6 +231,7 @@ describe('encryptForTenant — happy path', () => {
 describe('decryptForTenant — happy path', () => {
   it('round-trip Buffer plaintext: encrypt → decrypt returns identical bytes', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const original = Buffer.from([0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]);
     const result = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
@@ -176,6 +243,7 @@ describe('decryptForTenant — happy path', () => {
 
   it("round-trip string plaintext: encrypt('hello') → decrypt → 'hello'", async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const result = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
       const payload = await encryptForTenant(tx, { tenantId, plaintext: 'hello' });
@@ -193,6 +261,8 @@ describe('cross-tenant decryption isolation', () => {
   it('decrypt with mismatched tenantId throws EncryptionValidationError (defense in depth)', async () => {
     const tenantA = randomUUID();
     const tenantB = randomUUID();
+    await seedTenantKmsKey(tenantA);
+    await seedTenantKmsKey(tenantB);
     const payload = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantA);
       return encryptForTenant(tx, { tenantId: tenantA, plaintext: 'secret-for-A' });
@@ -222,6 +292,8 @@ describe('cross-tenant decryption isolation', () => {
     // check.
     const tenantA = randomUUID();
     const tenantB = randomUUID();
+    await seedTenantKmsKey(tenantA);
+    await seedTenantKmsKey(tenantB);
     const aPayload = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantA);
       return encryptForTenant(tx, { tenantId: tenantA, plaintext: 'secret-for-A' });
@@ -257,6 +329,7 @@ describe('cross-tenant decryption isolation', () => {
 describe('audit emission', () => {
   it('PII_ENCRYPTED event lands in audit_event with after_state forensics', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const payload = await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
       return encryptForTenant(tx, { tenantId, plaintext: 'audit-test-payload' });
@@ -278,6 +351,7 @@ describe('audit emission', () => {
 
   it('PII_DECRYPTED event lands on every decrypt call', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
       const payload = await encryptForTenant(tx, { tenantId, plaintext: 'roundtrip' });
@@ -291,6 +365,7 @@ describe('audit emission', () => {
 
   it('encrypt + decrypt produces 2 chained audit rows in order', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, tenantId);
       const payload = await encryptForTenant(tx, { tenantId, plaintext: 'chain-test' });
@@ -314,21 +389,36 @@ describe('audit emission', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('RLS enforcement', () => {
-  it('encryptForTenant without bindTenantToDbSession throws AuditEventEmissionError (42501)', async () => {
+  it('encryptForTenant without bindTenantToDbSession fails closed via cortex.current_tenant_id()', async () => {
+    // Pre-F02-swap, this test asserted on AuditEventEmissionError (42501)
+    // because the audit emission was the first RLS-protected write. F02
+    // Slice A's getKeyForTenant swap (sub-phase 5.2) added a SECOND
+    // RLS-protected operation earlier in the call sequence: the
+    // tenant_kms_key SELECT, which evaluates the FOR-ALL policy's USING
+    // clause `tenant_id = cortex.current_tenant_id()`. The
+    // `cortex.current_tenant_id()` function is fail-closed (per
+    // ADR-DB-002) — it raises when `app.tenant_id` is not set. The
+    // error surfaces as a raw DB error before either the
+    // TenantKmsKeyNotFoundError "0 rows" branch or the audit-emit's
+    // 42501 path. The error MESSAGE is the canonical signal; the
+    // class varies because the error bubbles from PG via Drizzle.
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     let captured: unknown;
     try {
       await db.transaction(async (tx) => {
-        // No bindTenantToDbSession — encrypt itself succeeds (no DB
-        // touch) but the audit emission's RLS write policy denies.
+        // No bindTenantToDbSession — fail-closed at the first
+        // RLS-policy evaluation (the tenant_kms_key SELECT).
         await encryptForTenant(tx, { tenantId, plaintext: 'denied' });
       });
     } catch (err) {
       captured = err;
     }
-    expect(captured).toBeInstanceOf(AuditEventEmissionError);
-    const cause = (captured as { cause?: { code?: unknown } }).cause;
-    expect(cause?.code).toBe('42501');
+    // Property: the call rejects, and the error message identifies the
+    // missing-bind cause (cortex.current_tenant_id / app.tenant_id).
+    // Same proof as the pre-swap "42501 audit-RLS denial" — bind required.
+    expect(captured).toBeInstanceOf(Error);
+    expect((captured as Error).message).toMatch(/app\.tenant_id|current_tenant_id/);
   });
 });
 
@@ -367,6 +457,7 @@ describe('validation failures', () => {
 describe('soft-size warning + hybrid DI', () => {
   it('encrypting >64 KB plaintext emits a WARN through the configured logger; encrypt still succeeds', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
     const capture = createLogCapture();
     const logger = createLogger({ moduleId: 'cortex-encryption-test', destination: capture });
     const customEmitter = createEncryptionEmitter({ logger });
@@ -395,6 +486,7 @@ describe('soft-size warning + hybrid DI', () => {
 
   it('__setEmitterForTesting + __resetForTesting swap and restore the module-scope emitter', async () => {
     const tenantId = randomUUID();
+    await seedTenantKmsKey(tenantId);
 
     // Install a custom emitter whose encrypt returns a sentinel value
     // distinguishable from real envelope output.

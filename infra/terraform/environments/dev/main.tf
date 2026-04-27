@@ -35,6 +35,7 @@ module "project_baseline" {
     "logging.googleapis.com",
     "monitoring.googleapis.com",
     "cloudbuild.googleapis.com",
+    "cloudtasks.googleapis.com",
   ]
 }
 

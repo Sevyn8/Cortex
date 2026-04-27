@@ -76,8 +76,18 @@ export type NewBootstrapAdmin = typeof bootstrapAdmin.$inferInsert;
 
 /**
  * Primary tenant registry. Control plane — NOT RLS-protected. Phase 1 only
- * Standard tier path implemented; ENTERPRISE enum reserved for F02+. See
- * migration 0007 + future-roadmap.md §10.1 (resolved by 0007).
+ * Standard tier path implemented; ENTERPRISE path lands in F02 Slice A's
+ * provisioning workflow (gated by `dedicated_db_approved`). See migration
+ * 0007 (initial DDL) + migration 0010 (F02 Slice A: status enum extension
+ * + 5 lifecycle metadata columns) + future-roadmap.md §10.1 (resolved by
+ * 0007).
+ *
+ * Status enum spans the full F02 lifecycle state machine per
+ * ADR-LIFECYCLE-001: REQUESTED → PROVISIONING → READY → ACTIVE
+ * → SUSPENDED → ACTIVE / OFFBOARDING → TERMINATED. Allowed transitions
+ * are enforced in `@cortex/tenant-context`'s ALLOWED_TRANSITIONS map;
+ * the DB CHECK constraint (`tenant_status_check`) is the value-set
+ * guard, not the transition guard.
  */
 export const tenant = pgTable('tenant', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -85,12 +95,35 @@ export const tenant = pgTable('tenant', {
   display_name: text('display_name').notNull(),
   tier: text('tier', { enum: ['STANDARD', 'ENTERPRISE'] }).notNull(),
   status: text('status', {
-    enum: ['PROVISIONING', 'ACTIVE', 'SUSPENDED', 'TERMINATED'],
+    enum: [
+      'REQUESTED',
+      'PROVISIONING',
+      'READY',
+      'ACTIVE',
+      'SUSPENDED',
+      'OFFBOARDING',
+      'TERMINATED',
+    ],
   })
     .notNull()
     .default('PROVISIONING'),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().default(msNow),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().default(msNow),
+  // F02 Slice A lifecycle metadata (migration 0010). NULL until the relevant
+  // lifecycle workflow runs; populated by tenants.rotateKeys (Slice D),
+  // tenants.terminate (Slice C), and tenants.offboard (Slice C) respectively.
+  last_key_rotated_at: timestamp('last_key_rotated_at', { withTimezone: true }),
+  terminated_at: timestamp('terminated_at', { withTimezone: true }),
+  offboarding_grace_until: timestamp('offboarding_grace_until', { withTimezone: true }),
+  // Per-tenant legal hold flag (Q-OPEN-3). Termination workflow refuses to
+  // proceed when true. Slice C migration 0011 adds a `legal_hold` table for
+  // richer per-record / per-data-class semantics; both checked by
+  // tenants.terminate.
+  legal_hold: boolean('legal_hold').notNull().default(false),
+  // Manual approval gate for Enterprise dedicated Cloud SQL provisioning
+  // (Q-OPEN-6). When false, F02 provisioning workflow holds at REQUESTED
+  // for ENTERPRISE-tier tenants. Standard tenants ignore this flag.
+  dedicated_db_approved: boolean('dedicated_db_approved').notNull().default(false),
 });
 
 export type Tenant = typeof tenant.$inferSelect;

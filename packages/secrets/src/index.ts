@@ -31,5 +31,6 @@ export {
   EnvelopeEncryptError,
   EnvelopeDecryptError,
   KmsUnavailableError,
+  TenantKmsKeyNotFoundError,
 } from './errors.js';
 export type { SecretsErrorCode } from './errors.js';

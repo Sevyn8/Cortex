@@ -8,6 +8,7 @@ import { ZodError } from 'zod';
 import { tenants } from '../src/tenants.js';
 import { TenantNotFoundError, TenantStatusError, TenantValidationError } from '../src/errors.js';
 import { bindTenantToDbSession } from '../src/db-session.js';
+import { fetchAuditEvents } from './helpers/audit.js';
 import { forceRlsOnAuditEvent, getPool, withBoundClient } from './helpers/db.js';
 
 // ─────────────────────────────────────────────────────────────────────
@@ -550,35 +551,5 @@ describe('tenants CRUD', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────
-
-type AuditEventRow = {
-  action: string;
-  resource: string;
-  occurred_at: string;
-  payload: Record<string, unknown>;
-} & Record<string, unknown>;
-
-async function fetchAuditEvents(
-  db: NodePgDatabase<Record<string, never>>,
-  tenantId: string,
-): Promise<AuditEventRow[]> {
-  return db.transaction(async (tx) => {
-    await bindTenantToDbSession(tx, tenantId);
-    // occurred_at is library-stamped via clock_timestamp() per row
-    // (P0.10 Decision 11), so rows within the same txn have distinct
-    // timestamps. ctid is retained as a defensive tiebreaker — it's
-    // Postgres's physical row identifier, monotonic for sequential
-    // INSERTs on the same backend within a txn. The hash chain
-    // (prev_hash → curr_hash) encodes canonical event order in
-    // production; this ordering is purely for test row-recovery.
-    const result = await tx.execute<AuditEventRow>(
-      sql`SELECT action, resource, occurred_at, payload FROM audit_event
-            WHERE tenant_id = ${tenantId}
-            ORDER BY occurred_at ASC, ctid ASC`,
-    );
-    return result.rows;
-  });
-}
+// fetchAuditEvents + AuditEventRow live in ./helpers/audit.js — shared
+// across this file, provision.spec.ts, provisioning-worker.spec.ts.

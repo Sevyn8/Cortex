@@ -23,7 +23,7 @@ export {
 export { tenantContextProvider } from './context-provider.js';
 
 // DB session binding
-export { bindTenantToDbSession, ensureBoundToTenant } from './db-session.js';
+export { bindTenantToDbSession, ensureBoundToTenant, withTenantDbClient } from './db-session.js';
 
 // Audit emission — thin facade over @cortex/audit-events.
 export { emitAuditEvent } from './audit.js';
@@ -39,6 +39,10 @@ export type {
   TenantListResult,
   UpdateTenantPatch,
 } from './tenants.js';
+
+// F02 lifecycle worker (Slice A — provisioning).
+export { cleanupFailedProvisioning, provisioningWorker } from './provisioning-worker.js';
+export type { ProvisioningTaskPayload } from './provisioning-worker.js';
 
 // HTTP middleware
 export { buildTenantContextMiddleware, defaultHeaderExtractor } from './middleware.js';

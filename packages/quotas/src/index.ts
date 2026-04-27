@@ -55,7 +55,6 @@ export {
   __resetForTesting,
   type CheckQuota,
   type CheckQuotaCallOptions,
-  type CreateQuotaCheckerOptions,
 } from './check-quota.js';
 
 // HTTP middleware — framework-agnostic core + Hono / Express adapters

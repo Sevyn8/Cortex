@@ -19,6 +19,9 @@ export {
   withoutTenantContext,
 } from './context.js';
 
+// Observability composition adapter (see roadmap §4.13).
+export { tenantContextProvider } from './context-provider.js';
+
 // DB session binding
 export { bindTenantToDbSession, ensureBoundToTenant } from './db-session.js';
 

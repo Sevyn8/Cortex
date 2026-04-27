@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { withTenantContext } from '@cortex/tenant-context';
 import { createLogger } from '../src/logger.js';
 import type { ContextProvider } from '../src/context-provider.js';
 import { ObservabilityConfigError, ObservabilityValidationError } from '../src/errors.js';
@@ -108,19 +107,22 @@ describe('createLogger — ContextProvider integration', () => {
     expect(entry?.span_id).toBe('bbbbbbbbbbbbbbbb');
   });
 
-  it('defaultContextProvider picks up bound tenant_id and correlation_id from their async-local stores', async () => {
+  it('defaultContextProvider picks up bound correlation_id from its async-local store; tenant_id is absent (per §4.13)', async () => {
+    // Per roadmap §4.13 (resolved): observability's default provider does
+    // NOT auto-resolve tenant_id — that responsibility moved to
+    // `@cortex/tenant-context`'s `tenantContextProvider`. The
+    // tenant_id-via-async-local integration test lives at
+    // `packages/tenant-context/test/compose-with-observability.spec.ts`.
     const capture = createLogCapture();
     const logger = createLogger({ moduleId: 'cortex-test', destination: capture });
-    await withTenantContext(TENANT_ID, async () => {
-      await withCorrelationContext(CORRELATION_ID, () => {
-        logger.info('in-context');
-      });
+    await withCorrelationContext(CORRELATION_ID, () => {
+      logger.info('in-context');
     });
     await capture.flush();
 
     const entry = capture.logs[0];
-    expect(entry?.tenant_id).toBe(TENANT_ID);
     expect(entry?.correlation_id).toBe(CORRELATION_ID);
+    expect(entry?.tenant_id).toBeUndefined();
   });
 });
 

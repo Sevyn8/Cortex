@@ -5,18 +5,36 @@
  * attribute.
  *
  * Per ADR-OBS-001 §Decision 2:
- * - Tenant id comes from F01's async-local store (`@cortex/tenant-context`).
+ * - Tenant id is NOT auto-resolved here. observability is a leaf
+ *   primitive; tenant binding is a higher-level concern owned by
+ *   `@cortex/tenant-context`. Apps that want `tenant_id` in log fields
+ *   compose `tenantContextProvider` from `@cortex/tenant-context`
+ *   alongside `defaultContextProvider` via `composeContextProviders`
+ *   at startup:
+ *
+ *     import { defaultContextProvider, composeContextProviders }
+ *       from '@cortex/observability';
+ *     import { tenantContextProvider } from '@cortex/tenant-context';
+ *
+ *     const provider = composeContextProviders(
+ *       defaultContextProvider,
+ *       tenantContextProvider,
+ *     );
+ *     const logger = createLogger({ contextProvider: provider });
+ *
+ *   Libraries do NOT compose; they accept whatever `ContextProvider`
+ *   their caller supplies via `createLogger` options. See roadmap
+ *   §4.13 (resolved) for the cycle-decoupling rationale.
  * - User id comes from AC01 (deferred; stub returns `undefined`).
  * - Correlation id comes from observability's own request-scope store,
- *   set by the HTTP middleware (lands in sub-phase 2.5).
- * - Trace + span ids come from the OTel context (lands in sub-phase 2.4).
+ *   set by the HTTP middleware.
+ * - Trace + span ids come from the OTel context.
  *
  * Every getter MUST be cheap — they are called on every log emission,
  * every metric increment, and every span start. No DB lookups, no
  * network calls.
  */
 
-import { getTenantId } from '@cortex/tenant-context';
 import { getCorrelationId } from './correlation-context.js';
 import { getCurrentSpanId, getCurrentTraceId } from './tracer.js';
 
@@ -44,14 +62,14 @@ export const stubContextProvider: Readonly<ContextProvider> = Object.freeze({
 });
 
 /**
- * Production provider. Wires `getTenantId` directly to
- * `@cortex/tenant-context`. The remaining getters are placeholders
- * pending later sub-phases / phases — see the TODO markers below. When
- * those wiring points land, this implementation gets updated; consumers
- * see no API surface change.
+ * Production provider. Wires the observability-internal getters
+ * (correlation id, trace id, span id) — does NOT auto-resolve tenant
+ * id; see the file header for the composition pattern. Apps wanting
+ * tenant id in log fields compose `tenantContextProvider` from
+ * `@cortex/tenant-context` via `composeContextProviders`.
  */
 export const defaultContextProvider: ContextProvider = {
-  getTenantId,
+  getTenantId: () => undefined,
   // TODO(AC01): wire from auth context store once AC01 ships its
   // request-scope user store.
   getUserId: () => undefined,

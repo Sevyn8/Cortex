@@ -30,6 +30,7 @@ export {
 
 // Context provider
 export { defaultContextProvider, stubContextProvider } from './context-provider.js';
+export { composeContextProviders } from './compose-context-providers.js';
 
 // Correlation context
 export {

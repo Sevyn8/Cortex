@@ -36,14 +36,11 @@
 
 import { sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-// `Logger` is imported type-only and `createLogger` via dynamic import to
-// avoid closing a load-order cycle:
-// `tenant-context → audit-events → observability → tenant-context`.
-// See planning-doc Decision 1 sub-finding (P0.10 sub-phase 7) and
-// roadmap §4.13. Type-only imports are erased at compile time and never
-// trigger module evaluation; the dynamic import resolves at first WARN
-// emission, by which time all packages are fully initialized.
-import type { Logger } from '@cortex/observability';
+// `@cortex/observability` is imported statically since roadmap §4.13
+// (resolved): observability no longer depends on `@cortex/tenant-context`,
+// so the prior cycle (`tenant-context → audit-events → observability →
+// tenant-context`) is gone at the package-graph layer.
+import { createLogger, type Logger } from '@cortex/observability';
 import { canonicalizeJsonValue, checkPayloadSize } from './canonicalize.js';
 import { AuditEventEmissionError, AuditEventValidationError } from './errors.js';
 import { auditEventParamsSchema } from './schemas.js';
@@ -79,19 +76,9 @@ export interface CreateAuditEventEmitterOptions {
 export function createAuditEventEmitter(
   opts: CreateAuditEventEmitterOptions = {},
 ): AuditEventEmitter {
-  // Lazy logger: avoid eager import of @cortex/observability at module
-  // load (would close the tenant-context → audit-events → observability
-  // → tenant-context cycle — see file header). When a caller-supplied
-  // logger is present, we cache it directly; otherwise resolve via
-  // dynamic import on first WARN emission.
   let cachedLogger: Logger | null = opts.logger ?? null;
-  async function getLogger(): Promise<Logger> {
-    if (cachedLogger === null) {
-      const observability = (await import('@cortex/observability')) as {
-        createLogger: (options: { moduleId: string }) => Logger;
-      };
-      cachedLogger = observability.createLogger({ moduleId: MODULE_ID });
-    }
+  function getLogger(): Logger {
+    cachedLogger ??= createLogger({ moduleId: MODULE_ID });
     return cachedLogger;
   }
   return {
@@ -150,11 +137,10 @@ export function createAuditEventEmitter(
 
       // 3. Soft-size signal — WARN above 64 KB serialized; do NOT
       //    throw (per planning-doc Decision 2 and roadmap §1.9). The
-      //    logger is resolved lazily on first WARN to keep module-load
-      //    free of the observability import cycle.
+      //    logger is constructed lazily on first WARN.
       const sizeReport = checkPayloadSize(merged);
       if (sizeReport.exceedsSoftLimit) {
-        const logger = await getLogger();
+        const logger = getLogger();
         logger.warn(
           {
             tenant_id: data.tenantId,

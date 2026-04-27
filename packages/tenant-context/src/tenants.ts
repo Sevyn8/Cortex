@@ -43,23 +43,17 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
 import { tenant, tenantConfigVersion, type Tenant } from '@cortex/canonical-schema';
 import { getActionByName } from '@cortex/audit-events';
+import { buildKeyResourceName } from '@cortex/secrets';
 import { TENANT_AUDIT_ACTIONS } from './audit-actions.js';
 import { emitAuditEvent } from './audit.js';
 import { bindTenantToDbSession } from './db-session.js';
 import { TenantNotFoundError, TenantStatusError, TenantValidationError } from './errors.js';
 import type { TenantStatus, TenantTier } from './types.js';
 
-// Note on the dynamic `@cortex/secrets` import inside `create()`:
-// Static `import { buildKeyResourceName } from '@cortex/secrets'` would
-// close a module-load cycle:
-//   observability → tenant-context → secrets → observability
-// because @cortex/secrets/src/audit.ts top-level instantiates a
-// secrets-audit emitter via @cortex/observability's createLogger. The
-// cycle's pre-existing first leg (observability → tenant-context) is
-// tracked in roadmap §4.13; Slice B's secrets dep extends it. Mirroring
-// P0.10 emit.ts's break, we resolve `@cortex/secrets` lazily on first
-// `create()` call — by which time every package's exports are
-// initialized. Cost is one cached `import()` per process; negligible.
+// `@cortex/secrets` is imported statically since roadmap §4.13 (resolved):
+// observability no longer depends on `@cortex/tenant-context`, so the
+// prior `observability → tenant-context → secrets → observability`
+// triangle is gone at the package-graph layer.
 
 // ─────────────────────────────────────────────────────────────────────
 // Validation schemas
@@ -246,9 +240,6 @@ async function create(
     // Provision tenant_kms_key row per ADR-INFRA-007 Decision 1.
     // Phase 1: kms_key_resource_name points at env's cortex-general-key.
     // F02 swaps to real per-tenant keys; envelope format unchanged.
-    const { buildKeyResourceName } = (await import('@cortex/secrets')) as {
-      buildKeyResourceName: (keyId: string) => string;
-    };
     const kmsKeyResourceName = buildKeyResourceName('cortex-general-key');
     await tx.execute(sql`
       INSERT INTO tenant_kms_key (tenant_id, kms_key_resource_name)

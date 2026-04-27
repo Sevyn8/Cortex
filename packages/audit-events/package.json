@@ -24,7 +24,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@cortex/tenant-context": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/pg": "catalog:",
     "vitest": "catalog:"

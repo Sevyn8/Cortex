@@ -131,9 +131,6 @@ importers:
         specifier: 'catalog:'
         version: 3.25.76
     devDependencies:
-      '@cortex/tenant-context':
-        specifier: workspace:*
-        version: link:../tenant-context
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
@@ -255,9 +252,6 @@ importers:
 
   packages/observability:
     dependencies:
-      '@cortex/tenant-context':
-        specifier: workspace:*
-        version: link:../tenant-context
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
@@ -376,6 +370,9 @@ importers:
         specifier: 'catalog:'
         version: 3.25.76
     devDependencies:
+      '@cortex/observability':
+        specifier: workspace:*
+        version: link:../observability
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17

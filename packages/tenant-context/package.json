@@ -19,6 +19,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@cortex/observability": "workspace:*",
     "vitest": "catalog:",
     "@types/pg": "catalog:",
     "@types/node": "^22.0.0"

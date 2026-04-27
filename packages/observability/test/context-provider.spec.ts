@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { withTenantContext } from '@cortex/tenant-context';
 import { defaultContextProvider, stubContextProvider } from '../src/context-provider.js';
 import { withCorrelationContext } from '../src/correlation-context.js';
 
-const TENANT_ID = '11111111-1111-4111-8111-111111111111';
 const CORRELATION_ID = 'corr-test-fixed-value';
 
 describe('stubContextProvider', () => {
@@ -21,14 +19,20 @@ describe('stubContextProvider', () => {
 });
 
 describe('defaultContextProvider — getTenantId', () => {
-  it('returns undefined outside any tenant context', () => {
+  // Per roadmap §4.13 (resolved): tenant_id is NOT auto-resolved by
+  // observability's default provider. Apps wanting tenant_id in log
+  // fields compose `tenantContextProvider` from `@cortex/tenant-context`
+  // via `composeContextProviders`. The integration is exercised in
+  // `packages/tenant-context/test/compose-with-observability.spec.ts`.
+  it('always returns undefined — observability is decoupled from tenant-context', () => {
     expect(defaultContextProvider.getTenantId()).toBeUndefined();
   });
+});
 
-  it('returns the bound tenant id inside withTenantContext', async () => {
-    await withTenantContext(TENANT_ID, () => {
-      expect(defaultContextProvider.getTenantId()).toBe(TENANT_ID);
-    });
+describe('defaultContextProvider — getUserId', () => {
+  // AC01 stub. Wired in P2.1.
+  it('returns undefined (AC01 stub)', () => {
+    expect(defaultContextProvider.getUserId()).toBeUndefined();
   });
 });
 
@@ -48,16 +52,5 @@ describe('defaultContextProvider — trace and span ids', () => {
   it('returns undefined for both when no active span exists', () => {
     expect(defaultContextProvider.getTraceId()).toBeUndefined();
     expect(defaultContextProvider.getSpanId()).toBeUndefined();
-  });
-});
-
-describe('defaultContextProvider — composition', () => {
-  it('exposes tenant_id and correlation_id when both contexts are bound simultaneously', async () => {
-    await withTenantContext(TENANT_ID, async () => {
-      await withCorrelationContext(CORRELATION_ID, () => {
-        expect(defaultContextProvider.getTenantId()).toBe(TENANT_ID);
-        expect(defaultContextProvider.getCorrelationId()).toBe(CORRELATION_ID);
-      });
-    });
   });
 });

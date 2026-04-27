@@ -21,7 +21,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cortex/tenant-context": "workspace:*",
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/auto-instrumentations-node": "catalog:",
     "@opentelemetry/exporter-metrics-otlp-http": "catalog:",

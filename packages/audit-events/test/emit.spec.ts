@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { bindTenantToDbSession } from '@cortex/tenant-context';
 import { createLogger } from '@cortex/observability';
 import { createLogCapture } from '@cortex/observability/test-utils';
 import {
@@ -18,6 +17,19 @@ import {
   SOFT_PAYLOAD_LIMIT_BYTES,
   type AuditEventParams,
 } from '../src/index.js';
+
+// Local replica of `@cortex/tenant-context`'s `bindTenantToDbSession` to
+// avoid a workspace-graph cycle (`tenant-context → audit-events →
+// tenant-context` via test deps). Same one-liner; same semantics.
+// Per roadmap §4.13 (resolved): observability is a leaf primitive AND
+// audit-events is a leaf with respect to tenant-context — both halves
+// of the symmetric invariant.
+async function bindTenantToDbSession(
+  tx: NodePgDatabase<Record<string, never>>,
+  tenantId: string,
+): Promise<void> {
+  await tx.execute(sql`SELECT set_config('app.tenant_id', ${tenantId}, true)`);
+}
 
 // Catalog used across all integration tests.
 const TEST_ACTIONS = registerAuditActions([

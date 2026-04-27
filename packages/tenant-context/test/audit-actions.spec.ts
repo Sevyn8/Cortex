@@ -10,8 +10,8 @@ import { getActionByName } from '@cortex/audit-events';
 import { TENANT_AUDIT_ACTIONS } from '../src/audit-actions.js';
 
 describe('TENANT_AUDIT_ACTIONS — catalog shape', () => {
-  it('has 10 total tenant-lifecycle actions (5 Slice A + 5 F02 additions)', () => {
-    expect(TENANT_AUDIT_ACTIONS.length).toBe(10);
+  it('has 11 total tenant-lifecycle actions (5 Slice A + 6 F02 additions)', () => {
+    expect(TENANT_AUDIT_ACTIONS.length).toBe(11);
   });
 
   it('every entry has a non-empty name and a verb', () => {
@@ -55,6 +55,10 @@ describe('TENANT_AUDIT_ACTIONS — Slice A entries (pre-F02)', () => {
 describe('TENANT_AUDIT_ACTIONS — F02 lifecycle additions', () => {
   it('TENANT_PROVISIONED is registered with CREATE verb', () => {
     expect(getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_PROVISIONED').verb).toBe('CREATE');
+  });
+
+  it('TENANT_SUSPENDED is registered with UPDATE verb (Slice B; cascade-event handle for AC01/S15/S17)', () => {
+    expect(getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_SUSPENDED').verb).toBe('UPDATE');
   });
 
   it('TENANT_OFFBOARDING_STARTED is registered with UPDATE verb', () => {

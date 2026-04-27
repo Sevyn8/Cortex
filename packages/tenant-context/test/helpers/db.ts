@@ -1,5 +1,7 @@
 import { execSync } from 'node:child_process';
 import { Pool, type PoolClient } from 'pg';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { bindTenantToDbSession } from '../../src/db-session.js';
 
 /**
  * Build a `pg.Pool` from PG* env vars (PGHOST/PGPORT/PGUSER/PGPASSWORD/
@@ -63,6 +65,77 @@ export async function withBoundClient(
     throw err;
   } finally {
     client.release();
+  }
+}
+
+/**
+ * Promise barrier with externally-callable resolve/reject. Standard
+ * primitive for forcing transaction interleaving in two-connection
+ * contention tests (Q-NEW-5; §10.15).
+ */
+export interface Deferred<T = void> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (err: unknown) => void;
+}
+
+export function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Run two parallel transactions, each on its own pooled PoolClient
+ * (independent connections), both auto-bound to the same `tenantId`.
+ * Each callback receives a Drizzle `NodePgDatabase` transaction handle.
+ *
+ * Used for §10.15 contention testing: verify the row lock in
+ * `setStatus` / `suspend` / `resume` actually serializes concurrent
+ * UPDATE attempts. Tests use a `Deferred` barrier to force interleaving
+ * (e.g., tx1 grabs the lock first, signals barrier, then tx2 attempts
+ * to acquire the same lock — which must block at the DB until tx1
+ * commits).
+ *
+ * Resolution returns `[result1, result2]` of both callbacks' return
+ * values. If either transaction throws, that transaction rolls back
+ * (Drizzle's `db.transaction` semantics) and the other still runs to
+ * completion (errors don't abort the partner mid-flight); the helper
+ * itself rejects with the first error observed via `Promise.all`.
+ *
+ * @param pool — shared `pg.Pool`.
+ * @param tenantId — UUID; both transactions bind to this tenant via
+ *   `bindTenantToDbSession`.
+ * @param fn1 — first transaction callback; receives a bound tx handle.
+ * @param fn2 — second transaction callback; receives a bound tx handle.
+ */
+export async function withTwoBoundClients<T1, T2>(
+  pool: Pool,
+  tenantId: string,
+  fn1: (tx: NodePgDatabase<Record<string, never>>) => Promise<T1>,
+  fn2: (tx: NodePgDatabase<Record<string, never>>) => Promise<T2>,
+): Promise<[T1, T2]> {
+  const client1 = await pool.connect();
+  const client2 = await pool.connect();
+  try {
+    const db1 = drizzle(client1);
+    const db2 = drizzle(client2);
+    const txn1 = db1.transaction(async (tx) => {
+      await bindTenantToDbSession(tx, tenantId);
+      return fn1(tx);
+    });
+    const txn2 = db2.transaction(async (tx) => {
+      await bindTenantToDbSession(tx, tenantId);
+      return fn2(tx);
+    });
+    return await Promise.all([txn1, txn2]);
+  } finally {
+    client1.release();
+    client2.release();
   }
 }
 

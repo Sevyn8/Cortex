@@ -22,10 +22,17 @@ export const TENANT_AUDIT_ACTIONS = registerAuditActions([
   { name: 'TENANT_STATUS_CHANGED', verb: 'UPDATE' },
   { name: 'TENANT_CONFIG_VERSION_CREATED', verb: 'CREATE' },
   { name: 'TENANT_KMS_KEY_BOUND', verb: 'CREATE' },
-  // F02 lifecycle additions per planning-doc D6 (hybrid catalog —
-  // domain actions for irreversible/compliance events; reversible
-  // suspend/resume keeps using TENANT_STATUS_CHANGED + before/after).
+  // F02 lifecycle additions per planning-doc D6 (hybrid catalog).
+  // Asymmetric suspend/resume per Slice B SB1 lock + convention §5:
+  //   - suspend uses TENANT_SUSPENDED (cascade-event handle for
+  //     AC01/S15/S17 push-style subscribers — the new domain action
+  //     gives consumers a clean filter target without parsing
+  //     after_state.status).
+  //   - resume uses TENANT_STATUS_CHANGED (reversible inverse, no
+  //     cascade subscribers; one STATUS_CHANGED row reads cleanly).
+  // Other domain actions cover irreversible / compliance events.
   { name: 'TENANT_PROVISIONED', verb: 'CREATE' },
+  { name: 'TENANT_SUSPENDED', verb: 'UPDATE' },
   { name: 'TENANT_OFFBOARDING_STARTED', verb: 'UPDATE' },
   { name: 'TENANT_TERMINATED', verb: 'DELETE' },
   { name: 'TENANT_KEY_ROTATED', verb: 'UPDATE' },

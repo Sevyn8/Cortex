@@ -664,33 +664,281 @@ TENANT_PROVISIONED — this is the recommended forensic signature for
 
 ## 5. Suspension cascade `[F02-B]`
 
-**Slice B placeholder.** Workflow shape — pinned context for the
-slice that ships it:
+The reversible-status surface that pauses a tenant without destroying
+substrate. Two operator-facing entry points (`tenants.suspend` /
+`tenants.resume`); one new domain action (`TENANT_SUSPENDED`) +
+reuse of the generic `TENANT_STATUS_CHANGED`. Implementation lives
+in `packages/tenant-context/src/tenants.ts:685` (suspend) and `:769`
+(resume); contention semantics verified by §10.15 tests in
+`packages/tenant-context/test/suspend-resume.spec.ts`.
 
-- `tenants.suspend(db, tenantId, reason, ctx)` flips `status` ACTIVE
-  → SUSPENDED via `tenants.setStatus`. Idempotent re-call is no-op
-  (current === target check). Inside its own DB transaction.
-- Emits `TENANT_SUSPENDED` audit event (UPDATE; caller actor
-  attribution per §9). `before_state.status='ACTIVE'`,
-  `after_state.status='SUSPENDED'`. Reason captured in payload.
-- `tenants.resume(db, tenantId, ctx)` flips SUSPENDED → ACTIVE.
-  Emits `TENANT_STATUS_CHANGED` (UPDATE; symmetric reversible per
-  D6 hybrid; not a new domain action — RESUME is the inverse of
-  SUSPEND, and the chain reads cleanly with one STATUS_CHANGED row).
-- **AC01 session-revoke cascade (Q-OPEN-2).** F02 emits
-  `TENANT_SUSPENDED`; AC01 (when shipped P2.1) subscribes and
-  revokes active sessions on emission. F02 does NOT call AC01
-  directly. Slice A pattern: same as the secrets cycle-decoupling —
-  observability layer doesn't reach into AC01; AC01 reaches in
-  through Pub/Sub fan-out (per roadmap §4.12).
-- **S15 device pause + S17 outbound stop cascades.** Same shape:
-  F02 emits, S15/S17 subscribe when they ship. Pull-style for now
-  (consumers query `audit_event` directly); Pub/Sub fan-out lands
-  with §4.12 resolution.
-- Concurrency: SA10.15 contention test ships alongside Slice B
-  (operator hits "suspend" while a background job is mid-update —
-  most concurrency-prone surface in F02). Tests use two-connection
-  contention pattern with promise barriers.
+**Asymmetric audit emission** is the structural decision Slice B
+locks: suspend emits a dedicated domain action because it carries
+_downstream consequences_ that consumers will subscribe to (session
+revoke, device pause, outbound drain); resume emits the generic
+`TENANT_STATUS_CHANGED` because the inverse transition has no
+downstream consumers — restoring normal state restores normal
+behavior, no separate cascade. Per planning-doc SB1 + Q-OPEN-2.
+
+### 5.1. Suspension workflow (ACTIVE → SUSPENDED)
+
+Sequence (per `tenants.ts:685` `suspend`):
+
+1. **Caller** invokes `tenants.suspend(db, id, reason, ctx)`. Inputs:
+   - `id`: tenant UUID. Validated via `idSchema` → `TenantValidationError`
+     on malformed input.
+   - `reason`: free-form string, **1–500 chars, required** (Q-NEW-1).
+     Validated via `suspendReasonSchema` → `TenantValidationError` on
+     empty/oversize.
+   - `ctx.actor`: caller's actor identity. Validated via `actorSchema`.
+2. **Single transaction opens.** `db.transaction(async (tx) => {...})`.
+   `bindTenantToDbSession(tx, parsedId)` binds `app.tenant_id` so the
+   subsequent `audit_event` INSERT passes RLS write policy.
+3. **Pessimistic row lock.** `SELECT ... FROM tenant WHERE id = $1
+FOR UPDATE LIMIT 1` — acquires an exclusive row lock that serializes
+   against any concurrent suspend / resume / setStatus / update on the
+   same tenant (§5.5).
+4. **Idempotency check (SB5 Option α).** If `current.status ===
+'SUSPENDED'`, the function **returns the locked row** without
+   updating, without emitting audit (§5.4).
+5. **Transition validation.** `assertTransitionAllowed(parsedId,
+current.status, 'SUSPENDED')` — throws `TenantStatusError` if the
+   `ALLOWED_TRANSITIONS` map (per §1.3) does not permit the move.
+   Permitted source: `ACTIVE` only. Disallowed sources: REQUESTED,
+   PROVISIONING, READY, SUSPENDED (filtered by step 4 already),
+   OFFBOARDING, TERMINATED.
+6. **UPDATE the row.** `UPDATE tenant SET status = 'SUSPENDED',
+updated_at = date_trunc('millisecond', now()) WHERE id = $1`.
+   `updated_at` uses `msNow` (per §1's millisecond-truncation policy
+   from migration 0006).
+7. **Emit `TENANT_SUSPENDED`** (verb UPDATE; caller actor preserved
+   per §9.3):
+   ```typescript
+   await emitAuditEvent(tx, {
+     tenantId: parsedId,
+     actorType: parsedActor.type,
+     actorId: parsedActor.id,
+     ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+     action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_SUSPENDED'),
+     verb: 'UPDATE',
+     resource: `tenant:${parsedId}`,
+     before_state: { status: current.status },
+     after_state: { status: 'SUSPENDED' },
+     payload: { reason: parsedReason },
+   });
+   ```
+   `payload.reason` flows through `@cortex/audit-events`'
+   user-payload merge into `audit_event.payload.reason` (snake_case at
+   wire layer). The `before_state` / `after_state` fields are auto-
+   merged into `payload.before_state` / `payload.after_state` per the
+   library's UPDATE-verb path.
+8. **Transaction commits.** Function returns the new `SUSPENDED` row.
+
+**Synchronous; no Cloud Tasks worker.** Suspension is a single state
+transition with no multi-step orchestration (no Cloud SQL allocation,
+no smoke test). No reason to enqueue an async task; the cascading
+consequences (AC01 session revoke, etc.) run _outside_ F02's
+transaction by subscribing to the audit event (§5.3).
+
+### 5.2. Resume workflow (SUSPENDED → ACTIVE)
+
+Sequence (per `tenants.ts:769` `resume`):
+
+1. **Caller** invokes `tenants.resume(db, id, ctx)`. **No `reason`
+   parameter** (Q-NEW-2 lock) — the audit chain shows what was
+   suspended and why; resume's "why" is implicit ("ready again").
+2. **Same single-transaction shape as suspend** — bind, lock, check
+   idempotency (`current.status === 'ACTIVE'` returns no-op), validate
+   transition, UPDATE, emit, commit.
+3. **Emit `TENANT_STATUS_CHANGED`** (NOT `TENANT_RESUMED` — see
+   asymmetry note below). `before_state.status` reflects the actual
+   prior state (typically `'SUSPENDED'`); `after_state.status =
+'ACTIVE'`.
+
+**Why TENANT_STATUS_CHANGED, not a TENANT_RESUMED domain action?** Per
+SB1 lock + planning-doc D6 hybrid catalog rule:
+
+- `TENANT_SUSPENDED` exists because _suspending a tenant triggers
+  cascade work_. AC01 needs a clean filter handle to revoke sessions;
+  S15 needs a clean filter handle to halt device commands; S17 needs
+  a clean filter handle to drain egress. Filtering on
+  `action = 'TENANT_SUSPENDED'` is more durable than filtering on
+  `action = 'TENANT_STATUS_CHANGED' AND
+payload.after_state.status = 'SUSPENDED'`.
+- Resume has no such cascade subscribers. Restoring ACTIVE state
+  restores normal behavior; AC01 doesn't need a "session resume" hook
+  (sessions don't auto-revive after revoke — users re-authenticate);
+  S15/S17 resume on the next outbound action.
+- One generic STATUS_CHANGED row reads cleanly in operator forensics;
+  a new TENANT_RESUMED action would bloat the catalog without payoff.
+
+### 5.3. Cascade-event handle (Q-OPEN-2 + planning-doc Drift 3/4)
+
+`TENANT_SUSPENDED` is the _push-event handle_ downstream consumers
+will subscribe to when they ship. F02 emits; consumers consume.
+**F02 itself has zero subscribe-side code** — the cascade is one-way,
+event-sourced, push-style (per planning-doc Drift 3 + Drift 4).
+
+| Consumer                          | Trigger                 | Action on `TENANT_SUSPENDED`                                                                     |
+| --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
+| **AC01** (Agent Control 01, P2.1) | Subscribes when shipped | Revoke active sessions for the suspended tenant. WorkOS session-revoke RPC keyed on `tenant_id`. |
+| **S15** (Smart device pause)      | Subscribes when shipped | Halt outbound device commands; flush in-flight queue.                                            |
+| **S17** (Outbound stop)           | Subscribes when shipped | Drain in-flight egress; pause new sends.                                                         |
+
+**Subscription pattern (until Pub/Sub fan-out lands per roadmap
+§4.12):** Pull-style. Consumers query `audit_event` directly, keyed on
+a checkpoint cursor:
+
+```sql
+SELECT *
+  FROM audit_event
+ WHERE action = 'TENANT_SUSPENDED'
+   AND occurred_at > $checkpoint
+ ORDER BY occurred_at, ctid
+ LIMIT $batch;
+-- Consumer advances $checkpoint to MAX(occurred_at) of the batch.
+```
+
+The query targets only `TENANT_SUSPENDED` rows, NOT
+`TENANT_STATUS_CHANGED` — the asymmetric design (§5.2) makes this
+filter trivial. Consumers binding `app.tenant_id` per row is
+necessary for RLS on `audit_event`; alternatively, a
+cross-tenant-bypass role (deferred per ADR-DB-002 §"Decision" #4) can
+read all tenants' rows in one pass.
+
+**Pub/Sub fan-out future** (roadmap §4.12, RESOLVED 2026-04-27 in the
+sense that the cycle decoupling is done; the Pub/Sub _integration_ is
+still future): each emitted audit event additionally publishes to a
+Cloud Pub/Sub topic; consumers subscribe to the topic instead of
+polling `audit_event`. F02's emit-side already works for both
+patterns — the only change is adding the publish step to
+`@cortex/audit-events`.
+
+### 5.4. Idempotency semantics (SB5 Option α)
+
+| Scenario                                       | Result                            | Audit emission                  |
+| ---------------------------------------------- | --------------------------------- | ------------------------------- |
+| `suspend` on an `ACTIVE` tenant                | UPDATE → SUSPENDED                | 1 × `TENANT_SUSPENDED` row      |
+| `suspend` on an already-`SUSPENDED` tenant     | Returns the current row unchanged | **None**                        |
+| `resume` on a `SUSPENDED` tenant               | UPDATE → ACTIVE                   | 1 × `TENANT_STATUS_CHANGED` row |
+| `resume` on an already-`ACTIVE` tenant         | Returns the current row unchanged | **None**                        |
+| `suspend` on a `REQUESTED`/`TERMINATED` tenant | Throws `TenantStatusError`        | None                            |
+
+**Rationale.** Operators retrying after a flaky network response
+should see clean success rather than `TenantStatusError`. Logging a
+no-op audit row would be misleading: no state change occurred, so
+the row would falsely suggest one did. The original suspend's audit
+row remains the canonical record of when/why the tenant was
+suspended; subsequent retry calls add no information.
+
+**Distinction from `setStatus`.** The `tenants.setStatus` JSDoc
+rationale (_"silent success when nothing changed would lie to the
+audit log"_) applies to direct `setStatus` callers. `suspend` and
+`resume` are higher-level workflow functions; they carry their own
+idempotency contract above `setStatus` because operator-facing
+surfaces benefit from the friendlier semantics.
+
+### 5.5. Concurrency semantics (SB2 + §10.15)
+
+**Pessimistic row lock** via `SELECT ... FOR UPDATE` (line 692 in
+`tenants.ts`). Postgres's lock manager serializes concurrent
+state-change attempts on the same tenant row at the database layer —
+no application-side coordination required.
+
+**Two-suspend race scenario** (the worry §10.15 surfaces):
+
+1. Operator A and Operator B both invoke `tenants.suspend(db,
+tenantId, ..., {actor})` simultaneously.
+2. Both calls open their own transactions on independent pool clients
+   (Drizzle's `db.transaction` acquires distinct `PoolClient`
+   instances per call).
+3. **A wins the lock first** (Postgres FIFO on the lock manager). A's
+   transaction holds the row exclusively.
+4. **B's `SELECT ... FOR UPDATE` blocks** — Postgres parks B's
+   request on the lock manager's wait queue.
+5. **A executes UPDATE → audit emit → COMMIT.** Lock released.
+6. **B unblocks.** B's SELECT returns the _post-A_ state: `SUSPENDED`.
+7. **B's idempotency check (SB5 Option α) fires.** `current.status ===
+'SUSPENDED'` → B returns the row without UPDATE, without audit emit.
+
+**Net effect:** Exactly one `TENANT_SUSPENDED` audit row. Both calls
+return the SUSPENDED row. Operator B has no signal that A's call
+"won" — both responses look like clean success, which is the
+operator-facing contract we want.
+
+**§10.15 verification (sub-phase 3 ships 3 tests):**
+
+| Test                               | What it proves                                                             | Mechanism                                                                                                                                                               |
+| ---------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lock proof under barrier           | tx2's SELECT FOR UPDATE blocks until tx1 commits; tx2 reads post-tx1 state | `withTwoBoundClients` helper + `Deferred<void>` barrier; tx1 holds lock; tx2 awaits barrier then attempts contended SELECT                                              |
+| Production-path concurrent suspend | `Promise.all([suspend, suspend])` produces exactly 1 audit row             | Two real `tenants.suspend()` calls; lock + SB5 Option α together yield single audit emission                                                                            |
+| Drizzle SQL regression guard       | `tenants.suspend` actually emits `SELECT … FOR UPDATE` SQL                 | Custom Drizzle Logger (`logQuery`) captures every SQL statement issued during a real suspend; matcher requires `SELECT` + `FROM tenant` + `FOR UPDATE` on the same line |
+
+The third test is the regression guard §10.15 explicitly worries
+about: a future refactor that silently drops `.for('update')` from
+the query construction would leave the lock unverified. The Drizzle
+logger captures the _actual_ SQL run by `tenants.suspend`, so a
+regression in production code path fails the test directly — not in
+some equivalently-constructed test query that happens to lock.
+
+**Generalized helper.** `withTwoBoundClients(pool, tenantId, fn1,
+fn2)` (per Q-NEW-5) lives in `packages/tenant-context/test/helpers/db.ts`.
+Acquires two pooled `PoolClient`s, wraps each with Drizzle, opens
+two parallel transactions both auto-bound to the same tenant. Returns
+`Promise.all([fn1Result, fn2Result])`. Use this for any future
+two-connection contention test (Slice C and Slice D will likely need
+it for offboarding-during-key-rotation and similar scenarios).
+
+### 5.6. Status guards
+
+Per `ALLOWED_TRANSITIONS` map in `tenants.ts:157` (per ADR-LIFECYCLE-001
+
+- §1.3):
+
+| Function          | Allowed source(s) | Disallowed source(s)                                                                                                      |
+| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tenants.suspend` | `ACTIVE`          | `REQUESTED`, `PROVISIONING`, `READY`, `SUSPENDED` (handled by §5.4 idempotency, not a throw), `OFFBOARDING`, `TERMINATED` |
+| `tenants.resume`  | `SUSPENDED`       | `REQUESTED`, `PROVISIONING`, `READY` (see note), `ACTIVE` (handled by §5.4 idempotency), `OFFBOARDING`, `TERMINATED`      |
+
+**Note on `READY → ACTIVE`.** The `ALLOWED_TRANSITIONS` map permits
+`READY → ACTIVE` because that's the _provisioning worker's_ path
+(per §1.3). `tenants.resume` does not gate on "must be SUSPENDED"
+beyond what `assertTransitionAllowed` checks; in principle, calling
+`resume` from `READY` would succeed because the transition is
+permitted. In practice, operators don't observe `READY` (the worker
+advances through it within milliseconds), so this is a documentation
+contract rather than a code-enforced constraint. Slice D may add a
+strict "resume is SUSPENDED-only" guard at the HTTP API surface
+without changing the function signature.
+
+Disallowed transitions raise `TenantStatusError` with the current
+status and the set of allowed targets — caller layer can map to a
+409 Conflict at the HTTP boundary (per §1's status-mapping table).
+
+### 5.7. Forensic queries (operator runbook)
+
+| Query                                                                                                                                                                                                                                                                                                                                                                | Purpose                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `SELECT * FROM audit_event WHERE tenant_id = $1 AND action IN ('TENANT_SUSPENDED', 'TENANT_STATUS_CHANGED') ORDER BY occurred_at`                                                                                                                                                                                                                                    | Full suspend/resume history for tenant X.                                                                                      |
+| `SELECT payload->>'reason' AS reason, occurred_at, actor_id FROM audit_event WHERE tenant_id = $1 AND action = 'TENANT_SUSPENDED' ORDER BY occurred_at DESC LIMIT 1`                                                                                                                                                                                                 | Most recent suspension reason + timestamp + operator.                                                                          |
+| `SELECT now() - occurred_at AS suspended_for FROM audit_event WHERE tenant_id = $1 AND action = 'TENANT_SUSPENDED' ORDER BY occurred_at DESC LIMIT 1`                                                                                                                                                                                                                | Suspension duration (for tenants currently SUSPENDED — caller verifies `tenant.status='SUSPENDED'`).                           |
+| `SELECT tenant_id, COUNT(*) AS suspend_count FROM audit_event WHERE action = 'TENANT_SUSPENDED' GROUP BY tenant_id HAVING COUNT(*) > 3 ORDER BY suspend_count DESC`                                                                                                                                                                                                  | Tenants with frequent suspensions (>3) — operator review signal.                                                               |
+| `SELECT tenant_id FROM audit_event WHERE action = 'TENANT_SUSPENDED' AND tenant_id NOT IN (SELECT tenant_id FROM audit_event WHERE action = 'TENANT_STATUS_CHANGED' AND payload->'after_state'->>'status' = 'ACTIVE' AND occurred_at > (SELECT MAX(occurred_at) FROM audit_event a2 WHERE a2.tenant_id = audit_event.tenant_id AND a2.action = 'TENANT_SUSPENDED'))` | Tenants currently suspended (last suspend has no subsequent resume). Cross-reference with `tenant.status` for canonical truth. |
+
+**Audit chain integrity.** A `suspend → resume → suspend` cycle
+produces three rows in occurrence order: `TENANT_SUSPENDED` (×1) →
+`TENANT_STATUS_CHANGED` (×1, with `before_state.status='SUSPENDED'`,
+`after_state.status='ACTIVE'`) → `TENANT_SUSPENDED` (×1). The
+append-only chain (per ADR-DB-003) preserves the full operator
+history; no row is overwritten or deleted. SB5 Option α idempotency
+guarantees that retried no-op calls do NOT pollute this history.
+
+**Reason field semantics.** `payload.reason` is operator-supplied
+free-form text (1–500 chars). Convention: human-readable rationale
+("manual ops review per ticket SEC-1234", "auto-suspend by
+billing-overdue worker", "compliance hold pending legal review").
+Future consumers (AC01/S15/S17) can parse reason for structured
+codes if needed; today no parser depends on a specific shape.
 
 ## 6. Offboarding + termination + legal hold `[F02-C]`
 

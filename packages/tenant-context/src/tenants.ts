@@ -22,10 +22,12 @@
  *
  * - **Package boundary.** Registry CRUD lives here (F01). Lifecycle
  *   workflow (Cloud SQL provisioning, CMEK allocation, GCS, K8s) lives
- *   in F02 — `setStatus` here is a thin column update + audit; F02 will
- *   compose around it. `tenants.terminate` / `tenants.suspend` are
- *   intentionally NOT exposed; F02 will own those workflows and call
- *   `setStatus` as the final step.
+ *   in F02 — `setStatus` here is a thin column update + audit; F02
+ *   workflows (`provision`, `suspend`, `resume`) compose around it.
+ *   F02 Slice A added `provision`; Slice B added `suspend` + `resume`
+ *   (asymmetric audit emission per SB1 lock — TENANT_SUSPENDED for
+ *   suspend, TENANT_STATUS_CHANGED for resume; convention §5).
+ *   `tenants.terminate` is reserved for Slice C.
  *
  * - **No async-local wrapping.** This module does not wrap operations in
  *   `withTenantContext` / `withoutTenantContext`. AsyncLocalStorage is
@@ -116,6 +118,12 @@ const listOptionsSchema = z
     offset: z.number().int().min(0).default(0),
   })
   .default({});
+
+// F02 Slice B — `tenants.suspend` reason validation (Q-NEW-1 lock).
+// Free-form string, 1–500 chars, required. Stored in
+// audit_event.payload.reason via the user-payload merge in
+// @cortex/audit-events (emit.ts line 135-136).
+const suspendReasonSchema = z.string().min(1).max(500);
 
 export type Actor = z.infer<typeof actorSchema>;
 export type CreateTenantInput = z.infer<typeof createInputSchema>;
@@ -639,6 +647,181 @@ async function provision(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 lifecycle workflow — suspend + resume (Slice B)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Suspend an ACTIVE tenant. Flips `status` to SUSPENDED inside a single
+ * row-locked transaction (`SELECT ... FOR UPDATE` matches `setStatus`'s
+ * pessimistic-locking pattern; §10.15 contention test verifies in
+ * Slice B sub-phase 3) and emits a `TENANT_SUSPENDED` audit event with
+ * the operator-supplied reason in `payload.reason`.
+ *
+ * Per SB1 lock, suspend uses the dedicated `TENANT_SUSPENDED` action
+ * (NOT `TENANT_STATUS_CHANGED`) — it serves as the cascade-event handle
+ * for AC01 session revoke + S15 device pause + S17 outbound stop. F02
+ * emits; downstream consumers subscribe when they ship (planning doc
+ * §Drift 3 / §Drift 4; convention §5).
+ *
+ * Per SB5 Option α (idempotent), calling `suspend` on an already-
+ * SUSPENDED tenant is a no-op — the current row is returned without
+ * a state change and without an audit emission. Operators retrying
+ * after a flaky network response see clean success rather than a
+ * `TenantStatusError`. Logging a no-op audit row would be misleading
+ * (no state change occurred); the original suspend's audit row remains
+ * the canonical record.
+ *
+ * Transitions disallowed by `ALLOWED_TRANSITIONS` raise
+ * `TenantStatusError` (e.g., suspending a REQUESTED or TERMINATED
+ * tenant).
+ *
+ * @throws TenantValidationError invalid id or reason (empty / >500
+ *         chars).
+ * @throws TenantNotFoundError no row matches `id`.
+ * @throws TenantStatusError current status disallows the SUSPENDED
+ *         transition (e.g., REQUESTED, PROVISIONING, READY,
+ *         OFFBOARDING, TERMINATED).
+ */
+async function suspend(
+  db: NodePgDatabase<Record<string, never>>,
+  id: string,
+  reason: string,
+  ctx: { actor: Actor },
+): Promise<Tenant> {
+  const parsedId = parseOrThrow(idSchema, id, 'suspend id');
+  const parsedReason = parseOrThrow(suspendReasonSchema, reason, 'suspend reason');
+  const parsedActor = parseOrThrow(actorSchema, ctx.actor, 'suspend actor');
+
+  return db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+
+    const currentRows = await tx
+      .select()
+      .from(tenant)
+      .where(eq(tenant.id, parsedId))
+      .for('update')
+      .limit(1);
+    const current = currentRows[0];
+    if (current === undefined) {
+      throw new TenantNotFoundError(parsedId, 'id');
+    }
+
+    // SB5 Option α: idempotent re-call is no-op. Return the locked row
+    // (still inside the txn — caller sees the consistent SUSPENDED
+    // snapshot). NO audit emission and NO updated_at touch.
+    if (current.status === 'SUSPENDED') {
+      return current;
+    }
+
+    assertTransitionAllowed(parsedId, current.status, 'SUSPENDED');
+
+    const updated = await tx
+      .update(tenant)
+      .set({ status: 'SUSPENDED', updated_at: msNow })
+      .where(eq(tenant.id, parsedId))
+      .returning();
+    const next = updated[0];
+    if (next === undefined) {
+      throw new Error('tenants.suspend: UPDATE returned no row');
+    }
+
+    await emitAuditEvent(tx, {
+      tenantId: parsedId,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_SUSPENDED'),
+      verb: 'UPDATE',
+      resource: `tenant:${parsedId}`,
+      before_state: { status: current.status },
+      after_state: { status: 'SUSPENDED' },
+      payload: { reason: parsedReason },
+    });
+
+    return next;
+  });
+}
+
+/**
+ * Resume a SUSPENDED tenant back to ACTIVE. Mirrors `suspend`'s
+ * single-transaction row-locked shape; emits `TENANT_STATUS_CHANGED`
+ * (NOT a `TENANT_RESUMED` domain action) per SB1 lock + convention §5
+ * — resume is the reversible inverse with no cascade subscribers, so
+ * one STATUS_CHANGED row reads cleanly.
+ *
+ * Per SB5 Option α (idempotent), calling `resume` on an already-
+ * ACTIVE tenant is a no-op — current row returned, no audit emit.
+ *
+ * Per Q-NEW-2 lock, `resume` takes no `reason` parameter — the audit
+ * chain shows what was suspended and why; resume's "why" is implicit
+ * ("ready again"). Future Slice may add a structured resume-reason
+ * RPC if operators need it.
+ *
+ * @throws TenantValidationError invalid id.
+ * @throws TenantNotFoundError no row matches `id`.
+ * @throws TenantStatusError current status disallows the ACTIVE
+ *         transition (e.g., REQUESTED, PROVISIONING, OFFBOARDING,
+ *         TERMINATED). Note `READY → ACTIVE` is allowed but is the
+ *         provisioning-worker's path; calling `resume` from READY is
+ *         disallowed at the API surface (`ALLOWED_TRANSITIONS` permits
+ *         it; resume is documented as SUSPENDED-only).
+ */
+async function resume(
+  db: NodePgDatabase<Record<string, never>>,
+  id: string,
+  ctx: { actor: Actor },
+): Promise<Tenant> {
+  const parsedId = parseOrThrow(idSchema, id, 'resume id');
+  const parsedActor = parseOrThrow(actorSchema, ctx.actor, 'resume actor');
+
+  return db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+
+    const currentRows = await tx
+      .select()
+      .from(tenant)
+      .where(eq(tenant.id, parsedId))
+      .for('update')
+      .limit(1);
+    const current = currentRows[0];
+    if (current === undefined) {
+      throw new TenantNotFoundError(parsedId, 'id');
+    }
+
+    // SB5 Option α: idempotent re-call is no-op.
+    if (current.status === 'ACTIVE') {
+      return current;
+    }
+
+    assertTransitionAllowed(parsedId, current.status, 'ACTIVE');
+
+    const updated = await tx
+      .update(tenant)
+      .set({ status: 'ACTIVE', updated_at: msNow })
+      .where(eq(tenant.id, parsedId))
+      .returning();
+    const next = updated[0];
+    if (next === undefined) {
+      throw new Error('tenants.resume: UPDATE returned no row');
+    }
+
+    await emitAuditEvent(tx, {
+      tenantId: parsedId,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_STATUS_CHANGED'),
+      verb: 'UPDATE',
+      resource: `tenant:${parsedId}`,
+      before_state: { status: current.status },
+      after_state: { status: 'ACTIVE' },
+    });
+
+    return next;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Public namespace
 // ─────────────────────────────────────────────────────────────────────
 
@@ -650,4 +833,6 @@ export const tenants = {
   update,
   setStatus,
   provision,
+  suspend,
+  resume,
 };

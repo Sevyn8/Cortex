@@ -9,8 +9,8 @@
 
 - ADR-LIFECYCLE-001 (state machine + Cloud Tasks; lands Slice A — see Appendix A)
 - `docs/architecture/tenant-lifecycle-convention.md` (lands Slice A; absorbs swap-paths doc per D11 — see Appendix B)
-- Migration 0008 (`tenant.status` enum extension + lifecycle metadata + `dedicated_db_approved`; Slice A)
-- Migration 0009 (legal_hold table; Slice C)
+- Migration 0010 (`tenant.status` enum extension + lifecycle metadata + `dedicated_db_approved`; Slice A)
+- Migration 0011 (legal_hold table; Slice C)
 - `infra/terraform/modules/tenant-cloud-run-service/` (generic per-tenant Cloud Run TF; Slice D)
 
 ---
@@ -40,8 +40,8 @@ F02 is also the first F-series module that exercises HTTP — the build prompt r
 
 ### Substrate F02 must add
 
-- Migration 0008: extend `tenant.status` CHECK to include `REQUESTED`, `READY`, `OFFBOARDING`. Plus lifecycle metadata columns (per D7).
-- Migration 0009: `legal_hold` table (Slice C; per Q-OPEN-3 fold-in).
+- Migration 0010: extend `tenant.status` CHECK to include `REQUESTED`, `READY`, `OFFBOARDING`. Plus lifecycle metadata columns (per D7).
+- Migration 0011: `legal_hold` table (Slice C; per Q-OPEN-3 fold-in).
 - Per-tenant Cloud Run TF module (no Cloud Run TF in repo today).
 - Cloud Tasks queue + IAM (no Cloud Tasks TF in repo today). Three queues per Q-OPEN-1.
 - `tenants.{provision, suspend, resume, offboard, terminate, rotateKeys}` lifecycle workflows.
@@ -71,7 +71,7 @@ Commit shape: `feat(F02): tenant lifecycle manager` (per spec).
 
 ### D1 — Slice structure: **4 slices**
 
-- **Decision:** Slice A = provisioning + 3 stub swaps + §4.15/§4.16/§4.17 cleanup + ADR-LIFECYCLE-001 + convention doc + migration 0008. Slice B = suspension + resume + §10.15 contention test. Slice C = offboarding + termination + legal_hold (migration 0009) + per-env signing SA. Slice D = key rotation + HTTP API + Cloud Run TF + Cloud Run IAM authz.
+- **Decision:** Slice A = provisioning + 3 stub swaps + §4.15/§4.16/§4.17 cleanup + ADR-LIFECYCLE-001 + convention doc + migration 0010. Slice B = suspension + resume + §10.15 contention test. Slice C = offboarding + termination + legal_hold (migration 0011) + per-env signing SA. Slice D = key rotation + HTTP API + Cloud Run TF + Cloud Run IAM authz.
 - **Rationale:** Provisioning is already substantive (state machine + 3 stub swaps + 4 cleanup vectors); pairing with Slice A gives a coherent foundation. Key rotation has dual-key overlap logic that warrants its own surface; pairing with HTTP API in Slice D gives operators their first ad-hoc interface (rotation is the most common ops trigger). Suspension and termination are independently testable workflows.
 - **Trade-off:** Slice A is heaviest (substrate + workflow + 4 cleanups). Slice D depends on Hono spike landing cleanly. 5-slice variant rejected: stub swaps are tightly coupled to provisioning's per-tenant key creation path, separating them creates artificial dependency.
 - **Reference:** F01 Slice C precedent (3 slices for a smaller surface); F02 spec §1–§5 maps cleanly onto 4 slices.
@@ -111,13 +111,13 @@ Commit shape: `feat(F02): tenant lifecycle manager` (per spec).
 - **Trade-off:** 5 new actions add catalog surface; readers querying "all lifecycle events for tenant X" must union 6 action names. Mitigated by the resource field (`tenant:{id}`) being grep-able across all of them.
 - **Reference:** ADR-AU-001 §Decision 3 (verb diversity for compliance); `packages/tenant-context/src/audit-actions.ts` (existing 5 actions).
 
-### D7 — Migration 0008 scope: **Status enum extension + lifecycle metadata**
+### D7 — Migration 0010 scope: **Status enum extension + lifecycle metadata**
 
-- **Decision:** Migration 0008 in Slice A:
+- **Decision:** Migration 0010 in Slice A:
   1. Extend `tenant.status` CHECK to add `REQUESTED`, `READY`, `OFFBOARDING` (3 new values; existing 4 retained).
   2. Add columns: `tenant.last_key_rotated_at timestamptz`, `tenant.terminated_at timestamptz`, `tenant.offboarding_grace_until timestamptz`, `tenant.legal_hold boolean NOT NULL DEFAULT false`, `tenant.dedicated_db_approved boolean NOT NULL DEFAULT false`.
 
-  Migration 0009 in Slice C ships the `legal_hold` table for upgrade path to richer hold semantics (the `tenant.legal_hold` boolean is the Phase 1 single-flag form; the table is the Phase 2 expansion target — see Q-OPEN-3 fold-in).
+  Migration 0011 in Slice C ships the `legal_hold` table for upgrade path to richer hold semantics (the `tenant.legal_hold` boolean is the Phase 1 single-flag form; the table is the Phase 2 expansion target — see Q-OPEN-3 fold-in).
 
 - **Rationale:** Lifecycle queries unblock immediately ("tenants overdue for rotation" / "tenants with pending termination"). `legal_hold` boolean inline supports the Phase 1 use case without forcing a join. `dedicated_db_approved` gates Enterprise provisioning per Q-OPEN-6 manual approval.
 - **Trade-off:** Two columns (`legal_hold` + future `legal_hold` table) coexist briefly. Phase 2 migration can fold one into the other; documenting the intent in convention doc §6.
@@ -168,7 +168,7 @@ F02 spec §3 (Termination) lists "tenant K8s namespace" deletion. ADR-COMPUTE-00
 
 ### Drift 2 — `tenant.status` CHECK enum extension
 
-F02 spec adds `REQUESTED`, `READY`, `OFFBOARDING` states. Migration 0008 (Slice A) extends `tenant.status` CHECK to cover all 7 values. The `ACTIVE` vs `READY` distinction (`READY` = "provisioning done"; `ACTIVE` = "tenant is live and serving traffic") spec'd in convention doc §1.
+F02 spec adds `REQUESTED`, `READY`, `OFFBOARDING` states. Migration 0010 (Slice A) extends `tenant.status` CHECK to cover all 7 values. The `ACTIVE` vs `READY` distinction (`READY` = "provisioning done"; `ACTIVE` = "tenant is live and serving traffic") spec'd in convention doc §1.
 
 ### Drift 3 — AC01 session revoke (suspension cascade)
 
@@ -217,7 +217,7 @@ Per D9 lock. F02 spec mentions workspaces; correct ownership is AC02. Convention
 
 ### Slice A — Provisioning + 3 stub swaps + cleanup vectors
 
-**Scope.** Establishes the full F02 substrate. Provisioning workflow with state machine (REQUESTED → PROVISIONING → READY) backed by Cloud Tasks; three Phase 1 resolver stubs swapped to real implementations; four cleanup vectors resolved (§4.15 / §4.16 / §4.17 + AC01-actor-pattern reproduction §4.14); migration 0008 lands the status enum extension + 5 lifecycle metadata columns; ADR-LIFECYCLE-001 + `tenant-lifecycle-convention.md` document the architecture.
+**Scope.** Establishes the full F02 substrate. Provisioning workflow with state machine (REQUESTED → PROVISIONING → READY) backed by Cloud Tasks; three Phase 1 resolver stubs swapped to real implementations; four cleanup vectors resolved (§4.15 / §4.16 / §4.17 + AC01-actor-pattern reproduction §4.14); migration 0010 lands the status enum extension + 5 lifecycle metadata columns; ADR-LIFECYCLE-001 + `tenant-lifecycle-convention.md` document the architecture.
 
 **Provisioning workflow specifics (Q-OPEN folded in):**
 
@@ -250,7 +250,7 @@ Per D9 lock. F02 spec mentions workspaces; correct ownership is AC02. Convention
 - `packages/encryption/src/encrypt.ts` lookup-path merge (§4.15).
 - `packages/quotas/src/check-quota.ts` logger plumbing removed (§4.16).
 - 5 new audit actions registered: `TENANT_PROVISIONED`, `TENANT_OFFBOARDING_STARTED`, `TENANT_TERMINATED`, `TENANT_KEY_ROTATED`, `TENANT_CONFIG_VERSION_UPDATED` (later slices use the catalog).
-- Migration 0008.
+- Migration 0010.
 - ADR-LIFECYCLE-001 (new).
 - `docs/architecture/tenant-lifecycle-convention.md` (new; absorbs swap-paths doc).
 - TF: Cloud Tasks queue (`provisioning-queue`) + IAM bindings.
@@ -279,11 +279,11 @@ Per D9 lock. F02 spec mentions workspaces; correct ownership is AC02. Convention
 
 ### Slice C — Offboarding + Termination
 
-**Scope.** Offboarding workflow (export archive + grace period); termination workflow (hard delete + KMS tombstone); legal-hold guards (Q-OPEN-3). Migration 0009 ships the `legal_hold` table for upgrade path to richer hold semantics.
+**Scope.** Offboarding workflow (export archive + grace period); termination workflow (hard delete + KMS tombstone); legal-hold guards (Q-OPEN-3). Migration 0011 ships the `legal_hold` table for upgrade path to richer hold semantics.
 
 **Offboarding/Termination specifics (Q-OPEN folded in):**
 
-- **Legal-hold scope (Q-OPEN-3):** Per-tenant initially. `tenant.legal_hold boolean` (in migration 0008) is the Phase 1 flag; `legal_hold` table (migration 0009) is the upgrade path. Termination queries `tenant.legal_hold` (and the table once it exists); termination is blocked if any hold is active. Per-record (data-class scope) holds deferred; revisit when first compliance use case requires granular. Convention doc §6 documents upgrade path.
+- **Legal-hold scope (Q-OPEN-3):** Per-tenant initially. `tenant.legal_hold boolean` (in migration 0010) is the Phase 1 flag; `legal_hold` table (migration 0011) is the upgrade path. Termination queries `tenant.legal_hold` (and the table once it exists); termination is blocked if any hold is active. Per-record (data-class scope) holds deferred; revisit when first compliance use case requires granular. Convention doc §6 documents upgrade path.
 - **Pre-signed URL signing identity (Q-OPEN-§10.8 fold-in):** Per-env `cortex-export-signer-{env}` SA. F02 export-archive flow uses this SA to sign. Per-tenant SA over-fragmented for export-only operations; per-env signer gates by IAM on the call site.
 
 **Forcing functions resolved:** §10.8 (per-env signing SA).
@@ -293,7 +293,7 @@ Per D9 lock. F02 spec mentions workspaces; correct ownership is AC02. Convention
 - `tenants.offboard(tenantId, ctx)` — flips status to OFFBOARDING; generates signed-URL export archive (30-day TTL); schedules termination Cloud Task at `now() + grace_period` (default 30 days).
 - `tenants.terminate(tenantId, ctx)` — hard delete: tenant Cloud Run service(s) → tenant GCS prefix → tenant Cloud SQL instance (Enterprise) → shared-DB tenant rows → KMS key tombstone.
 - Legal-hold workflow: `legal_hold` table; `tenants.terminate` queries before destruction; Super Admin override RPC.
-- Migration 0009 (legal_hold table).
+- Migration 0011 (legal_hold table).
 - TF: `cortex-export-signer-{env}` SA + IAM bindings.
 - Tests: offboarding workflow; termination idempotency; legal-hold blocking; post-termination "tenant not found" assertion.
 
@@ -370,8 +370,8 @@ F02 emits `TENANT_SUSPENDED` audit event on suspension. AC01 (P2.1) is the inten
 - **F02-produced artifacts:**
   - **ADR-LIFECYCLE-001** (state machine + Cloud Tasks orchestration; lands Slice A — Appendix A skeleton below).
   - **`docs/architecture/tenant-lifecycle-convention.md`** (lands Slice A; absorbs swap-paths doc per D11 — Appendix B skeleton below).
-  - **Migration 0008** (Slice A): status enum extension + 5 lifecycle metadata columns (`last_key_rotated_at`, `terminated_at`, `offboarding_grace_until`, `legal_hold`, `dedicated_db_approved`).
-  - **Migration 0009** (Slice C): `legal_hold` table.
+  - **Migration 0010** (Slice A): status enum extension + 5 lifecycle metadata columns (`last_key_rotated_at`, `terminated_at`, `offboarding_grace_until`, `legal_hold`, `dedicated_db_approved`).
+  - **Migration 0011** (Slice C): `legal_hold` table.
   - **`infra/terraform/modules/tenant-cloud-run-service/`** (Slice D): generic per-tenant Cloud Run TF module.
 - **Companion docs (existing):**
   - `docs/architecture/f02-swap-paths-for-slice-c-resolvers.md` (D11 retirement target).
@@ -401,7 +401,7 @@ To be expanded into a full ADR at Slice A implementation. Produced as `docs/arch
 **Decision.**
 
 - **State machine:** REQUESTED → PROVISIONING → READY → ACTIVE → SUSPENDED → ACTIVE → OFFBOARDING → TERMINATED. Transitions table specifies allowed transitions per state (exhaustive; rejected transitions raise `TenantStatusError`).
-- **State storage:** `tenant.status` column with extended CHECK constraint (per migration 0008).
+- **State storage:** `tenant.status` column with extended CHECK constraint (per migration 0010).
 - **Async orchestration:** Cloud Tasks. Three queues: `provisioning-queue`, `lifecycle-queue` (suspend/resume/offboard/terminate), `key-rotation-queue`. Each queue has dedicated retry config + concurrency cap.
 - **Idempotency:** Cloud Tasks `taskId = '<verb>-<tenant_id>'` for built-in dedup. Convention doc §1 documents the manual-cleanup-then-retry operational pattern.
 
@@ -424,7 +424,7 @@ To be expanded into a full ADR at Slice A implementation. Produced as `docs/arch
 - F02 spec (build prompts §P1.2).
 - ADR-COMPUTE-001 (Cloud Run service-per-tenant; provisioning creates these).
 - ADR-INFRA-007 (per-tenant CMEK; provisioning populates `tenant_kms_key`).
-- Migration 0008 (status enum extension).
+- Migration 0010 (status enum extension).
 - `tenant-lifecycle-convention.md` §1, §2 (state machine + queue config).
 
 ---

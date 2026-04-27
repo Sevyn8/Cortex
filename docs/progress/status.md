@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-26 (F01 Slice C quotas + compute isolation shipped — closes P1.1 F01)
+Last updated: 2026-04-27 (F01 Slice C shipped 2026-04-26 — closes P1.1 F01. Inter-session: workspace cycle decoupling resolved; CI green again after 3-day red — see roadmap §4.13.)
 
 ## Pre-flight
 
@@ -40,7 +40,7 @@ Last updated: 2026-04-26 (F01 Slice C quotas + compute isolation shipped — clo
 
 ### Foundation Layer
 
-- [ ] P1.1 F01 Multi-Tenancy ← IN PROGRESS
+- [x] P1.1 F01 Multi-Tenancy (closed 2026-04-26)
   - [x] Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
   - [x] Slice B — Encryption + GCS isolation (2026-04-26, commit `c64192f`)
     - dev applied; staging + prod queued for separate cycles

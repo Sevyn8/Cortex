@@ -36,6 +36,8 @@ export type {
   Actor,
   CreateTenantInput,
   ListTenantsOptions,
+  OffboardOptions,
+  OffboardResult,
   TenantListResult,
   UpdateTenantPatch,
 } from './tenants.js';
@@ -43,6 +45,15 @@ export type {
 // F02 lifecycle worker (Slice A — provisioning).
 export { cleanupFailedProvisioning, provisioningWorker } from './provisioning-worker.js';
 export type { ProvisioningTaskPayload } from './provisioning-worker.js';
+
+// F02 Slice C — export archive utility (consumed by `tenants.offboard`;
+// callers may also use directly for ad-hoc operator exports).
+export { generateExportArchive, EXPORT_ARCHIVE_SCHEMA_VERSION } from './export-archive.js';
+export type {
+  ExportArchive,
+  ExportArchiveEntityType,
+  GenerateExportArchiveOptions,
+} from './export-archive.js';
 
 // HTTP middleware
 export { buildTenantContextMiddleware, defaultHeaderExtractor } from './middleware.js';

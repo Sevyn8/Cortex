@@ -12,8 +12,10 @@
   },
   "dependencies": {
     "@cortex/audit-events": "workspace:*",
+    "@cortex/blob-storage": "workspace:*",
     "@cortex/canonical-schema": "workspace:*",
     "@cortex/secrets": "workspace:*",
+    "@google-cloud/storage": "catalog:",
     "@google-cloud/tasks": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",

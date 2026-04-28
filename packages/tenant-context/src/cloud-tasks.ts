@@ -62,6 +62,20 @@ export interface DispatchOptions {
   targetUrl: string;
   /** JSON-serializable payload; base64-encoded into the request body. */
   payload: Record<string, unknown>;
+  /**
+   * Optional scheduled dispatch time. When provided, Cloud Tasks
+   * delays dispatch until this wall-clock moment. Used by F02 Slice C
+   * `tenants.offboard` to schedule the eventual termination at
+   * `now() + grace_period`. Cloud Tasks rejects schedule times more
+   * than 30 days in the future (server-side limit); callers must
+   * respect that cap.
+   *
+   * Mapped to the Cloud Tasks Timestamp shape (`seconds` + `nanos`)
+   * via `Date.getTime()`. Sub-second precision is preserved at the
+   * millisecond floor — Date carries ms; nanos carry the ms-to-ns
+   * remainder.
+   */
+  scheduleTime?: Date;
 }
 
 /**
@@ -81,16 +95,32 @@ export async function dispatchCloudTask(opts: DispatchOptions): Promise<void> {
   const queuePath = client.queuePath(projectId, location, opts.queueName);
   const taskName = client.taskPath(projectId, location, opts.queueName, opts.taskId);
 
-  await client.createTask({
-    parent: queuePath,
-    task: {
-      name: taskName,
-      httpRequest: {
-        httpMethod: 'POST',
-        url: opts.targetUrl,
-        headers: { 'Content-Type': 'application/json' },
-        body: Buffer.from(JSON.stringify(opts.payload)).toString('base64'),
-      },
+  const task: {
+    name: string;
+    httpRequest: {
+      httpMethod: 'POST';
+      url: string;
+      headers: { 'Content-Type': string };
+      body: string;
+    };
+    scheduleTime?: { seconds: number; nanos: number };
+  } = {
+    name: taskName,
+    httpRequest: {
+      httpMethod: 'POST',
+      url: opts.targetUrl,
+      headers: { 'Content-Type': 'application/json' },
+      body: Buffer.from(JSON.stringify(opts.payload)).toString('base64'),
     },
-  });
+  };
+
+  if (opts.scheduleTime !== undefined) {
+    const ms = opts.scheduleTime.getTime();
+    task.scheduleTime = {
+      seconds: Math.floor(ms / 1000),
+      nanos: (ms % 1000) * 1_000_000,
+    };
+  }
+
+  await client.createTask({ parent: queuePath, task });
 }

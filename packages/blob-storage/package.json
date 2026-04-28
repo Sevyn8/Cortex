@@ -17,13 +17,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cortex/audit-events": "workspace:*",
     "@google-cloud/storage": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@cortex/observability": "workspace:*",
-    "@cortex/tenant-context": "workspace:*",
     "@types/node": "^22.0.0",
     "vitest": "catalog:"
   }

@@ -148,9 +148,6 @@ importers:
 
   packages/blob-storage:
     dependencies:
-      '@cortex/audit-events':
-        specifier: workspace:*
-        version: link:../audit-events
       '@google-cloud/storage':
         specifier: 'catalog:'
         version: 7.19.0
@@ -158,12 +155,6 @@ importers:
         specifier: 'catalog:'
         version: 3.25.76
     devDependencies:
-      '@cortex/observability':
-        specifier: workspace:*
-        version: link:../observability
-      '@cortex/tenant-context':
-        specifier: workspace:*
-        version: link:../tenant-context
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
@@ -369,12 +360,18 @@ importers:
       '@cortex/audit-events':
         specifier: workspace:*
         version: link:../audit-events
+      '@cortex/blob-storage':
+        specifier: workspace:*
+        version: link:../blob-storage
       '@cortex/canonical-schema':
         specifier: workspace:*
         version: link:../canonical-schema
       '@cortex/secrets':
         specifier: workspace:*
         version: link:../secrets
+      '@google-cloud/storage':
+        specifier: 'catalog:'
+        version: 7.19.0
       '@google-cloud/tasks':
         specifier: 'catalog:'
         version: 6.2.1

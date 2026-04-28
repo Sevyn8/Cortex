@@ -178,4 +178,90 @@ describe('dispatchCloudTask', () => {
     };
     expect(callArg.task.httpRequest.headers['Content-Type']).toBe('application/json');
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // F02 Slice C — scheduleTime extension
+  // ─────────────────────────────────────────────────────────────────
+
+  describe('scheduleTime', () => {
+    it('omits scheduleTime from the task when not provided (existing behavior preserved)', async () => {
+      await dispatchCloudTask({
+        queueName: 'provisioning-queue',
+        taskId: 'provisioning-abc-123',
+        targetUrl: 'https://worker.example.com',
+        payload: {},
+      });
+
+      const callArg = mockClient.createTask.mock.calls[0]?.[0] as {
+        task: { scheduleTime?: unknown };
+      };
+      expect(callArg.task.scheduleTime).toBeUndefined();
+    });
+
+    it('threads scheduleTime through as Timestamp (seconds + nanos)', async () => {
+      // 2026-05-15T12:34:56.789Z — fixed instant for deterministic assertions.
+      const scheduleTime = new Date('2026-05-15T12:34:56.789Z');
+      await dispatchCloudTask({
+        queueName: 'lifecycle-queue',
+        taskId: 'terminate-abc-123',
+        targetUrl: 'https://worker.example.com',
+        payload: { tenantId: 'abc-123' },
+        scheduleTime,
+      });
+
+      const callArg = mockClient.createTask.mock.calls[0]?.[0] as {
+        task: { scheduleTime: { seconds: number; nanos: number } };
+      };
+      const expectedSeconds = Math.floor(scheduleTime.getTime() / 1000);
+      const expectedNanos = (scheduleTime.getTime() % 1000) * 1_000_000;
+      expect(callArg.task.scheduleTime.seconds).toBe(expectedSeconds);
+      expect(callArg.task.scheduleTime.nanos).toBe(expectedNanos);
+    });
+
+    it('preserves sub-second precision via the nanos field', async () => {
+      // .123 ms suffix must round-trip as 123_000_000 nanos.
+      const scheduleTime = new Date(1745308800000 + 123); // arbitrary epoch + 123 ms
+      await dispatchCloudTask({
+        queueName: 'lifecycle-queue',
+        taskId: 'terminate-abc-123',
+        targetUrl: 'https://worker.example.com',
+        payload: {},
+        scheduleTime,
+      });
+
+      const callArg = mockClient.createTask.mock.calls[0]?.[0] as {
+        task: { scheduleTime: { nanos: number } };
+      };
+      expect(callArg.task.scheduleTime.nanos).toBe(123_000_000);
+    });
+
+    it('whole-second instant produces nanos=0', async () => {
+      const scheduleTime = new Date('2026-05-15T12:34:56.000Z');
+      await dispatchCloudTask({
+        queueName: 'lifecycle-queue',
+        taskId: 'terminate-abc-123',
+        targetUrl: 'https://worker.example.com',
+        payload: {},
+        scheduleTime,
+      });
+
+      const callArg = mockClient.createTask.mock.calls[0]?.[0] as {
+        task: { scheduleTime: { nanos: number } };
+      };
+      expect(callArg.task.scheduleTime.nanos).toBe(0);
+    });
+
+    it('past Date is accepted (server-side validation; client does not pre-reject)', async () => {
+      const scheduleTime = new Date('2020-01-01T00:00:00Z');
+      await expect(
+        dispatchCloudTask({
+          queueName: 'lifecycle-queue',
+          taskId: 'terminate-abc-123',
+          targetUrl: 'https://worker.example.com',
+          payload: {},
+          scheduleTime,
+        }),
+      ).resolves.not.toThrow();
+    });
+  });
 });

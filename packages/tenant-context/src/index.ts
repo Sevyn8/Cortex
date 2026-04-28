@@ -58,6 +58,12 @@ export type {
   GenerateExportArchiveOptions,
 } from './export-archive.js';
 
+// F02 Slice C sub-phase 7.5 — legal-hold helpers (consumed by ops
+// runbooks + future compliance UIs; callers use this surface to set/
+// release holds independent of `tenants.terminate`'s in-line check).
+export { legalHolds } from './legal-holds.js';
+export type { SetHoldOptions, ReleaseHoldOptions } from './legal-holds.js';
+
 // HTTP middleware
 export { buildTenantContextMiddleware, defaultHeaderExtractor } from './middleware.js';
 export type {

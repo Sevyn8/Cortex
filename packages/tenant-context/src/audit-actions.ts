@@ -37,6 +37,21 @@ export const TENANT_AUDIT_ACTIONS = registerAuditActions([
   { name: 'TENANT_TERMINATED', verb: 'DELETE' },
   { name: 'TENANT_KEY_ROTATED', verb: 'UPDATE' },
   { name: 'TENANT_CONFIG_VERSION_UPDATED', verb: 'UPDATE' },
+  // F02 Slice C sub-phase 7.5 additions per SC2 + SC3 + Q-NEW-C12 locks.
+  // TENANT_FORCE_TERMINATED is a distinct compliance event from
+  // TENANT_TERMINATED (Option B per SC2): regulators querying "any
+  // tenant terminated despite an active hold or before grace elapsed"
+  // get an unambiguous filter handle without parsing payload.forced
+  // metadata.
+  // LEGAL_HOLD_SET / LEGAL_HOLD_RELEASED are the legal-hold lifecycle
+  // domain actions per SC3. Compliance teams filter on these to audit
+  // hold-set/release events independently of tenant-lifecycle events.
+  // The catalog name prefix departs from TENANT_* — these are
+  // legal-hold-domain events, not tenant-lifecycle events. Both
+  // domains live in `@cortex/tenant-context` per planning-doc D4.
+  { name: 'TENANT_FORCE_TERMINATED', verb: 'DELETE' },
+  { name: 'LEGAL_HOLD_SET', verb: 'CREATE' },
+  { name: 'LEGAL_HOLD_RELEASED', verb: 'DELETE' },
 ] as const);
 
 /**

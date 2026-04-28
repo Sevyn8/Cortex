@@ -1381,6 +1381,231 @@ async function terminate(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 lifecycle workflow — forceTerminate (Slice C sub-phase 7.5)
+// ─────────────────────────────────────────────────────────────────────
+
+const forceTerminateReasonSchema = z.string().min(1).max(2000);
+
+/**
+ * Super Admin override path for tenant termination.
+ *
+ * Per F02 Slice C SC2 lock + convention §6.4: emits the dedicated
+ * `TENANT_FORCE_TERMINATED` action (NOT `TENANT_TERMINATED`) so
+ * compliance regulators can grep for "any tenant terminated despite an
+ * active hold or before grace elapsed" without parsing payload metadata.
+ *
+ * Differences from `tenants.terminate`:
+ *
+ *   - **Skips legal-hold check.** The whole point of the override.
+ *     Active hold details are STILL captured in the audit payload
+ *     (`override_metadata.active_legal_hold`) for forensic
+ *     attribution — operators reviewing the override can see
+ *     exactly what hold was bypassed.
+ *   - **Skips grace-period check.** OFFBOARDING tenants can be
+ *     force-terminated mid-grace; ACTIVE / SUSPENDED tenants skip
+ *     OFFBOARDING entirely. Whether the grace was actually skipped
+ *     is captured in `override_metadata.skipped_grace_period`.
+ *   - **Requires `reason`** — the operator's justification, captured
+ *     in `payload.reason` for the forensic chain. Length-validated
+ *     (1-2000 chars) since this is the audit row's narrative
+ *     attribution.
+ *   - **Allowed transitions:** ACTIVE / SUSPENDED / OFFBOARDING →
+ *     TERMINATED. ALLOWED_TRANSITIONS already permits all three
+ *     (Slice A's pre-flight pre-validated this). Other states
+ *     (REQUESTED, PROVISIONING, READY) reject — those tenants haven't
+ *     gone public yet; use `cleanupFailedProvisioning` instead.
+ *
+ * Same as `tenants.terminate` for everything else: 5-step cascade
+ * (Cloud Run STUB / GCS recursive delete / Cloud SQL STUB / shared-DB
+ * single txn / KMS tombstone-only); soft-retain tombstone with
+ * children hard-deleted; `tenants.get` filters TERMINATED.
+ *
+ * Authz: Phase 1 has no enforcement at this layer — anything that
+ * imports the package can call. AC01 will gate via per-method authz
+ * (recorded as a deviation in F02 deviations).
+ *
+ * @throws TenantValidationError invalid id, reason, or actor.
+ * @throws TenantNotFoundError no row matches `id`.
+ * @throws TenantStatusError current status disallows TERMINATED
+ *   (e.g., REQUESTED, PROVISIONING, READY).
+ */
+async function forceTerminate(
+  db: NodePgDatabase<Record<string, never>>,
+  id: string,
+  reason: string,
+  ctx: { actor: Actor },
+  options: TerminateOptions = {},
+): Promise<Tenant> {
+  const parsedId = parseOrThrow(idSchema, id, 'forceTerminate id');
+  const parsedReason = parseOrThrow(forceTerminateReasonSchema, reason, 'forceTerminate reason');
+  const parsedActor = parseOrThrow(actorSchema, ctx.actor, 'forceTerminate actor');
+
+  // PHASE 1: idempotent fast-path. TERMINATED → return tombstone.
+  const preflight = await db.select().from(tenant).where(eq(tenant.id, parsedId)).limit(1);
+  const preflightRow = preflight[0];
+  if (preflightRow === undefined) {
+    throw new TenantNotFoundError(parsedId, 'id');
+  }
+  if (preflightRow.status === 'TERMINATED') {
+    return preflightRow;
+  }
+
+  // PHASE 2: validate transition. ACTIVE/SUSPENDED/OFFBOARDING only.
+  // Skip grace-period and legal-hold checks (override semantics).
+  assertTransitionAllowed(parsedId, preflightRow.status, 'TERMINATED');
+
+  // PHASE 3: capture override forensics — active legal hold + skipped
+  // grace period — for the audit payload. We intentionally don't
+  // BLOCK on these; we just record what's being bypassed.
+  let activeLegalHoldDetails: {
+    scope: 'tenant' | 'record' | 'data_class';
+    reason: string;
+    set_by_user_id: string;
+  } | null = null;
+  let skippedLegalHoldBoolean = false;
+
+  if (preflightRow.legal_hold === true) {
+    skippedLegalHoldBoolean = true;
+  }
+  await db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+    const activeHolds = await tx
+      .select()
+      .from(legalHold)
+      .where(and(eq(legalHold.tenant_id, parsedId), isNull(legalHold.released_at)))
+      .limit(1);
+    const hold = activeHolds[0];
+    if (hold !== undefined) {
+      activeLegalHoldDetails = {
+        scope: hold.scope,
+        reason: hold.reason,
+        set_by_user_id: hold.set_by_user_id,
+      };
+    }
+  });
+
+  const now = new Date();
+  const skippedGracePeriod =
+    preflightRow.status === 'OFFBOARDING' &&
+    preflightRow.offboarding_grace_until !== null &&
+    now < preflightRow.offboarding_grace_until;
+
+  // PHASE 4: external resource cascade (same as terminate).
+  if (preflightRow.tier === 'ENTERPRISE') {
+    console.warn(
+      `[tenants.forceTerminate] TODO Cloud Run delete deferred for ENTERPRISE tenant ${parsedId} ` +
+        `(ADR-INFRA-005 swap-path)`,
+    );
+  }
+
+  const env = (process.env.CORTEX_ENV as Environment | undefined) ?? 'dev';
+  const bucketName = getTenantBucketName(env);
+  const tenantPrefix = getTenantPrefix(parsedId);
+  const storage = options.cascadeOverrides?.storage ?? new Storage();
+  await storage.bucket(bucketName).deleteFiles({ prefix: tenantPrefix, force: true });
+
+  if (preflightRow.tier === 'ENTERPRISE') {
+    console.warn(
+      `[tenants.forceTerminate] TODO Cloud SQL delete deferred for ENTERPRISE tenant ${parsedId} ` +
+        `(ADR-INFRA-005 swap-path)`,
+    );
+  }
+
+  // PHASE 5: single txn — emit TENANT_FORCE_TERMINATED, hard-delete
+  // children, soft-retain tenant tombstone.
+  const updatedTenant = await db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+
+    const currentRows = await tx
+      .select()
+      .from(tenant)
+      .where(eq(tenant.id, parsedId))
+      .for('update')
+      .limit(1);
+    const current = currentRows[0];
+    if (current === undefined) {
+      throw new TenantNotFoundError(parsedId, 'id');
+    }
+    if (current.status === 'TERMINATED') {
+      return current;
+    }
+
+    const kmsKeyRows = await tx
+      .select()
+      .from(tenantKmsKey)
+      .where(eq(tenantKmsKey.tenant_id, parsedId))
+      .limit(1);
+    const kmsKeyResourceName = kmsKeyRows[0]?.kms_key_resource_name ?? null;
+
+    await emitAuditEvent(tx, {
+      tenantId: parsedId,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_FORCE_TERMINATED'),
+      verb: 'DELETE',
+      resource: `tenant:${parsedId}`,
+      before_state: {
+        status: current.status,
+        tier: current.tier,
+        external_id: current.external_id,
+        display_name: current.display_name,
+        kms_key_resource_name: kmsKeyResourceName,
+        offboarding_grace_until: current.offboarding_grace_until?.toISOString() ?? null,
+        legal_hold: current.legal_hold,
+      },
+      payload: {
+        reason: parsedReason,
+        cascade_steps: {
+          cloud_run_delete:
+            current.tier === 'ENTERPRISE' ? 'STUB_TODO_ADR_INFRA_005' : 'NA_STANDARD',
+          gcs_prefix_delete: 'EXECUTED',
+          cloud_sql_delete:
+            current.tier === 'ENTERPRISE' ? 'STUB_TODO_ADR_INFRA_005' : 'NA_STANDARD',
+          shared_db_delete: 'EXECUTED',
+          kms_destroy: 'TOMBSTONE_ONLY_PHASE_1',
+        },
+        kms_key_resource_name: kmsKeyResourceName,
+        // Override forensics — the operator reviewing this audit row
+        // can see exactly what protective check was bypassed and why.
+        override_metadata: {
+          skipped_legal_hold: skippedLegalHoldBoolean || activeLegalHoldDetails !== null,
+          skipped_grace_period: skippedGracePeriod,
+          ...(activeLegalHoldDetails !== null && {
+            active_legal_hold: activeLegalHoldDetails,
+          }),
+          ...(skippedLegalHoldBoolean && {
+            tenant_legal_hold_boolean_was_set: true,
+          }),
+        },
+      },
+    });
+
+    await tx.delete(legalHold).where(eq(legalHold.tenant_id, parsedId));
+    await tx.delete(tenantKmsKey).where(eq(tenantKmsKey.tenant_id, parsedId));
+    await tx.delete(tenantConfigVersion).where(eq(tenantConfigVersion.tenant_id, parsedId));
+    await tx.delete(tenantQuotaUsage).where(eq(tenantQuotaUsage.tenant_id, parsedId));
+
+    const updated = await tx
+      .update(tenant)
+      .set({
+        status: 'TERMINATED',
+        terminated_at: msNow,
+        updated_at: msNow,
+      })
+      .where(eq(tenant.id, parsedId))
+      .returning();
+    const next = updated[0];
+    if (next === undefined) {
+      throw new Error(`tenants.forceTerminate: UPDATE returned no row for tenant ${parsedId}`);
+    }
+    return next;
+  });
+
+  return updatedTenant;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Public namespace
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1396,4 +1621,5 @@ export const tenants = {
   resume,
   offboard,
   terminate,
+  forceTerminate,
 };

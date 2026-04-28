@@ -10,13 +10,16 @@ import { getActionByName } from '@cortex/audit-events';
 import { TENANT_AUDIT_ACTIONS } from '../src/audit-actions.js';
 
 describe('TENANT_AUDIT_ACTIONS — catalog shape', () => {
-  it('has 11 total tenant-lifecycle actions (5 Slice A + 6 F02 additions)', () => {
-    expect(TENANT_AUDIT_ACTIONS.length).toBe(11);
+  it('has 14 total actions (5 Slice A + 6 F02 lifecycle + 3 Slice C 7.5 additions)', () => {
+    expect(TENANT_AUDIT_ACTIONS.length).toBe(14);
   });
 
   it('every entry has a non-empty name and a verb', () => {
     for (const entry of TENANT_AUDIT_ACTIONS) {
-      expect(entry.name).toMatch(/^TENANT_/);
+      // Slice C 7.5 added the LEGAL_HOLD_* prefix; both domains live in
+      // @cortex/tenant-context per planning-doc D4, so the catalog
+      // prefix-regex permits both TENANT_* and LEGAL_HOLD_*.
+      expect(entry.name).toMatch(/^(TENANT_|LEGAL_HOLD_)/);
       expect(entry.name.length).toBeGreaterThan('TENANT_'.length);
       expect(entry.verb).toMatch(/^(CREATE|UPDATE|DELETE|READ|APPROVE|REJECT|EXECUTE)$/);
     }
@@ -77,5 +80,19 @@ describe('TENANT_AUDIT_ACTIONS — F02 lifecycle additions', () => {
     expect(getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_CONFIG_VERSION_UPDATED').verb).toBe(
       'UPDATE',
     );
+  });
+});
+
+describe('TENANT_AUDIT_ACTIONS — F02 Slice C 7.5 additions', () => {
+  it('TENANT_FORCE_TERMINATED is registered with DELETE verb (Super Admin override; SC2 lock)', () => {
+    expect(getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_FORCE_TERMINATED').verb).toBe('DELETE');
+  });
+
+  it('LEGAL_HOLD_SET is registered with CREATE verb (legal-hold lifecycle; SC3 lock)', () => {
+    expect(getActionByName(TENANT_AUDIT_ACTIONS, 'LEGAL_HOLD_SET').verb).toBe('CREATE');
+  });
+
+  it('LEGAL_HOLD_RELEASED is registered with DELETE verb', () => {
+    expect(getActionByName(TENANT_AUDIT_ACTIONS, 'LEGAL_HOLD_RELEASED').verb).toBe('DELETE');
   });
 });

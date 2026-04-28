@@ -982,28 +982,25 @@ codes if needed; today no parser depends on a specific shape.
   3. Tenant Cloud SQL instance (ENTERPRISE only) — delete dedicated
      instance. Phase 1 **STUB** per Q-NEW-C5: TODO marker; lights up
      with ADR-INFRA-005 swap.
-  4. Shared-DB cascade, single transaction:
-     - Emit `TENANT_TERMINATED` audit event BEFORE the deletes — RLS
-       write policy requires `app.tenant_id` bound to an extant tenant
-       row; the soft-retain UPDATE comes after so the audit's
-       `before_state` snapshot captures `tier`, `external_id`,
-       `display_name`, `kms_key_resource_name`, and the
-       `offboarding_grace_until` timestamp.
-     - Hard-delete children: `legal_hold` (active + released — full
-       wipe per spec §3 "deletes every tenant-scoped trace"; the audit
-       chain is the historical record), `tenant_kms_key`,
-       `tenant_config_version`, `tenant_quota_usage`. Order is
-       arbitrary — none of these tables FK each other; all FK to
-       `tenant` (which we soft-retain).
-     - Soft-retain the `tenant` row: `UPDATE tenant SET status='TERMINATED',
+  4. Shared-DB cascade, single transaction: - Emit `TENANT_TERMINATED` audit event BEFORE the deletes — RLS
+     write policy requires `app.tenant_id` bound to an extant tenant
+     row; the soft-retain UPDATE comes after so the audit's
+     `before_state` snapshot captures `tier`, `external_id`,
+     `display_name`, `kms_key_resource_name`, and the
+     `offboarding_grace_until` timestamp. - Hard-delete children: `legal_hold` (active + released — full
+     wipe per spec §3 "deletes every tenant-scoped trace"; the audit
+     chain is the historical record), `tenant_kms_key`,
+     `tenant_config_version`, `tenant_quota_usage`. Order is
+     arbitrary — none of these tables FK each other; all FK to
+     `tenant` (which we soft-retain). - Soft-retain the `tenant` row: `UPDATE tenant SET status='TERMINATED',
 terminated_at=msNow, updated_at=msNow`. The tombstone keeps
-       `audit_event.tenant_id` references valid for forensic queries.
-       `tenants.get` / `tenants.getByExternalId` filter `status='TERMINATED'`
-       at the application layer and surface `TenantNotFoundError` —
-       indistinguishable from hard delete at the API surface, satisfying
-       spec §3's "post-termination queries return tenant-not-found".
-       `tenants.list` is intentionally unfiltered so operators can review
-       tombstones for compliance.
+     `audit_event.tenant_id` references valid for forensic queries.
+     `tenants.get` / `tenants.getByExternalId` filter `status='TERMINATED'`
+     at the application layer and surface `TenantNotFoundError` —
+     indistinguishable from hard delete at the API surface, satisfying
+     spec §3's "post-termination queries return tenant-not-found".
+     `tenants.list` is intentionally unfiltered so operators can review
+     tombstones for compliance.
   5. KMS key tombstone — Phase 1 records `kms_key_resource_name` in
      the `TENANT_TERMINATED` audit payload as the tombstone signal
      (Q-NEW-C11). NO destroy call: env-level `cortex-general-key` is
@@ -1047,22 +1044,137 @@ terminated_at=msNow, updated_at=msNow`. The tombstone keeps
 
 ### 6.3. Legal hold (Q-OPEN-3)
 
-- **Phase 1:** `tenant.legal_hold` boolean column (migration 0010).
-  Single flag per tenant. `tenants.terminate` queries this; refuses
-  if `true` (raises with explicit "legal hold active" message).
-- **Phase 2 / Slice C upgrade:** `legal_hold` table (migration 0011) for richer per-record / per-data-class semantics. Schema:
-  ```sql
-  legal_hold (id, tenant_id, scope, record_id?, data_class?, reason, set_by_user_id, set_at, released_at?, released_by_user_id?)
-  ```
-  scope ∈ {'tenant', 'record', 'data_class'}. Termination workflow
-  queries: `tenant.legal_hold = true OR EXISTS(SELECT 1 FROM legal_hold WHERE tenant_id = $1 AND released_at IS NULL)`.
-  Both checked because the boolean column is the fast path and the
-  table is the granular path.
-- **Super Admin override.** Per spec §3, legal-hold-blocked
-  termination CAN proceed via a Super Admin override. Slice C
-  ships the override workflow as a separate `tenants.forceTerminate`
-  method requiring elevated authz. Until AC01 ships, the Super
-  Admin role is the bootstrap admin (P0.9).
+Two-tier hold model — per-tenant fast path AND granular table — both
+checked by `tenants.terminate`.
+
+**Fast path** (`tenant.legal_hold` boolean, migration 0010): O(1)
+lookup flag per tenant. Set via direct DB UPDATE today (no audit
+emit; the `legalHolds.set` helper covers richer scenarios).
+`tenants.terminate` short-circuits on this when `true`.
+
+**Granular path** (`legal_hold` table, migration 0011): three-scope
+discriminator (`tenant` | `record` | `data_class`):
+
+```sql
+legal_hold (id, tenant_id, scope, record_id?, data_class?,
+            reason, set_by_user_id, set_at,
+            released_at?, released_by_user_id?)
+```
+
+Termination workflow queries:
+
+```sql
+tenant.legal_hold = true
+OR EXISTS (SELECT 1 FROM legal_hold WHERE tenant_id = $1 AND released_at IS NULL)
+```
+
+Both checked at every terminate call; either active hold blocks.
+
+**Helper API** (Slice C sub-phase 7.5):
+
+- `legalHolds.set(db, tenantId, options, ctx)` — places a hold per
+  the scope discriminator. Emits `LEGAL_HOLD_SET` audit event with
+  `after_state` capturing the hold's shape (scope, reason,
+  set_by_user_id, plus record_id or data_class when applicable).
+  - **NOT idempotent** — every call inserts a new row. Multiple
+    active holds for the same scope/target are valid; release each
+    independently.
+  - Refuses on TERMINATED tenants (no holds on tombstones).
+  - Phase 1 enforcement: only `scope='tenant'` blocks termination.
+    `scope='record'` and `scope='data_class'` are stored but not yet
+    consumed; Phase 2+ application code (e.g., `records.delete`)
+    will enforce when those modules ship.
+- `legalHolds.release(db, tenantId, holdId, options, ctx)` — releases
+  an existing hold. Sets `released_at` + `released_by_user_id`; row
+  is preserved as a historical record. Emits `LEGAL_HOLD_RELEASED`
+  (DELETE verb — the assertion is "deleted" even though the row
+  persists).
+  - **Idempotent** — re-call on already-released hold returns row
+    without re-emitting audit.
+  - Caller MUST supply `tenantId` even though `holdId` is unique:
+    RLS on `legal_hold` requires `app.tenant_id` bound BEFORE any
+    read, and the hold's tenant_id can't be discovered without that
+    bind (chicken-and-egg).
+
+**RLS contract:** both helpers bind `app.tenant_id` to `tenantId`
+before any read/write. Cross-tenant access fails closed (release of
+a foreign-tenant's hold throws `TenantNotFoundError`).
+
+**Super Admin override.** Per spec §3, legal-hold-blocked
+termination CAN proceed via a Super Admin override.
+`tenants.forceTerminate` ships the override (see §6.4). Both the
+boolean fast path AND active table holds are bypassed; bypassed
+details are captured in the audit payload's `override_metadata` for
+forensic attribution. Until AC01 ships, the Super Admin role is the
+bootstrap admin (P0.9).
+
+### 6.4. Force termination (Super Admin override) `[F02-C]`
+
+`tenants.forceTerminate(db, id, reason, ctx, options?)` is the
+override path for `tenants.terminate`. Per F02 Slice C SC2 lock, it
+emits a dedicated `TENANT_FORCE_TERMINATED` audit action (NOT
+`TENANT_TERMINATED`) so compliance regulators can grep for "tenant
+terminated despite an active hold or before grace elapsed" without
+parsing payload metadata.
+
+**Differences from `tenants.terminate`:**
+
+- **Skips legal-hold check.** Active hold details are still captured
+  in `payload.override_metadata.active_legal_hold` (scope + reason +
+  set_by_user_id) for forensic attribution — operators reviewing the
+  override can see exactly what was bypassed.
+- **Skips grace-period check.** OFFBOARDING tenants can be
+  force-terminated mid-grace; ACTIVE / SUSPENDED tenants skip
+  OFFBOARDING entirely. Whether the grace was actually skipped is
+  recorded in `payload.override_metadata.skipped_grace_period`.
+- **Requires `reason`** — operator's narrative justification,
+  validated 1-2000 chars and captured in `payload.reason`. Empty
+  reason → `TenantValidationError`.
+- **Allowed transitions:** ACTIVE / SUSPENDED / OFFBOARDING →
+  TERMINATED. Pre-public states (REQUESTED, PROVISIONING, READY)
+  reject with `TenantStatusError` — those tenants haven't gone
+  public; use `cleanupFailedProvisioning` instead.
+
+**Cascade + audit shape:** identical to `tenants.terminate` (5-step
+external + shared-DB + KMS tombstone) except for the audit action
+and the additional `override_metadata` payload field:
+
+```ts
+override_metadata: {
+  skipped_legal_hold: boolean,        // true if any active hold existed
+  skipped_grace_period: boolean,      // true if status=OFFBOARDING and grace not elapsed
+  active_legal_hold?: { scope, reason, set_by_user_id },  // present iff a granular hold was bypassed
+  tenant_legal_hold_boolean_was_set?: true,  // present iff fast-path boolean was true
+}
+```
+
+**Idempotency** mirrors `terminate`: re-call on a TERMINATED
+tombstone returns the row, no audit re-emit, no GCS re-delete.
+
+**Authz:** Phase 1 has no enforcement at this layer — anything that
+imports the package can call. AC01 will gate via per-method authz
+(recorded as a deviation in F02 deviations + future-roadmap §10.12).
+
+**Forensic-query examples:**
+
+```sql
+-- Every force-termination across the platform:
+SELECT * FROM audit_event
+WHERE action = 'TENANT_FORCE_TERMINATED'
+ORDER BY occurred_at DESC;
+
+-- Force-terminations that bypassed an active legal hold:
+SELECT * FROM audit_event
+WHERE action = 'TENANT_FORCE_TERMINATED'
+  AND payload->'override_metadata'->>'skipped_legal_hold' = 'true'
+ORDER BY occurred_at DESC;
+
+-- Force-terminations that bypassed grace periods:
+SELECT * FROM audit_event
+WHERE action = 'TENANT_FORCE_TERMINATED'
+  AND payload->'override_metadata'->>'skipped_grace_period' = 'true'
+ORDER BY occurred_at DESC;
+```
 
 ## 7. Key rotation + dual-key overlap `[F02-D]`
 
@@ -1221,18 +1333,21 @@ irreversible / compliance-relevant events; generic
 
 ### 9.1. Domain actions
 
-| Action                          | Verb   | Emitted by                              | Captures                                                                                                                            |
-| ------------------------------- | ------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `TENANT_CREATED`                | CREATE | `tenants.create`                        | Initial substrate. `after_state`: external_id, display_name, tier, status. Caller actor.                                            |
-| `TENANT_KMS_KEY_BOUND`          | CREATE | `tenants.create`                        | KMS key resource name binding. `after_state.kms_key_resource_name`. Caller actor.                                                   |
-| `TENANT_CONFIG_VERSION_CREATED` | CREATE | `tenants.create` (conditional)          | Initial config v=1 (only if `initialConfig` supplied). `after_state.version_number`, `after_state.config`. Caller actor.            |
-| `TENANT_PROVISIONED`            | CREATE | `provisioningWorker` (terminal-success) | Provisioning workflow completed. `after_state.status='READY'`. **Caller actor preserved** for forensic attribution.                 |
-| `TENANT_UPDATED`                | UPDATE | `tenants.update`                        | Mutable-field changes (display_name in Slice A). `before_state` + `after_state` capture the delta.                                  |
-| `TENANT_STATUS_CHANGED`         | UPDATE | `tenants.setStatus`                     | Generic state transition. `before_state.status` + `after_state.status`. Used for symmetric reversibles + worker-driven advances.    |
-| `TENANT_OFFBOARDING_STARTED`    | UPDATE | `tenants.offboard` `[F02-C]`            | Offboarding initiated. `after_state.grace_until`. Caller actor.                                                                     |
-| `TENANT_TERMINATED`             | DELETE | `tenants.terminate` `[F02-C]`           | Hard delete. `before_state` captures final tenant shape + KMS key tombstone. Caller actor.                                          |
-| `TENANT_KEY_ROTATED`            | UPDATE | `tenants.rotateKeys` `[F02-D]`          | Key rotation. `before_state.kms_key_resource_name` + `after_state.kms_key_resource_name`. Caller actor.                             |
-| `TENANT_CONFIG_VERSION_UPDATED` | UPDATE | future config-update workflow           | Config mutation post-creation. `before_state` (prior config_json) + `after_state` (new config_json + version_number). Caller actor. |
+| Action                          | Verb   | Emitted by                              | Captures                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TENANT_CREATED`                | CREATE | `tenants.create`                        | Initial substrate. `after_state`: external_id, display_name, tier, status. Caller actor.                                                                                                                                                                                                |
+| `TENANT_KMS_KEY_BOUND`          | CREATE | `tenants.create`                        | KMS key resource name binding. `after_state.kms_key_resource_name`. Caller actor.                                                                                                                                                                                                       |
+| `TENANT_CONFIG_VERSION_CREATED` | CREATE | `tenants.create` (conditional)          | Initial config v=1 (only if `initialConfig` supplied). `after_state.version_number`, `after_state.config`. Caller actor.                                                                                                                                                                |
+| `TENANT_PROVISIONED`            | CREATE | `provisioningWorker` (terminal-success) | Provisioning workflow completed. `after_state.status='READY'`. **Caller actor preserved** for forensic attribution.                                                                                                                                                                     |
+| `TENANT_UPDATED`                | UPDATE | `tenants.update`                        | Mutable-field changes (display_name in Slice A). `before_state` + `after_state` capture the delta.                                                                                                                                                                                      |
+| `TENANT_STATUS_CHANGED`         | UPDATE | `tenants.setStatus`                     | Generic state transition. `before_state.status` + `after_state.status`. Used for symmetric reversibles + worker-driven advances.                                                                                                                                                        |
+| `TENANT_OFFBOARDING_STARTED`    | UPDATE | `tenants.offboard` `[F02-C]`            | Offboarding initiated. `after_state.grace_until`. Caller actor.                                                                                                                                                                                                                         |
+| `TENANT_TERMINATED`             | DELETE | `tenants.terminate` `[F02-C]`           | Soft-retain tombstone + cascade. `before_state` captures final tenant shape + `kms_key_resource_name`; `payload.cascade_steps` records per-step status (per Q-NEW-C5). Caller actor.                                                                                                    |
+| `TENANT_FORCE_TERMINATED`       | DELETE | `tenants.forceTerminate` `[F02-C]`      | Super Admin override. Same shape as `TENANT_TERMINATED` plus `payload.reason` + `payload.override_metadata.{skipped_legal_hold, skipped_grace_period, active_legal_hold?, tenant_legal_hold_boolean_was_set?}`. Distinct action per SC2 lock for compliance grep-ability. Caller actor. |
+| `LEGAL_HOLD_SET`                | CREATE | `legalHolds.set` `[F02-C]`              | Compliance assertion: hold placed on a tenant scope. `after_state` captures scope, reason, set_by_user_id, plus record_id or data_class when applicable. Caller actor.                                                                                                                  |
+| `LEGAL_HOLD_RELEASED`           | DELETE | `legalHolds.release` `[F02-C]`          | Compliance assertion: hold released. `before_state` captures the now-released hold's pre-release shape; `payload.released_by_user_id` and optional `release_reason`. DELETE verb is semantic ("assertion deleted"); the row is soft-retained for the historical record. Caller actor.   |
+| `TENANT_KEY_ROTATED`            | UPDATE | `tenants.rotateKeys` `[F02-D]`          | Key rotation. `before_state.kms_key_resource_name` + `after_state.kms_key_resource_name`. Caller actor.                                                                                                                                                                                 |
+| `TENANT_CONFIG_VERSION_UPDATED` | UPDATE | future config-update workflow           | Config mutation post-creation. `before_state` (prior config_json) + `after_state` (new config_json + version_number). Caller actor.                                                                                                                                                     |
 
 ### 9.2. Generic TENANT_STATUS_CHANGED
 

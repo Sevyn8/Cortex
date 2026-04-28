@@ -942,7 +942,14 @@ codes if needed; today no parser depends on a specific shape.
 
 ## 6. Offboarding + termination + legal hold `[F02-C]`
 
-**Slice C placeholder.** Workflow shapes — pinned context:
+F02 Slice C ships the destructive end of the lifecycle: voluntary
+offboarding (with grace-period scheduling + export archive),
+operator-driven termination (with the 5-step cascade + soft-retain
+tombstone), the legal-hold helper API (per-tenant fast path + granular
+table), and the Super Admin override (`forceTerminate`) for
+hold-or-grace bypass with full forensic capture. §6.5–6.7 cover the
+cross-cutting idempotency, failure-recovery, and forensic-query
+patterns shared across these workflows.
 
 ### 6.1. Offboarding
 
@@ -950,10 +957,32 @@ codes if needed; today no parser depends on a specific shape.
   → OFFBOARDING. Sets `tenant.offboarding_grace_until` to
   `now() + grace_period` (default 30 days; configurable per Q-OPEN-3
   - spec §3).
-- Generates a signed-URL data-export archive. Archive contents:
-  full tenant data dump (TBD format — JSON Lines, Parquet, or
-  vendor-specific; planning at Slice C).
-- Pre-signed URL TTL: 30 days (per spec §3).
+- Generates a per-tenant export archive at
+  `gs://{tenant_data_bucket}/tenants/{tenantId}/exports/{timestamp}.jsonl.gz`
+  per Q-NEW-C4 lock: gzipped JSON Lines with a schema-versioned
+  envelope per record (`{schema_version: '1', entity_type, entity_id,
+data}`). Six entity types: `tenant`, `tenant_config_version`,
+  `tenant_kms_key` (resource_name only — no key material; KMS owns
+  keys), `audit_event` (full chain), `tenant_quota_usage`, `legal_hold`.
+  The schema-versioned envelope enables additive schema migration
+  without breaking older archives (e.g., switching a specific
+  `entity_type` to Parquet later remains backward-compatible).
+- **Two distinct retention concepts** (Q-NEW-C6 lock):
+  - **Pre-signed URL TTL: 7 days** (GCS V4 server-side cap). The
+    signed URL is delivered to the operator/auditor via the
+    `tenants.offboard` return value; the URL expires after 7 days
+    regardless of object retention.
+  - **Object retention: 30 days target** (per spec §3). Implemented
+    as a future GCS lifecycle policy on the tenant-data bucket — not
+    in any current sub-phase's TF; deferred until first production
+    tenant offboards.
+  - **Operator URL refresh:** when the original signed URL expires
+    before delivery, a future `tenants.regenerateOffboardingArchiveUrl(tenantId)`
+    helper will fetch the most recent `gcsUri` from the tenant's
+    `TENANT_OFFBOARDING_STARTED` audit row and re-sign for another
+    7 days. Function signature documented for forward reference;
+    implementation lands when the first production offboarding
+    requires it.
 - **Signing identity (staged rollout, sub-phase 7.6):**
   - **TF (✓ landed):** Per-env `cortex-export-signer-{env}` SA exists
     via the `cortex-signer-sa` module. Runtime SA
@@ -975,7 +1004,14 @@ codes if needed; today no parser depends on a specific shape.
     signed URL is gated by the staging gap. Per convention §10.8
     lock — per-env signer, NOT per-tenant.
 - Emits `TENANT_OFFBOARDING_STARTED` audit event (UPDATE; caller
-  actor). `after_state` includes `grace_until` timestamp.
+  actor). `after_state` captures `status='OFFBOARDING'` +
+  `offboarding_grace_until`. `payload` captures `gracePeriodDays` +
+  `exportArchive: { gcsUri, fullObjectPath, bucket, sizeBytes,
+schemaVersion, entityCounts, generatedAt }`. **`signedUrl` is
+  deliberately excluded** from the audit row — the signed URL is a
+  short-lived auth token; logging it leaks credentials. Operators
+  recover `gcsUri` from the audit payload and re-sign via the future
+  `regenerateOffboardingArchiveUrl` helper if needed.
 - Schedules a Cloud Task on `lifecycle-queue` with
   `taskId='terminate-{tenantId}'` and `scheduleTime=grace_until`
   for the eventual termination.
@@ -999,25 +1035,28 @@ codes if needed; today no parser depends on a specific shape.
   3. Tenant Cloud SQL instance (ENTERPRISE only) — delete dedicated
      instance. Phase 1 **STUB** per Q-NEW-C5: TODO marker; lights up
      with ADR-INFRA-005 swap.
-  4. Shared-DB cascade, single transaction: - Emit `TENANT_TERMINATED` audit event BEFORE the deletes — RLS
-     write policy requires `app.tenant_id` bound to an extant tenant
-     row; the soft-retain UPDATE comes after so the audit's
-     `before_state` snapshot captures `tier`, `external_id`,
-     `display_name`, `kms_key_resource_name`, and the
-     `offboarding_grace_until` timestamp. - Hard-delete children: `legal_hold` (active + released — full
-     wipe per spec §3 "deletes every tenant-scoped trace"; the audit
-     chain is the historical record), `tenant_kms_key`,
+  4. **Shared-DB cascade (single transaction).** Three ordered
+     actions: (a) emit `TENANT_TERMINATED` audit event BEFORE the
+     deletes — RLS write policy requires `app.tenant_id` bound to
+     an extant tenant row; the soft-retain UPDATE comes after so
+     the audit's `before_state` snapshot captures `tier`,
+     `external_id`, `display_name`, `kms_key_resource_name`, and
+     the `offboarding_grace_until` timestamp. (b) Hard-delete
+     children: `legal_hold` (active + released — full wipe per
+     spec §3 "deletes every tenant-scoped trace"; the audit chain
+     is the historical record), `tenant_kms_key`,
      `tenant_config_version`, `tenant_quota_usage`. Order is
      arbitrary — none of these tables FK each other; all FK to
-     `tenant` (which we soft-retain). - Soft-retain the `tenant` row: `UPDATE tenant SET status='TERMINATED',
-terminated_at=msNow, updated_at=msNow`. The tombstone keeps
-     `audit_event.tenant_id` references valid for forensic queries.
-     `tenants.get` / `tenants.getByExternalId` filter `status='TERMINATED'`
-     at the application layer and surface `TenantNotFoundError` —
-     indistinguishable from hard delete at the API surface, satisfying
-     spec §3's "post-termination queries return tenant-not-found".
-     `tenants.list` is intentionally unfiltered so operators can review
-     tombstones for compliance.
+     `tenant` (which we soft-retain). (c) Soft-retain the `tenant`
+     row via `UPDATE tenant SET status='TERMINATED', terminated_at=msNow, updated_at=msNow`.
+     The tombstone keeps `audit_event.tenant_id` references valid
+     for forensic queries. `tenants.get` / `tenants.getByExternalId`
+     filter `status='TERMINATED'` at the application layer and
+     surface `TenantNotFoundError` — indistinguishable from hard
+     delete at the API surface, satisfying spec §3's
+     "post-termination queries return tenant-not-found".
+     `tenants.list` is intentionally unfiltered so operators can
+     review tombstones for compliance.
   5. KMS key tombstone — Phase 1 records `kms_key_resource_name` in
      the `TENANT_TERMINATED` audit payload as the tombstone signal
      (Q-NEW-C11). NO destroy call: env-level `cortex-general-key` is
@@ -1192,6 +1231,235 @@ WHERE action = 'TENANT_FORCE_TERMINATED'
   AND payload->'override_metadata'->>'skipped_grace_period' = 'true'
 ORDER BY occurred_at DESC;
 ```
+
+### 6.5. Idempotency semantics
+
+All §6 lifecycle workflows are designed to be safely re-callable
+without producing duplicate state mutations or audit rows. The
+pattern follows the SB5 Option α precedent from §5 (suspend/resume):
+an unlocked Phase 1 fast-path read for the common-case retry, plus
+a row-locked Phase 3/4 re-check for race safety under concurrent
+operators.
+
+**Per-workflow idempotency:**
+
+| Workflow                 | Fast-path on              | Behavior on retry                                                                                                                                                                                         |
+| ------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenants.offboard`       | `status='OFFBOARDING'`    | Returns existing row + `graceUntil` + `exportArchive: undefined`; no audit re-emit; no archive regeneration; no Cloud Task re-dispatch.                                                                   |
+| `tenants.terminate`      | `status='TERMINATED'`     | Returns tombstone row; no audit re-emit; no GCS re-delete; no children re-delete (already gone).                                                                                                          |
+| `tenants.forceTerminate` | `status='TERMINATED'`     | Same as `terminate`. The override path's idempotency mirrors the regular path.                                                                                                                            |
+| `legalHolds.set`         | **NEVER idempotent**      | Each call inserts a new `legal_hold` row. Multiple active holds for the same scope+target are valid (different reasons, different setters). Operators wanting "set if not already held" must check first. |
+| `legalHolds.release`     | `released_at IS NOT NULL` | Returns the released row unchanged; no audit re-emit.                                                                                                                                                     |
+
+**Race-safe re-check pattern.** The Phase 1 fast-path read is
+unlocked (no `SELECT FOR UPDATE`) — optimistic for the common-case
+retry. If the row's status indicates the workflow already completed,
+return early. Otherwise, the workflow proceeds to a Phase 3 or 4
+transaction (depending on workflow shape) that begins with a
+row-locked re-read. Between Phase 1's read and Phase 3/4's lock, a
+parallel operator may have completed the workflow; the locked
+re-check catches this and returns the now-completed row without
+re-running destructive steps.
+
+The race-window cost is a possible wasted archive in GCS (offboard)
+or wasted external-cascade calls (terminate / forceTerminate), but
+no double-state-mutation: the locked re-check guarantees only one
+operator's transaction commits the state transition.
+
+**Why not idempotency keys?** The workflows above use natural
+state-based idempotency — the row's `status` IS the idempotency
+token. An explicit `idempotency_key` column would add complexity
+without benefit: the state-machine semantics already provide the
+"don't re-do completed work" guarantee, and the locked re-check
+provides race safety. If a future use case requires operator-supplied
+keys (e.g., "this is request id X; don't re-process"), it would be
+additive: a new column + check before Phase 1's fast-path. Phase 1
+has no such use case.
+
+### 6.6. Failure recovery semantics
+
+Per F02 Slice C SC4 lock: lifecycle workflows use **retry-from-scratch
+with per-step pre-checks**. There is no "resume from where I failed"
+state machine — each retry begins at Phase 1 and reaches the same
+final state via the §6.5 idempotency mechanisms.
+
+**Per-cascade-step failure modes** (`tenants.terminate` +
+`tenants.forceTerminate`):
+
+| Step                              | Failure mode                                               | Recovery                                                                                                                                                                                                |
+| --------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Cloud Run delete (ENTERPRISE)  | Phase 1 STUB; no failure modes today (TODO log only).      | Future ADR-INFRA-005 swap: retry sees the service-already-deleted case as a no-op.                                                                                                                      |
+| 2. GCS prefix delete              | Network / IAM / quota errors at `bucket.deleteFiles(...)`. | `force: true` makes empty-prefix retry a no-op. Operator retries the whole `terminate` call.                                                                                                            |
+| 3. Cloud SQL delete (ENTERPRISE)  | Phase 1 STUB; no failure modes today.                      | Future ADR-INFRA-005 swap: same retry semantic as Cloud Run.                                                                                                                                            |
+| 4. Shared-DB cascade (single txn) | DB connection / RLS / audit-emit / FK constraint failures. | Whole txn rolls back; tenant remains in pre-call state. §6.5 idempotency guarantees safe retry.                                                                                                         |
+| 5. KMS tombstone                  | Phase 1: no destroy call (env-level shared key).           | Audit row captures `kms_key_resource_name` as the tombstone signal. Future ADR-INFRA-007 swap: `keys.scheduleDestroy` with a 7-day recovery window allows operator-led undo within the recovery period. |
+
+**Offboard failure modes** (`tenants.offboard`):
+
+| Phase                            | Failure mode                                             | Recovery                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Preflight                     | `TenantNotFoundError` / `TenantStatusError` / RLS error. | Operator-visible error; no state mutation.                                                                                                                                                                                                                                                                                                    |
+| 2. Archive generation            | GCS upload error / IAM error.                            | No state mutation; tenant remains in pre-OFFBOARDING status. Operator retries.                                                                                                                                                                                                                                                                |
+| 3. State transition (single txn) | DB error / audit-emit error.                             | Whole txn rolls back; archive in GCS is orphaned (no security implication; same tenant prefix). Operator retries; new archive generated.                                                                                                                                                                                                      |
+| 4. Cloud Tasks dispatch          | Network / IAM error at `dispatchCloudTask`.              | **Tenant is OFFBOARDING + audit emitted, but no scheduled terminate task.** Operator must reconcile: re-call `tenants.offboard` (idempotent fast-path returns existing state) and explicitly re-dispatch via Cloud Tasks SDK, OR call `tenants.terminate` directly after `grace_until` elapses. The only failure mode requiring intervention. |
+
+**What does NOT happen:**
+
+- No per-step "I got 3 of 5 done" progress column on the tenant row.
+- No `terminate_progress` JSONB tracking which steps completed.
+- No background reconciliation worker watching for stuck terminations.
+- No "partial cascade" recovery state machine.
+
+The convention's stance: per-step idempotency + per-call atomicity
+(single txn for the shared-DB cascade; `force: true` on GCS deletes;
+stub markers for Cloud Run / Cloud SQL) makes whole-cascade retry
+safe and operationally simple. Operators retry the top-level call;
+the system converges to the correct final state regardless of which
+step previously failed.
+
+### 6.7. Forensic queries
+
+Operator runbook for compliance and incident-response queries against
+the audit substrate. All queries assume an RLS-bound session for
+those touching `tenant_kms_key` / `legal_hold`; queries against
+`tenant` and `audit_event` are RLS-bound to a specific tenant or run
+as a privileged audit role.
+
+**a. All offboardings within a date range:**
+
+```sql
+SELECT
+  ae.tenant_id,
+  ae.occurred_at,
+  ae.actor_id,
+  ae.payload->'exportArchive'->>'gcsUri' AS archive_gcs_uri,
+  ae.payload->>'gracePeriodDays' AS grace_period_days
+FROM audit_event ae
+WHERE ae.action = 'TENANT_OFFBOARDING_STARTED'
+  AND ae.occurred_at BETWEEN $1 AND $2
+ORDER BY ae.occurred_at;
+```
+
+**b. All terminations (regular + force) within a date range:**
+
+```sql
+SELECT
+  ae.tenant_id,
+  ae.occurred_at,
+  ae.actor_id,
+  ae.action,                                           -- TENANT_TERMINATED or TENANT_FORCE_TERMINATED
+  ae.payload->>'reason' AS force_reason,               -- only set for TENANT_FORCE_TERMINATED
+  ae.payload->'override_metadata' AS override_metadata
+FROM audit_event ae
+WHERE ae.action IN ('TENANT_TERMINATED', 'TENANT_FORCE_TERMINATED')
+  AND ae.occurred_at BETWEEN $1 AND $2
+ORDER BY ae.occurred_at;
+```
+
+**c. Force-terminations that bypassed an active legal hold** (compliance category 1):
+
+```sql
+SELECT
+  ae.tenant_id,
+  ae.occurred_at,
+  ae.actor_id,
+  ae.payload->>'reason' AS force_reason,
+  ae.payload->'override_metadata'->'active_legal_hold' AS bypassed_hold
+FROM audit_event ae
+WHERE ae.action = 'TENANT_FORCE_TERMINATED'
+  AND (ae.payload->'override_metadata'->>'skipped_legal_hold')::boolean = true
+ORDER BY ae.occurred_at DESC;
+```
+
+**d. Force-terminations that bypassed grace period:**
+
+```sql
+SELECT
+  ae.tenant_id,
+  ae.occurred_at,
+  ae.actor_id,
+  ae.payload->>'reason' AS force_reason
+FROM audit_event ae
+WHERE ae.action = 'TENANT_FORCE_TERMINATED'
+  AND (ae.payload->'override_metadata'->>'skipped_grace_period')::boolean = true
+ORDER BY ae.occurred_at DESC;
+```
+
+**e. All active legal holds across the platform** (privileged audit role required for cross-tenant scan):
+
+```sql
+SELECT
+  lh.tenant_id,
+  lh.scope,
+  lh.record_id,
+  lh.data_class,
+  lh.reason,
+  lh.set_by_user_id,
+  lh.set_at
+FROM legal_hold lh
+WHERE lh.released_at IS NULL
+ORDER BY lh.tenant_id, lh.set_at;
+```
+
+**f. Full lifecycle chain for a specific terminated tenant** (audit reconstruction post-termination):
+
+```sql
+SELECT
+  ae.action,
+  ae.verb,
+  ae.actor_id,
+  ae.actor_type,
+  ae.occurred_at,
+  ae.before_state,
+  ae.after_state,
+  ae.payload
+FROM audit_event ae
+WHERE ae.tenant_id = $1
+ORDER BY ae.occurred_at, ae.event_id;
+-- The tombstone tenant row remains queryable via direct SQL:
+--   SELECT * FROM tenant WHERE id = $1;
+-- → returns row with status='TERMINATED', terminated_at populated.
+-- `tenants.get` throws TenantNotFoundError per Q-NEW-C8 application-layer filter.
+```
+
+**g. GCS path of a tenant's last export archive** (operator retrieval):
+
+```sql
+SELECT
+  ae.tenant_id,
+  ae.occurred_at AS exported_at,
+  ae.payload->'exportArchive'->>'gcsUri' AS archive_gcs_uri,
+  ae.payload->'exportArchive'->>'sizeBytes' AS size_bytes,
+  ae.payload->'exportArchive'->>'schemaVersion' AS schema_version
+FROM audit_event ae
+WHERE ae.tenant_id = $1
+  AND ae.action = 'TENANT_OFFBOARDING_STARTED'
+ORDER BY ae.occurred_at DESC
+LIMIT 1;
+```
+
+**h. Released legal holds with reasons + release attribution:**
+
+```sql
+SELECT
+  lh.tenant_id,
+  lh.scope,
+  lh.reason AS hold_reason,
+  lh.set_by_user_id,
+  lh.set_at,
+  lh.released_at,
+  lh.released_by_user_id
+FROM legal_hold lh
+WHERE lh.tenant_id = $1
+  AND lh.released_at IS NOT NULL
+ORDER BY lh.released_at DESC;
+```
+
+These queries form the backbone of compliance / incident-response /
+audit-trail review. The audit chain's append-only invariant
+(ADR-DB-003) guarantees historically accurate results regardless of
+when the queries run — including against terminated tenants whose
+substrate has been destroyed.
 
 ## 7. Key rotation + dual-key overlap `[F02-D]`
 

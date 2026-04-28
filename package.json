@@ -18,6 +18,7 @@
     "format:check": "prettier --check .",
     "prepare": "husky",
     "db:migrate": "drizzle-kit migrate",
+    "db:reset": "bash scripts/db-reset-local.sh",
     "bootstrap:super-admin": "tsx --conditions=development scripts/bootstrap/create-super-admin.ts",
     "observability:smoke": "pnpm --filter @cortex/observability-smoke smoke"
   },

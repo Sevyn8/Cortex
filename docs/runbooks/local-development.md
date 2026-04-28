@@ -140,6 +140,16 @@ rm -rf node_modules packages/*/node_modules apps/*/node_modules services/**/node
 pnpm install
 ```
 
+### Schema-level reset (`pnpm db:reset`)
+
+For drizzle-journal drift — drizzle-kit re-runs already-applied migrations and trips on existing extensions/triggers/functions (typically SQLSTATE `42723` "function already exists" or `42P07` "relation already exists") — reset the schema without touching the volume:
+
+```bash
+pnpm db:reset
+```
+
+This drops `public` + `cortex` schemas, drops the `test_user` role, re-runs `drizzle-kit migrate`, then re-applies CI's `test_user` setup verbatim (including the `audit_event` ownership transfer that FORCE-RLS specs depend on). Idempotent; refuses to run if `PGHOST` is not localhost. Defaults to `127.0.0.1:5433` / `postgres` / `testpw` / `cortex` — override via env vars.
+
 ## Verifying the git commit hooks
 
 After any change to `.husky/`, `commitlint.config.cjs`, `eslint.config.mjs`, or `package.json` lint-staged config, run:

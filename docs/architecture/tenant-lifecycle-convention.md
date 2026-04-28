@@ -965,31 +965,85 @@ codes if needed; today no parser depends on a specific shape.
 
 ### 6.2. Termination
 
-- `tenants.terminate(db, tenantId, ctx)` flips OFFBOARDING →
-  TERMINATED. **Hard delete** sequence (per ADR-COMPUTE-001
-  superseding spec deviation 1: Cloud Run services, not K8s namespaces):
-  1. Tenant Cloud Run service(s) — delete per-tenant `{workload}-tenant-{uuid}`
-     services (Enterprise tenants; Standard tenants share infra).
+- `tenants.terminate(db, tenantId, ctx, options?)` advances OFFBOARDING
+  → TERMINATED. **Soft-retain tombstone** + hard-delete children per
+  Q-NEW-C8 (lock 2026-04-28): ADR-COMPUTE-001 supersedes spec deviation 1
+  (Cloud Run services, not K8s namespaces). 5-step cascade:
+  1. Tenant Cloud Run service(s) — delete per-tenant
+     `{workload}-tenant-{uuid}` services (ENTERPRISE only). Phase 1
+     **STUB** per Q-NEW-C5: TODO marker only; lights up with
+     ADR-INFRA-005 swap (Slice D's per-tenant Cloud Run TF module).
+     Standard tenants share infra; this step is N/A for them.
   2. Tenant GCS prefix — delete `tenants/{tenantId}/...` recursively
-     in the env's tenant-data bucket.
-  3. Tenant Cloud SQL instance (Enterprise only) — delete dedicated
-     instance.
-  4. Shared-DB tenant rows — delete `tenant_kms_key`,
-     `tenant_config_version`, `tenant_quota_usage`, then `tenant`
-     itself (FK ON DELETE RESTRICT requires children-first).
-  5. KMS key — schedule destruction (`destroyVersion`) on the
-     `tenant_kms_key.kms_key_resource_name`. Audit "tombstone" via
-     `TENANT_TERMINATED` event captures the key resource name for
-     the forensic chain. (Phase 1: env-level key NOT destroyed
-     since multiple tenants share it; per-tenant CMEK destruction
-     lights up post-ADR-INFRA-007 swap. See §10.)
-- Emits `TENANT_TERMINATED` audit event (DELETE; caller actor).
-  Records `before_state` capturing the tenant's final shape +
-  `kms_key_resource_name` for the tombstone signal.
-- Idempotency: re-dispatched termination is a no-op once `status='TERMINATED'`
-  (worker pre-check; same SA11 pattern as provisioning).
-- Post-termination: queries return `tenant-not-found` per spec §3.
-  Audit chain remains queryable indefinitely (append-only ADR-DB-003).
+     in the env's tenant-data bucket via
+     `bucket.deleteFiles({prefix, force: true})`. `force: true` makes
+     the call idempotent (no error if prefix is empty — supports
+     retry-from-scratch per SC4 lock).
+  3. Tenant Cloud SQL instance (ENTERPRISE only) — delete dedicated
+     instance. Phase 1 **STUB** per Q-NEW-C5: TODO marker; lights up
+     with ADR-INFRA-005 swap.
+  4. Shared-DB cascade, single transaction:
+     - Emit `TENANT_TERMINATED` audit event BEFORE the deletes — RLS
+       write policy requires `app.tenant_id` bound to an extant tenant
+       row; the soft-retain UPDATE comes after so the audit's
+       `before_state` snapshot captures `tier`, `external_id`,
+       `display_name`, `kms_key_resource_name`, and the
+       `offboarding_grace_until` timestamp.
+     - Hard-delete children: `legal_hold` (active + released — full
+       wipe per spec §3 "deletes every tenant-scoped trace"; the audit
+       chain is the historical record), `tenant_kms_key`,
+       `tenant_config_version`, `tenant_quota_usage`. Order is
+       arbitrary — none of these tables FK each other; all FK to
+       `tenant` (which we soft-retain).
+     - Soft-retain the `tenant` row: `UPDATE tenant SET status='TERMINATED',
+terminated_at=msNow, updated_at=msNow`. The tombstone keeps
+       `audit_event.tenant_id` references valid for forensic queries.
+       `tenants.get` / `tenants.getByExternalId` filter `status='TERMINATED'`
+       at the application layer and surface `TenantNotFoundError` —
+       indistinguishable from hard delete at the API surface, satisfying
+       spec §3's "post-termination queries return tenant-not-found".
+       `tenants.list` is intentionally unfiltered so operators can review
+       tombstones for compliance.
+  5. KMS key tombstone — Phase 1 records `kms_key_resource_name` in
+     the `TENANT_TERMINATED` audit payload as the tombstone signal
+     (Q-NEW-C11). NO destroy call: env-level `cortex-general-key` is
+     shared across tenants; destroying it would break every tenant.
+     Future per-tenant CMEK swap (ADR-INFRA-007) lights up
+     `keys.scheduleDestroy(versionPath, scheduledDestroyDuration='7d')`
+     (7-day recovery window for incident-response headroom; beats GCP's
+     24h default).
+
+- **Audit emission:** `TENANT_TERMINATED` (DELETE verb; caller actor).
+  Records `before_state` (full pre-termination snapshot +
+  `kms_key_resource_name`) and `payload.cascade_steps` (per-step status
+  markers — `EXECUTED` / `STUB_TODO_ADR_INFRA_005` / `NA_STANDARD` /
+  `TOMBSTONE_ONLY_PHASE_1`). DELETE-verb audit rows have no
+  `after_state` per the discriminated-union contract; the soft-retain
+  UPDATE following the emit is captured implicitly by the row's new
+  status.
+- **Idempotency** (SA11 pattern): re-call on a TERMINATED tombstone
+  returns the row without re-emitting audit, re-running the GCS delete,
+  or re-applying the soft-retain UPDATE. Phase 1 fast-path read +
+  Phase 4 row-locked re-check guarantee race safety even under
+  concurrent operators.
+- **Failure semantics** (SC4 lock — retry-from-scratch with per-step
+  pre-checks): each cascade step is independently idempotent. If
+  Phase 4's txn fails after a successful Phase 3 GCS delete, the
+  tenant remains in OFFBOARDING; operator re-runs `tenants.terminate`,
+  which sees an already-empty GCS prefix (no-op) and converges to the
+  same final state. No "partial cascade" recovery state machine.
+- **Legal-hold guard** runs in Phase 2 BEFORE any destructive step
+  (per §6.3 dual-source). Active hold → `TenantLegalHoldError`; use
+  `tenants.forceTerminate` for Super Admin override (Slice C
+  sub-phase 7.5).
+- **Grace-period guard** runs in Phase 2: `now() >= offboarding_grace_until`
+  required (Q-NEW-C10 strict; trust Cloud Tasks retry on near-boundary
+  early-fires). Else `TenantGraceNotElapsedError`.
+- **Post-termination semantics:** `tenants.get` / `getByExternalId`
+  surface `TenantNotFoundError`; `tenants.list` shows the tombstone
+  (status='TERMINATED', terminated_at populated). Audit chain remains
+  queryable indefinitely (append-only ADR-DB-003 — `audit_event` has no
+  FK to `tenant`, so the chain survives independent of the tombstone).
 
 ### 6.3. Legal hold (Q-OPEN-3)
 

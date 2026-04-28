@@ -40,17 +40,32 @@
  *   roadmap.md §10.
  */
 
-import { count, eq, sql } from 'drizzle-orm';
+import { and, count, eq, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
-import { tenant, tenantConfigVersion, type Tenant } from '@cortex/canonical-schema';
+import { Storage } from '@google-cloud/storage';
+import {
+  legalHold,
+  tenant,
+  tenantConfigVersion,
+  tenantKmsKey,
+  tenantQuotaUsage,
+  type Tenant,
+} from '@cortex/canonical-schema';
 import { getActionByName } from '@cortex/audit-events';
+import { getTenantBucketName, getTenantPrefix, type Environment } from '@cortex/blob-storage';
 import { buildKeyResourceName } from '@cortex/secrets';
 import { TENANT_AUDIT_ACTIONS } from './audit-actions.js';
 import { emitAuditEvent } from './audit.js';
 import { dispatchCloudTask } from './cloud-tasks.js';
 import { bindTenantToDbSession } from './db-session.js';
-import { TenantNotFoundError, TenantStatusError, TenantValidationError } from './errors.js';
+import {
+  TenantGraceNotElapsedError,
+  TenantLegalHoldError,
+  TenantNotFoundError,
+  TenantStatusError,
+  TenantValidationError,
+} from './errors.js';
 import {
   generateExportArchive,
   type ExportArchive,
@@ -366,24 +381,33 @@ async function create(
 /**
  * Fetch a tenant by primary key.
  *
+ * Per F02 Slice C Q-NEW-C8 lock: TERMINATED tenants are soft-retained
+ * tombstones (status='TERMINATED', terminated_at set). This filter
+ * surfaces them as `TenantNotFoundError` to callers — indistinguishable
+ * from hard delete at the API surface, matching spec §3 ("post-
+ * termination queries return tenant-not-found"). Operators wanting
+ * tombstone visibility for compliance review can read directly via SQL
+ * or call `tenants.list` (intentionally unfiltered).
+ *
  * @throws TenantValidationError invalid UUID
- * @throws TenantNotFoundError no row matches
+ * @throws TenantNotFoundError no row matches OR row is TERMINATED
  */
 async function get(db: NodePgDatabase<Record<string, never>>, id: string): Promise<Tenant> {
   const parsedId = parseOrThrow(idSchema, id, 'getTenant id');
   const rows = await db.select().from(tenant).where(eq(tenant.id, parsedId)).limit(1);
   const row = rows[0];
-  if (row === undefined) {
+  if (row === undefined || row.status === 'TERMINATED') {
     throw new TenantNotFoundError(parsedId, 'id');
   }
   return row;
 }
 
 /**
- * Fetch a tenant by `external_id`.
+ * Fetch a tenant by `external_id`. TERMINATED tombstones are filtered
+ * per Q-NEW-C8 (same rationale as `get`).
  *
  * @throws TenantValidationError invalid externalId
- * @throws TenantNotFoundError no row matches
+ * @throws TenantNotFoundError no row matches OR row is TERMINATED
  */
 async function getByExternalId(
   db: NodePgDatabase<Record<string, never>>,
@@ -392,7 +416,7 @@ async function getByExternalId(
   const parsed = parseOrThrow(externalIdSchema, externalId, 'getTenantByExternalId');
   const rows = await db.select().from(tenant).where(eq(tenant.external_id, parsed)).limit(1);
   const row = rows[0];
-  if (row === undefined) {
+  if (row === undefined || row.status === 'TERMINATED') {
     throw new TenantNotFoundError(parsed, 'external_id');
   }
   return row;
@@ -1081,6 +1105,282 @@ async function offboard(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 lifecycle workflow — terminate (Slice C)
+// ─────────────────────────────────────────────────────────────────────
+
+export interface TerminateOptions {
+  /**
+   * Optional override for the GCS Storage client used by the cascade's
+   * recursive prefix delete. Tests inject a stub. Production callers
+   * omit so the default ADC/WIF-backed client constructs lazily.
+   */
+  cascadeOverrides?: { storage?: Storage };
+}
+
+/**
+ * Terminate an OFFBOARDING tenant. Hard-deletes child substrate; soft-
+ * retains the tenant row as a tombstone.
+ *
+ * Per F02 Slice C SC1 + SC4 + Q-NEW-C5 + Q-NEW-C8 + Q-NEW-C10 + Q-NEW-C11:
+ *
+ *   - Status guard: must be OFFBOARDING (else TenantStatusError).
+ *   - Grace guard: `now() >= tenant.offboarding_grace_until` (Q-NEW-C10
+ *     strict; else TenantGraceNotElapsedError).
+ *   - Legal-hold guard: dual-source check per convention §6.3 — fast
+ *     path on `tenant.legal_hold` boolean (migration 0010) AND granular
+ *     path on `legal_hold` table (migration 0011, scope discriminator).
+ *     Either active hold blocks (TenantLegalHoldError); use
+ *     `tenants.forceTerminate` for Super Admin override.
+ *
+ * 5-step cascade:
+ *
+ *   1. Cloud Run service delete (ENTERPRISE only) — Phase 1 STUB per
+ *      Q-NEW-C5; lights up with ADR-INFRA-005 swap (Slice D's
+ *      per-tenant Cloud Run TF module).
+ *   2. GCS prefix recursive delete — `tenants/{tenantId}/` via
+ *      `@google-cloud/storage` `bucket.deleteFiles({prefix, force: true})`.
+ *      Idempotent (force: true means no error if no files match).
+ *   3. Cloud SQL instance delete (ENTERPRISE only) — Phase 1 STUB per
+ *      Q-NEW-C5; lights up with ADR-INFRA-005 swap.
+ *   4. Shared-DB hard delete (children) + soft-retain (tenant row),
+ *      single transaction:
+ *        - Emit TENANT_TERMINATED audit event with full before_state +
+ *          kms_key_resource_name in payload (RLS write policy needs
+ *          tenant row still extant; emit BEFORE the delete).
+ *        - DELETE legal_hold, tenant_kms_key, tenant_config_version,
+ *          tenant_quota_usage rows for this tenant.
+ *        - UPDATE tenant SET status='TERMINATED', terminated_at=msNow.
+ *          Tombstone row keeps audit_event.tenant_id references valid.
+ *   5. KMS key tombstone — Phase 1 records the resource name in the
+ *      audit payload as a tombstone signal; no destroy call (env-level
+ *      shared key per Q-NEW-C11). Future per-tenant CMEK swap
+ *      (ADR-INFRA-007) lights up `keys.scheduleDestroy` with a 7-day
+ *      recovery window.
+ *
+ * Idempotency: re-call on a TERMINATED tombstone returns the row
+ * without re-emitting audit or re-running the cascade (mirrors SB5
+ * Option α from suspend/resume/offboard).
+ *
+ * Failure semantics (SC4 lock): retry-from-scratch with per-step
+ * pre-checks. GCS delete is idempotent; shared-DB cascade is wrapped
+ * in a single txn (atomic delete + tombstone update); Cloud Run +
+ * Cloud SQL deletes are stubbed in Phase 1 so failure modes there
+ * don't apply. If Phase 4's txn fails after a successful Phase 3
+ * GCS delete, the tenant remains in OFFBOARDING — operator re-runs
+ * `tenants.terminate`; the GCS prefix-already-empty case is a no-op,
+ * and the txn reaches the same final state.
+ *
+ * @throws TenantValidationError invalid id or actor.
+ * @throws TenantNotFoundError no row matches `id`.
+ * @throws TenantStatusError current status is not OFFBOARDING.
+ * @throws TenantGraceNotElapsedError grace period not yet elapsed.
+ * @throws TenantLegalHoldError active legal hold blocks termination.
+ * @throws Error from `@google-cloud/storage` on GCS delete failure;
+ *   caller retries.
+ */
+async function terminate(
+  db: NodePgDatabase<Record<string, never>>,
+  id: string,
+  ctx: { actor: Actor },
+  options: TerminateOptions = {},
+): Promise<Tenant> {
+  const parsedId = parseOrThrow(idSchema, id, 'terminate id');
+  const parsedActor = parseOrThrow(actorSchema, ctx.actor, 'terminate actor');
+
+  // PHASE 1: idempotent fast-path. Read without lock; if already
+  // TERMINATED, return the tombstone.
+  const preflight = await db.select().from(tenant).where(eq(tenant.id, parsedId)).limit(1);
+  const preflightRow = preflight[0];
+  if (preflightRow === undefined) {
+    throw new TenantNotFoundError(parsedId, 'id');
+  }
+  if (preflightRow.status === 'TERMINATED') {
+    return preflightRow;
+  }
+
+  // PHASE 2: validate prerequisites BEFORE any destructive action.
+  if (preflightRow.status !== 'OFFBOARDING') {
+    throw new TenantStatusError(parsedId, preflightRow.status, ['OFFBOARDING']);
+  }
+  if (preflightRow.offboarding_grace_until === null) {
+    // Defensive: OFFBOARDING without grace_until is an inconsistent
+    // state — only `tenants.offboard` writes the column, and it always
+    // sets it. Surface as Error (not a domain error class) since this
+    // is a data-integrity bug, not a caller-facing condition.
+    throw new Error(
+      `tenants.terminate: tenant ${parsedId} is OFFBOARDING but offboarding_grace_until is NULL`,
+    );
+  }
+  const now = new Date();
+  if (now < preflightRow.offboarding_grace_until) {
+    throw new TenantGraceNotElapsedError(parsedId, preflightRow.offboarding_grace_until, now);
+  }
+
+  // Legal-hold check: dual-source per convention §6.3. Fast path on the
+  // tenant.legal_hold boolean; granular path on the legal_hold table.
+  // Read inside a tenant-bound txn so the legal_hold RLS policy permits
+  // the SELECT.
+  if (preflightRow.legal_hold === true) {
+    throw new TenantLegalHoldError(
+      parsedId,
+      'tenant',
+      '(tenant.legal_hold boolean set; no granular legal_hold record)',
+      '(unknown — pre-table fast path)',
+    );
+  }
+  await db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+    const activeHolds = await tx
+      .select()
+      .from(legalHold)
+      .where(and(eq(legalHold.tenant_id, parsedId), isNull(legalHold.released_at)))
+      .limit(1);
+    const activeHold = activeHolds[0];
+    if (activeHold !== undefined) {
+      throw new TenantLegalHoldError(
+        parsedId,
+        activeHold.scope,
+        activeHold.reason,
+        activeHold.set_by_user_id,
+      );
+    }
+  });
+
+  // PHASE 3: external resource cascade (Cloud Run / GCS / Cloud SQL).
+  // Outside any DB txn — these are network calls.
+
+  // Step 1 — Cloud Run service delete (ENTERPRISE only; Phase 1 STUB).
+  if (preflightRow.tier === 'ENTERPRISE') {
+    // TODO ADR-INFRA-005 (per-tenant Cloud Run): delete the tenant's
+    // Cloud Run service(s) here. Slice D's per-tenant TF module
+    // ships the service registry; for now log a marker so operators
+    // know the substrate gap exists.
+    console.warn(
+      `[tenants.terminate] TODO Cloud Run delete deferred for ENTERPRISE tenant ${parsedId} ` +
+        `(ADR-INFRA-005 swap-path)`,
+    );
+  }
+
+  // Step 2 — GCS prefix recursive delete (real per Q-NEW-C5).
+  const env = (process.env.CORTEX_ENV as Environment | undefined) ?? 'dev';
+  const bucketName = getTenantBucketName(env);
+  const tenantPrefix = getTenantPrefix(parsedId); // 'tenants/{tenantId}/' (validated)
+  const storage = options.cascadeOverrides?.storage ?? new Storage();
+  await storage.bucket(bucketName).deleteFiles({ prefix: tenantPrefix, force: true });
+
+  // Step 3 — Cloud SQL instance delete (ENTERPRISE only; Phase 1 STUB).
+  if (preflightRow.tier === 'ENTERPRISE') {
+    // TODO ADR-INFRA-005 (per-tenant Cloud SQL): delete the tenant's
+    // dedicated Cloud SQL instance here. Slice D's per-tenant TF
+    // module ships the instance registry.
+    console.warn(
+      `[tenants.terminate] TODO Cloud SQL delete deferred for ENTERPRISE tenant ${parsedId} ` +
+        `(ADR-INFRA-005 swap-path)`,
+    );
+  }
+
+  // PHASE 4: single txn — emit audit, hard-delete children, soft-retain
+  // the tenant tombstone.
+  const updatedTenant = await db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+
+    // Re-read with row lock for race safety.
+    const currentRows = await tx
+      .select()
+      .from(tenant)
+      .where(eq(tenant.id, parsedId))
+      .for('update')
+      .limit(1);
+    const current = currentRows[0];
+    if (current === undefined) {
+      throw new TenantNotFoundError(parsedId, 'id');
+    }
+    // Race-safe idempotency: a parallel terminate may have completed
+    // between Phase 1 and Phase 4. The cascade runs were idempotent
+    // (GCS deleteFiles with force: true is a no-op when prefix is
+    // empty); just return the tombstone.
+    if (current.status === 'TERMINATED') {
+      return current;
+    }
+
+    // Read kms_key_resource_name BEFORE deleting tenant_kms_key — we
+    // need it in the audit payload as the tombstone signal (Q-NEW-C11).
+    const kmsKeyRows = await tx
+      .select()
+      .from(tenantKmsKey)
+      .where(eq(tenantKmsKey.tenant_id, parsedId))
+      .limit(1);
+    const kmsKeyResourceName = kmsKeyRows[0]?.kms_key_resource_name ?? null;
+
+    // Emit TENANT_TERMINATED BEFORE the deletes — RLS write policy on
+    // audit_event needs `app.tenant_id` bound (it is) and the tenant
+    // row to be in scope. Soft-retain UPDATE comes after so the
+    // tenant row is still tier='ENTERPRISE'/'STANDARD' for the audit
+    // before_state snapshot.
+    await emitAuditEvent(tx, {
+      tenantId: parsedId,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_TERMINATED'),
+      verb: 'DELETE',
+      resource: `tenant:${parsedId}`,
+      // DELETE verb: only before_state. Soft-retain UPDATE to
+      // status='TERMINATED' is below; the audit row's role is the
+      // pre-termination snapshot for the forensic chain.
+      before_state: {
+        status: current.status,
+        tier: current.tier,
+        external_id: current.external_id,
+        display_name: current.display_name,
+        kms_key_resource_name: kmsKeyResourceName,
+        offboarding_grace_until: current.offboarding_grace_until?.toISOString() ?? null,
+      },
+      payload: {
+        cascade_steps: {
+          cloud_run_delete:
+            current.tier === 'ENTERPRISE' ? 'STUB_TODO_ADR_INFRA_005' : 'NA_STANDARD',
+          gcs_prefix_delete: 'EXECUTED',
+          cloud_sql_delete:
+            current.tier === 'ENTERPRISE' ? 'STUB_TODO_ADR_INFRA_005' : 'NA_STANDARD',
+          shared_db_delete: 'EXECUTED',
+          kms_destroy: 'TOMBSTONE_ONLY_PHASE_1',
+        },
+        kms_key_resource_name: kmsKeyResourceName,
+      },
+    });
+
+    // Hard-delete children. legal_hold rows (active + released) are
+    // wiped per spec §3 "deletes every tenant-scoped trace"; the audit
+    // chain (preserved by ADR-DB-003 append-only) is the historical
+    // record. Order doesn't matter here — none of these tables FK each
+    // other; all FK to `tenant` (which we soft-retain).
+    await tx.delete(legalHold).where(eq(legalHold.tenant_id, parsedId));
+    await tx.delete(tenantKmsKey).where(eq(tenantKmsKey.tenant_id, parsedId));
+    await tx.delete(tenantConfigVersion).where(eq(tenantConfigVersion.tenant_id, parsedId));
+    await tx.delete(tenantQuotaUsage).where(eq(tenantQuotaUsage.tenant_id, parsedId));
+
+    // Soft-retain the tenant row as a tombstone (Q-NEW-C8).
+    const updated = await tx
+      .update(tenant)
+      .set({
+        status: 'TERMINATED',
+        terminated_at: msNow,
+        updated_at: msNow,
+      })
+      .where(eq(tenant.id, parsedId))
+      .returning();
+    const next = updated[0];
+    if (next === undefined) {
+      throw new Error(`tenants.terminate: UPDATE returned no row for tenant ${parsedId}`);
+    }
+    return next;
+  });
+
+  return updatedTenant;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Public namespace
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1095,4 +1395,5 @@ export const tenants = {
   suspend,
   resume,
   offboard,
+  terminate,
 };

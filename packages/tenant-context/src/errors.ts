@@ -11,6 +11,8 @@ export type TenantContextErrorCode =
   | 'CONTEXT_MISSING'
   | 'TENANT_NOT_FOUND'
   | 'TENANT_STATUS'
+  | 'TENANT_LEGAL_HOLD'
+  | 'TENANT_GRACE_NOT_ELAPSED'
   | 'VALIDATION';
 
 export class TenantContextError extends Error {
@@ -88,5 +90,70 @@ export class TenantValidationError extends TenantContextError {
   constructor(message: string, options?: { cause?: Error }) {
     super('VALIDATION', message, options);
     this.name = 'TenantValidationError';
+  }
+}
+
+/**
+ * Thrown by `tenants.terminate` when an active legal hold blocks the
+ * destructive operation. Two-tier check per F02 Slice C convention §6.3:
+ * the per-tenant fast path (`tenant.legal_hold` boolean) and the
+ * granular `legal_hold` table (scope: tenant / record / data_class).
+ *
+ * Carries structured fields for operator forensics. Use
+ * `tenants.forceTerminate` for the Super Admin override.
+ */
+export class TenantLegalHoldError extends TenantContextError {
+  readonly tenantId: string;
+  readonly holdScope: 'tenant' | 'record' | 'data_class';
+  readonly holdReason: string;
+  readonly setByUserId: string;
+
+  constructor(
+    tenantId: string,
+    holdScope: 'tenant' | 'record' | 'data_class',
+    holdReason: string,
+    setByUserId: string,
+    options?: { cause?: Error },
+  ) {
+    super(
+      'TENANT_LEGAL_HOLD',
+      `Tenant ${tenantId} has active legal hold (scope=${holdScope}); ` +
+        `cannot terminate. Hold reason: ${JSON.stringify(holdReason)} (set by ${setByUserId}). ` +
+        `Use tenants.forceTerminate for Super Admin override.`,
+      options,
+    );
+    this.tenantId = tenantId;
+    this.holdScope = holdScope;
+    this.holdReason = holdReason;
+    this.setByUserId = setByUserId;
+    this.name = 'TenantLegalHoldError';
+  }
+}
+
+/**
+ * Thrown by `tenants.terminate` when invoked before the offboarding
+ * grace period has elapsed (`now() < tenant.offboarding_grace_until`).
+ * Distinct from `TenantStatusError`: the status IS valid (OFFBOARDING),
+ * but a different precondition is unmet (time-based). Q-NEW-C10 lock:
+ * strict comparison — no tolerance window for Cloud Tasks dispatch
+ * jitter; trust retry semantics instead.
+ */
+export class TenantGraceNotElapsedError extends TenantContextError {
+  readonly tenantId: string;
+  readonly graceUntil: Date;
+  readonly now: Date;
+
+  constructor(tenantId: string, graceUntil: Date, now: Date, options?: { cause?: Error }) {
+    super(
+      'TENANT_GRACE_NOT_ELAPSED',
+      `Tenant ${tenantId} grace period not elapsed: ` +
+        `grace_until=${graceUntil.toISOString()}, now=${now.toISOString()}. ` +
+        `Wait until grace_until or use tenants.forceTerminate.`,
+      options,
+    );
+    this.tenantId = tenantId;
+    this.graceUntil = graceUntil;
+    this.now = now;
+    this.name = 'TenantGraceNotElapsedError';
   }
 }

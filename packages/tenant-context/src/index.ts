@@ -2,6 +2,8 @@
 export {
   TenantContextError,
   TenantContextMissingError,
+  TenantGraceNotElapsedError,
+  TenantLegalHoldError,
   TenantNotFoundError,
   TenantStatusError,
   TenantValidationError,
@@ -39,6 +41,7 @@ export type {
   OffboardOptions,
   OffboardResult,
   TenantListResult,
+  TerminateOptions,
   UpdateTenantPatch,
 } from './tenants.js';
 

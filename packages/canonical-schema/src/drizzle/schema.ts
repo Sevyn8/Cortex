@@ -216,6 +216,48 @@ export type TenantKmsKey = typeof tenantKmsKey.$inferSelect;
 export type NewTenantKmsKey = typeof tenantKmsKey.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 Slice C — legal_hold (migration 0011)
+//
+// Granular per-record / per-data-class legal-hold path. tenant.legal_hold
+// (boolean on the tenant table, migration 0010) is the per-tenant fast path;
+// this table covers richer scopes. Termination workflow checks BOTH.
+//
+// CHECK constraints (scope discriminator + release-pair) live migration-side
+// only — Drizzle has no column-API expression for cross-column CHECKs. The
+// scope `text` column accepts the discriminator values; SQL CHECK is the
+// authoritative guard.
+//
+// set_by_user_id / released_by_user_id are TEXT (not UUID) per Q-NEW-C3 lock —
+// pre-AC01 there is no users table to FK against, and post-AC01 the user-id
+// format is whatever AC01 standardizes. TEXT survives the swap.
+// ─────────────────────────────────────────────────────────────────────
+
+export const legalHold = pgTable(
+  'legal_hold',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id')
+      .notNull()
+      .references(() => tenant.id, { onDelete: 'restrict' }),
+    scope: text('scope', { enum: ['tenant', 'record', 'data_class'] }).notNull(),
+    record_id: uuid('record_id'),
+    data_class: text('data_class'),
+    reason: text('reason').notNull(),
+    set_by_user_id: text('set_by_user_id').notNull(),
+    set_at: timestamp('set_at', { withTimezone: true }).notNull().default(msNow),
+    released_at: timestamp('released_at', { withTimezone: true }),
+    released_by_user_id: text('released_by_user_id'),
+  },
+  (t) => ({
+    tenantActiveIdx: index('legal_hold_tenant_active_idx').on(t.tenant_id, t.released_at),
+    releasedAtIdx: index('legal_hold_released_at_idx').on(t.released_at),
+  }),
+);
+
+export type LegalHold = typeof legalHold.$inferSelect;
+export type NewLegalHold = typeof legalHold.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────
 // Audit substrate (migrations 0004 + 0008)
 //
 // Tamper-evident audit log per ADR-DB-003. Per-tenant SHA chain stamped

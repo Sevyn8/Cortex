@@ -71,6 +71,13 @@
       "when": 1777278576675,
       "tag": "0010_tenant_lifecycle_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777357871730,
+      "tag": "0011_legal_hold_table",
+      "breakpoints": true
     }
   ]
 }

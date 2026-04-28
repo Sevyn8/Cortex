@@ -8,6 +8,7 @@ export {
   tenantConfigVersion,
   tenantQuotaUsage,
   tenantKmsKey,
+  legalHold,
 } from './drizzle/schema.js';
 export type {
   BootstrapAdmin,
@@ -20,4 +21,6 @@ export type {
   NewTenantQuotaUsage,
   TenantKmsKey,
   NewTenantKmsKey,
+  LegalHold,
+  NewLegalHold,
 } from './drizzle/schema.js';

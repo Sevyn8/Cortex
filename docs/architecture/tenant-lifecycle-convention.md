@@ -954,9 +954,26 @@ codes if needed; today no parser depends on a specific shape.
   full tenant data dump (TBD format — JSON Lines, Parquet, or
   vendor-specific; planning at Slice C).
 - Pre-signed URL TTL: 30 days (per spec §3).
-- **Signing identity:** per-env `cortex-export-signer-{env}` SA
-  (per planning-doc forcing function §10.8 — per-env signer, NOT
-  per-tenant). The runtime SA grants this SA `roles/iam.serviceAccountTokenCreator`.
+- **Signing identity (staged rollout, sub-phase 7.6):**
+  - **TF (✓ landed):** Per-env `cortex-export-signer-{env}` SA exists
+    via the `cortex-signer-sa` module. Runtime SA
+    (`tenant-lifecycle-runtime`, project-scoped) holds
+    `roles/iam.serviceAccountTokenCreator` on the signer SA. Signer
+    SA holds `roles/storage.objectViewer` on the env's tenant-data
+    bucket (so signed URLs grant valid GCS read access once
+    impersonation lands).
+  - **Application impersonation (deferred):** `export-archive.ts`
+    currently signs URLs as the runtime SA via default ADC (the
+    runtime SA itself has the bucket read access needed for signed
+    URLs to work). A future polish task switches to
+    `GoogleAuth({ targetPrincipal: <signerSAEmail> })` calling IAM
+    SignBlob, decoupling signing authority from runtime authority
+    for defense-in-depth + audit clarity. The TF landed in 7.6
+    supports this swap with no infrastructure rollout — runtime SA
+    already has TokenCreator, signer SA already has bucket access.
+  - **Phase 1 reality:** 0 production tenants today, so no real
+    signed URL is gated by the staging gap. Per convention §10.8
+    lock — per-env signer, NOT per-tenant.
 - Emits `TENANT_OFFBOARDING_STARTED` audit event (UPDATE; caller
   actor). `after_state` includes `grace_until` timestamp.
 - Schedules a Cloud Task on `lifecycle-queue` with

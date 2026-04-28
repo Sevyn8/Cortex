@@ -739,14 +739,28 @@ These mirror entries in `docs/deviations.md`; listed here for forward-planning v
 ### 10.8 Pre-signed URL signing identity
 
 - **Item:** Which SA signs GCS pre-signed URLs that embed tenant scope?
-- **Current state:** Not provisioned.
-- **Future options:**
+- **Current state (TF landed sub-phase 7.6):** Per-env
+  `cortex-export-signer-{env}` SA via the `cortex-signer-sa` module
+  (option 2 chosen — per-env signer with explicit IAM scoping). Runtime
+  SA `tenant-lifecycle-runtime` holds
+  `roles/iam.serviceAccountTokenCreator` on the signer SA; signer SA
+  holds `roles/storage.objectViewer` on the env's tenant-data bucket.
+  Application-side impersonation deferred — `export-archive.ts`
+  currently signs as the runtime SA via default ADC; future polish
+  task switches to `GoogleAuth({ targetPrincipal })` + IAM SignBlob.
+  No infrastructure rollout required when the code change lands. See
+  `docs/architecture/tenant-lifecycle-convention.md` §6.1 for the
+  staged-rollout note.
+- **Future options (historical, for reference):**
   1. Per-tenant SA (clean blast radius; many SAs).
-  2. Single per-env SA with pre-signed URLs that include explicit object path constraints.
+  2. **Single per-env SA with pre-signed URLs that include explicit
+     object path constraints. ✓ chosen.**
   3. Workload identity tokens with scoped audiences.
 - **Triggers:** F01 (P1.1).
-- **References:** Build prompts §F01 §5.
-- **Owner phase:** F01.
+- **References:** Build prompts §F01 §5;
+  `infra/terraform/modules/cortex-signer-sa/`;
+  Slice C planning doc Q-NEW-C21/C22/C23.
+- **Owner phase:** F01 (TF) + F02 (application impersonation, deferred).
 
 ### 10.9 OPA vs Cedar for ABAC policy language
 

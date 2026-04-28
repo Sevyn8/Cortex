@@ -206,3 +206,62 @@ module "tenant_data_bucket" {
 
   depends_on = [module.project_baseline]
 }
+
+# ─── Tenant lifecycle runtime SA (F02 Slice C sub-phase 7.6) ───────────────
+# Per Q-NEW-C19 + Q-NEW-C20 locks: workload-scoped runtime identity for the
+# F02 lifecycle workflows (tenants.provision / suspend / resume / offboard /
+# terminate / forceTerminate). Slice D's per-tenant Cloud Run service module
+# attaches this SA as serviceAccountEmail. The cloud-tasks-queue module
+# instantiations below grant cloudtasks.enqueuer to it; storage.objectAdmin
+# grant below covers offboard's archive upload + terminate's prefix delete.
+resource "google_service_account" "tenant_lifecycle_runtime" {
+  project      = var.project_id
+  account_id   = "tenant-lifecycle-runtime"
+  display_name = "Tenant lifecycle runtime (staging)"
+  description  = "Runtime identity for F02 lifecycle workflows. Dispatches Cloud Tasks to lifecycle-queue + provisioning-queue; reads/writes the tenant-data bucket. Slice C sub-phase 7.6."
+
+  depends_on = [module.project_baseline]
+}
+
+resource "google_storage_bucket_iam_member" "lifecycle_runtime_object_admin" {
+  bucket = module.tenant_data_bucket.bucket_name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+# ─── Cloud Tasks queues (F02 Slice C sub-phase 7.6) ─────────────────────────
+# Per Q-NEW-C18 lock: both queues wired in this sub-phase.
+
+module "cloud_tasks_provisioning_queue" {
+  source = "../../modules/cloud-tasks-queue"
+
+  project_id                 = var.project_id
+  location                   = var.region
+  queue_name                 = "provisioning-queue"
+  dispatcher_service_account = google_service_account.tenant_lifecycle_runtime.email
+
+  depends_on = [module.project_baseline]
+}
+
+module "cloud_tasks_lifecycle_queue" {
+  source = "../../modules/cloud-tasks-queue"
+
+  project_id                 = var.project_id
+  location                   = var.region
+  queue_name                 = "lifecycle-queue"
+  dispatcher_service_account = google_service_account.tenant_lifecycle_runtime.email
+
+  depends_on = [module.project_baseline]
+}
+
+# ─── Export-signer SA (F02 Slice C sub-phase 7.6) ───────────────────────────
+# Per convention §10.8 + Q-NEW-C21/C22/C23 locks. App-side impersonation
+# deferred; runtime SA currently signs as itself. See convention §6.1.
+module "cortex_signer_sa" {
+  source = "../../modules/cortex-signer-sa"
+
+  project_id              = var.project_id
+  environment             = "staging"
+  runtime_sa_email        = google_service_account.tenant_lifecycle_runtime.email
+  tenant_data_bucket_name = module.tenant_data_bucket.bucket_name
+}

@@ -77,3 +77,33 @@ output "tenant_data_runtime_sa_email" {
   description = "Runtime SA email — services impersonate this for tenant blob I/O on the dev bucket."
   value       = module.tenant_data_bucket.runtime_service_account_email
 }
+
+output "tenant_lifecycle_runtime_sa_email" {
+  description = "Runtime SA email for F02 lifecycle workflows. Dispatches Cloud Tasks; impersonates cortex-export-signer-dev for signed-URL generation (once application impersonation lands). Slice C sub-phase 7.6."
+  value       = google_service_account.tenant_lifecycle_runtime.email
+}
+
+output "provisioning_queue_id" {
+  description = "Full resource ID of the dev provisioning-queue Cloud Tasks queue. F02 tenants.provision dispatches here."
+  value       = module.cloud_tasks_provisioning_queue.queue_id
+}
+
+output "provisioning_queue_path" {
+  description = "Canonical queue path for provisioning-queue (projects/{project}/locations/{loc}/queues/provisioning-queue). Reference in app config."
+  value       = module.cloud_tasks_provisioning_queue.queue_path
+}
+
+output "lifecycle_queue_id" {
+  description = "Full resource ID of the dev lifecycle-queue Cloud Tasks queue. F02 tenants.{suspend,resume,offboard,terminate} dispatch here."
+  value       = module.cloud_tasks_lifecycle_queue.queue_id
+}
+
+output "lifecycle_queue_path" {
+  description = "Canonical queue path for lifecycle-queue. Reference in app config."
+  value       = module.cloud_tasks_lifecycle_queue.queue_path
+}
+
+output "export_signer_sa_email" {
+  description = "Email of the export-signer SA (cortex-export-signer-dev). Application code passes this as targetPrincipal to GoogleAuth once impersonation-based signing lands. Slice C sub-phase 7.6 + convention §10.8."
+  value       = module.cortex_signer_sa.signer_sa_email
+}

@@ -60,7 +60,7 @@ variable "max_doublings" {
 
 variable "dispatcher_service_account" {
   type        = string
-  description = "Email of the service account that needs roles/cloudtasks.enqueuer on this queue (the SA that calls dispatchCloudTask). Typically the foundation Cloud Run runtime SA. Slice A defers per-env instantiation until Slice D ships the runtime SA alongside the worker Cloud Run service."
+  description = "Email of the service account that needs roles/cloudtasks.enqueuer on this queue (the SA that calls dispatchCloudTask). F02 Slice C sub-phase 7.6 lands per-env wiring (provisioning-queue + lifecycle-queue) using tenant-lifecycle-runtime as the dispatcher; the previously-cited Slice D dependency was lifted by Q-NEW-C1 (Slice C audit) which introduced the runtime SA inline in env main.tf without the worker Cloud Run service."
   validation {
     condition     = can(regex("^[a-zA-Z0-9-]+@[a-zA-Z0-9-]+\\.iam\\.gserviceaccount\\.com$", var.dispatcher_service_account))
     error_message = "dispatcher_service_account must be a fully-qualified GCP SA email."

@@ -3,15 +3,33 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./temporal": "./src/temporal.ts",
-    "./rls-test": "./src/rls-test.ts",
-    "./db-client": "./src/db-client.ts",
-    "./drizzle": "./src/drizzle/_base.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./temporal": {
+      "types": "./dist/temporal.d.ts",
+      "default": "./dist/temporal.js"
+    },
+    "./rls-test": {
+      "types": "./dist/rls-test.d.ts",
+      "default": "./dist/rls-test.js"
+    },
+    "./db-client": {
+      "types": "./dist/db-client.d.ts",
+      "default": "./dist/db-client.js"
+    },
+    "./drizzle": {
+      "types": "./dist/drizzle/_base.d.ts",
+      "default": "./dist/drizzle/_base.js"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
@@ -21,6 +39,7 @@
     "@types/pg": "catalog:"
   },
   "scripts": {
+    "build": "tsc -b tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "echo \"no tests yet\" && exit 0"

@@ -1490,6 +1490,140 @@ substrate has been destroyed.
   Cloud Run service-to-service IAM (per planning-doc D8); AC01
   layers per-method authz when shipped.
 
+### 7.1. Prototype existence + skeleton `[F02-D.1]`
+
+Slice D D.1 ships the operator-facing HTTP service skeleton at
+`apps/tenant-lifecycle-api/`. Cloud Run service name
+`tenant-lifecycle-shared` per ADR-COMPUTE-001 §3 (STANDARD shared
+shape; ENTERPRISE per-tenant `tenant-lifecycle-tenant-{uuid}` lights
+up at F02 swap). Hono v4 + companion deps locked at D.1 per
+ADR-HTTP-001 Conditions 1, 4, 5; framework choice resolved by
+ADR-HTTP-001.
+
+**D.1 route surface (minimum to verify Conditions 2 + 3):**
+
+| Method + Path          | Purpose                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /health`          | Liveness probe; no DB; `skipPaths` bypasses tenant binding.                                    |
+| `GET /v1/tenants/{id}` | Read; uses `withTenantDbClient` per Q-NEW-D-8 + `tenants.get` from `@cortex/tenant-context`.   |
+| `GET /v1/test/slow-5s` | **Dev-only** (gated by `ENABLE_TEST_ROUTES=true` env). 5 s sleep for SD4 SIGTERM verification. |
+
+The remaining 11 endpoints from planning-doc SD7 land at D.3.
+
+**SIGTERM handler shape (per ADR-HTTP-001 Condition 3 + SD4):**
+
+`@hono/node-server`'s `serve()` returns a Node `http.Server`. Entry
+point (`src/index.ts`) registers `process.on('SIGTERM', ...)` and
+`process.on('SIGINT', ...)` handlers calling `server.close(...)` to
+drain in-flight requests, then `telemetry.shutdown()` to flush OTLP,
+then `pool.end()` to release pg connections. Hard-cap fallback at 8 s
+per SD4 (Cloud Run grants 10 s; we exit by 8 s to leave 2 s margin —
+the SOFT FAIL row of the D.1 SIGTERM ladder triggers if clean exit
+takes > 10 s; the hard-cap prevents Cloud Run SIGKILL from cutting
+us off mid-flush). Test routes are removed (or moved permanently
+behind a dev-only flag) at D.6 close.
+
+**Cold-start instrumentation (per ADR-HTTP-001 Condition 2 + SD3):**
+
+`PROCESS_START_HR = performance.now()` is captured at module
+evaluation time (`src/observability.ts`). A one-shot middleware on the
+Hono app calls `recordColdStartOnce()` on every request; the first
+call per instance computes `cold_start_ms = performance.now() -
+PROCESS_START_HR` and emits it as both an OTel histogram metric
+(`cold_start_ms`) and a structured log line (`marker:'d1-cold-start'`).
+The 30-burst measurement script (`scripts/cold-start-burst.sh`) reads
+the log line via Cloud Logging and cross-checks against Cloud Run's
+`run.googleapis.com/container/startup_latencies` per SD3.
+
+**Pass/fail ladders + reopen-ADR triggers** are in
+`docs/planning/f02-slice-d-scope.md` §"D.1 pass/fail decision tree";
+the convention does NOT duplicate them here. Operators running D.1
+read both the planning doc (for the ladder) and this section (for
+the prototype's runtime contract).
+
+#### Production posture for control-plane Cloud Run services
+
+Control-plane HTTP services in `apps/*-api/` follow this
+`min_instances` posture per environment:
+
+| Env     | `min_instances` | Rationale                                                                                                           |
+| ------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| dev     | 0               | Preserves cold-start observability for re-measurement; cost-conscious; no production traffic.                       |
+| staging | 1               | Eliminates platform-cold-start from the hot path; smoke-tests the production posture against actual deploy cadence. |
+| prod    | 1               | Eliminates platform-cold-start from the operator-facing hot path.                                                   |
+
+**Cost.** Cloud Run charges for min-instance idle time at ~50% of
+active rate. For a 0.5 vCPU / 512 MB `tenant-lifecycle-shared`
+baseline in `asia-south1`, idle cost is ~$5–10/month per service per
+env. Phase 1 budget envelope absorbs this without revision.
+
+**What this does.** Cold-start latency on Cloud Run is dominated by
+container pull + Node 22 runtime spawn + ESM resolution (4–5 s
+observed in D.1 measurement, vs ~100 ms framework-attributable cost
+per ADR-HTTP-001 Condition 2 scope clarification).
+`min_instances=1` keeps one warm instance per region permanently,
+so any first request after an idle period hits a hot instance.
+
+**What this does not do.** Burst traffic that exceeds the warm pool
+still pays the platform-cold-start cost on the second-and-subsequent
+instances. For Phase 1 control-plane services, this is acceptable —
+admin operations are low-volume and infrequent. If a control-plane
+service starts seeing burst-driven cold-start latency complaints,
+the mitigation ladder is: lift `min_instances` further → image-
+bundling pass to shrink the runtime image → eager-import audit on
+the ESM dependency graph → eventually consider a different runtime.
+
+**Implementation (D.4).** The forthcoming `tenant-cloud-run-service`
+TF module exposes `min_instances` as an input, with mode-aware
+defaults: dev=0, staging=1, prod=1. Per-env wiring in
+`infra/terraform/envs/{dev,staging,prod}/` may override for specific
+services that legitimately need different posture (e.g., a worker-
+only service that scales to zero in production), but the default is
+the table above and any deviation requires explicit justification in
+the env module.
+
+**Re-measurement trigger.** First Phase 2 production traffic. The
+D.1 smoke samples (n=2; OTel 97–188 ms framework, Cloud Run native
+4,567–5,031 ms platform) measured against scale-from-zero, which is
+the dev path. Production traffic should never traverse that path on
+the operator-facing hot path; if production metrics show otherwise,
+revisit `min_instances` and the operational mitigations above.
+
+**Cloud SQL connection model (per ADR-INFRA-005 Decision 11):**
+
+The runtime SA `tenant-lifecycle-runtime-{env}` connects to Cloud SQL
+via IAM auth — `cloudsql.iam_authentication = on` is the only active
+path; the postgres superuser has no password, and the break-glass
+secret is emergency-only. D.1's `apps/tenant-lifecycle-api/` uses
+Cloud Run's native `--add-cloudsql-instances` connector (Unix socket
+at `/cloudsql/{INSTANCE_CONNECTION_NAME}`); `pg.Pool`'s `password`
+callback fetches OAuth tokens via `google-auth-library` so long-
+running pools refresh tokens transparently.
+
+**D.4 TF follow-up (blocking `/v1/tenants/{id}` only):** Slice C 7.6
+provisioned the `tenant-lifecycle-runtime` SA but did not grant
+Cloud SQL access. D.4 must add:
+
+1. `roles/cloudsql.client` on the env project (network reach).
+2. `roles/cloudsql.instanceUser` on the `cortex-{env}-postgres`
+   instance (IAM-auth login).
+3. A `google_sql_user` resource of `type = "CLOUD_IAM_SERVICE_ACCOUNT"`
+   registering `tenant-lifecycle-runtime@<project>.iam` as a database
+   user.
+4. SQL grants (CONNECT on `cortex` DB, USAGE on `public` schema,
+   SELECT/INSERT/UPDATE/DELETE on `tenant`, `tenant_kms_key`,
+   `tenant_config_version`, `audit_event`, etc.) — applied via a
+   migration in D.4.
+
+Until D.4 lands these, `/v1/tenants/{id}` returns 500 on first DB
+query. `/health` and `/v1/test/slow-5s` do NOT touch the DB; D.1
+Conditions 2 + 3 measurement runs against those two endpoints
+unchanged.
+
+D.2 → D.6 extend §7 with key rotation workflow (§7.1 expanded), dual-
+key overlap mechanics (§7.2), rotation cadence (§7.3), worker route
+(§7.4), idempotency (§7.5), and IAM authz (§7.6) per Q-NEW-D-12.
+
 ## 8. Operational patterns
 
 Cross-cutting patterns operators encounter in production. Specific

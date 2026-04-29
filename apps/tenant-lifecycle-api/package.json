@@ -1,0 +1,38 @@
+{
+  "name": "@cortex/tenant-lifecycle-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "F02 Slice D HTTP surface — Hono prototype (D.1) + 12 endpoints (D.3).",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node --enable-source-maps dist/index.js",
+    "dev": "tsx --watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/audit-events": "workspace:*",
+    "@cortex/canonical-schema": "workspace:*",
+    "@cortex/observability": "workspace:*",
+    "@cortex/tenant-context": "workspace:*",
+    "@hono/node-server": "^2.0.0",
+    "@hono/zod-validator": "^0.7.0",
+    "@opentelemetry/api": "catalog:",
+    "drizzle-orm": "catalog:",
+    "google-auth-library": "^10.0.0",
+    "hono": "^4.12.0",
+    "hono-pino": "^0.10.0",
+    "hono-problem-details": "^0.5.0",
+    "pg": "catalog:",
+    "pino": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "catalog:",
+    "tsx": "^4.19.0",
+    "vitest": "catalog:"
+  }
+}

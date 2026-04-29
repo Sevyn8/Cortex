@@ -71,6 +71,20 @@ D.1 prototype's first deployable build emits cold-start latency metrics (p50, p9
 
 **Reopen trigger:** D.1 reports p95 cold-start > 500ms in Cloud Run staging conditions. The 500ms threshold is the spike's recommendation; lower is better but anything in the 300–500ms range is normal Cloud Run + Node behavior. Cause may be Hono, may be `pg` pool warmup, may be `@google-cloud/*` SDK init — **the ADR reopen requires diagnosis before deciding whether the framework choice or the architecture is at fault**.
 
+### Condition 2 — scope clarification (added 2026-04-29 during D.1 measurement)
+
+D.1 measurement (2026-04-29) revealed that "cold-start" admits two distinct interpretations on Cloud Run:
+
+**(a) Framework-attributable cold-start.** Time from Node.js process spawn to Hono `app.fetch()` ready, instrumented via OTel SDK. Measured at 97–188 ms across D.1 smoke samples (n=2). Captures Hono boot, middleware registration, and dependency import cost. Excludes container pull, Node runtime spawn, and ESM resolution of `node_modules`.
+
+**(b) Platform-observed cold-start.** Time from Cloud Run's `Starting new instance` log line to the app's `listening` log line. Measured at 4,567–5,031 ms across the same samples (24–52× the OTel measurement). Dominated by container pull (~69 MB image), Node 22 runtime spawn, and ESM resolution of ~300 transitive packages. Hono's contribution is < 5% of the platform-observed total.
+
+**Condition 2 binds (a), not (b).** The reopen-trigger remedy ("framework re-evaluation; fallback to Express via the existing structural adapters in `@cortex/tenant-context`") only addresses framework-attributable cost. Container pull and runtime spawn are platform-controlled; Express would land in approximately the same range as Hono on the platform-observed axis.
+
+**Operational posture for (b)** lives in `tenant-lifecycle-convention.md` §7.1: control-plane Cloud Run services in `apps/*-api/` deploy with `min_instances=1` in staging/prod, eliminating the platform-cold-start path for the operator-facing hot path. Dev intentionally retains `min_instances=0` to preserve cold-start observability for measurement re-runs.
+
+**Re-measure trigger.** First Phase 2 production traffic to any control-plane service. If platform-observed cold-start materially affects user-perceived latency despite `min_instances=1` (e.g., burst-driven scale-up exceeds warm pool), revisit operational mitigations: image-bundling pass, eager-import audit on the ESM graph, lifting `min_instances` further. This is a §7.1 operational re-measure, not a Condition 2 ADR reopen.
+
 ### Condition 3 — D.1 verifies `@hono/node-server` graceful shutdown
 
 D.1 prototype's first deployable build verifies that on `SIGTERM`, the server stops accepting new requests, waits for in-flight requests to complete, and exits cleanly within Cloud Run's 10-second SIGTERM grace period before `SIGKILL`. Test: deploy, hit the service with a slow endpoint (e.g., 5-second sleep), trigger a Cloud Run revision update mid-request, verify the in-flight request completes with 2xx + the new revision serves new traffic.

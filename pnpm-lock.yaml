@@ -114,6 +114,67 @@ importers:
         specifier: ^8.15.0
         version: 8.58.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3)
 
+  apps/tenant-lifecycle-api:
+    dependencies:
+      '@cortex/audit-events':
+        specifier: workspace:*
+        version: link:../../packages/audit-events
+      '@cortex/canonical-schema':
+        specifier: workspace:*
+        version: link:../../packages/canonical-schema
+      '@cortex/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@cortex/tenant-context':
+        specifier: workspace:*
+        version: link:../../packages/tenant-context
+      '@hono/node-server':
+        specifier: ^2.0.0
+        version: 2.0.0(hono@4.12.15)
+      '@hono/zod-validator':
+        specifier: ^0.7.0
+        version: 0.7.6(hono@4.12.15)(zod@3.25.76)
+      '@opentelemetry/api':
+        specifier: 'catalog:'
+        version: 1.9.1
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.37.0(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.20.0)
+      google-auth-library:
+        specifier: ^10.0.0
+        version: 10.6.2
+      hono:
+        specifier: ^4.12.0
+        version: 4.12.15
+      hono-pino:
+        specifier: ^0.10.0
+        version: 0.10.3(hono@4.12.15)(pino@9.14.0)
+      hono-problem-details:
+        specifier: ^0.5.0
+        version: 0.5.0(@hono/zod-validator@0.7.6(hono@4.12.15)(zod@3.25.76))(hono@4.12.15)(zod@3.25.76)
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+      pino:
+        specifier: 'catalog:'
+        version: 9.14.0
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      vitest:
+        specifier: 'catalog:'
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/api-client: {}
 
   packages/audit-events:
@@ -1193,6 +1254,18 @@ packages:
     resolution: {integrity: sha512-rc1hOQtjIWGxcxpb9aHAfLpIctjEnsDehj0DAiVfBlmT84uvR0uUtN2hEi/ecvWVjXUGf5qPF4qEgiLOx1YIMQ==}
     engines: {node: '>=6'}
     hasBin: true
+
+  '@hono/node-server@2.0.0':
+    resolution: {integrity: sha512-n3GfHwwCvHCkGmOwKfxUPOlbfzuO64Sbc5XC4NGPIXxkuOnJrdgExdRKmHfF924r914WRJPT397GdqLvdYTeyQ==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4
+
+  '@hono/zod-validator@0.7.6':
+    resolution: {integrity: sha512-Io1B6d011Gj1KknV4rXYz4le5+5EubcWEU/speUjuw9XMMIaP3n78yXLhjd2A3PXaXaUwEAluOiAyLqhBEJgsw==}
+    peerDependencies:
+      hono: '>=3.9.0'
+      zod: ^3.25.0 || ^4.0.0
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -2423,6 +2496,9 @@ packages:
   deep-is@0.1.4:
     resolution: {integrity: sha512-oIPzksmTg4/MriiaYGO+okXDT7ztn/w3Eptv/+gSIdMdKsJo0u4CfYNFJPy+4SKMuCqGw2wxnA+URMg3t8a/bQ==}
 
+  defu@6.1.7:
+    resolution: {integrity: sha512-7z22QmUWiQ/2d0KkdYmANbRUVABpZ9SNYyH5vx6PZ+nE5bcC0l7uFvEfHlyld/HcGBFTL536ClDt3DEcSlEJAQ==}
+
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
@@ -2892,6 +2968,45 @@ packages:
 
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
+
+  hono-pino@0.10.3:
+    resolution: {integrity: sha512-n0RNPIFOoq25Fg8b4D5gus4sVqI0z+8I17ibl96+p43d07UnZ0EMM/It0qSgfc7UtaC+XP5FkFmRHwBp6owsNA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      hono: '>=4.0.0'
+      pino: '>=7.1.0'
+
+  hono-problem-details@0.5.0:
+    resolution: {integrity: sha512-N7VFcA6Hvi+VvBu/GXK7L1A/dKLmTXa3PbPKvb55Z03qKIHGFnwM4VT9cxoJgLWEp/K5D+7TrDDEg0wOwAGTsA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@hono/standard-validator': ^0.2.0
+      '@hono/valibot-validator': ^0.6.0
+      '@hono/zod-openapi': ^1.0.0
+      '@hono/zod-validator': ^0.7.5
+      '@standard-schema/spec': ^1.0.0
+      hono: '>=4.12.14'
+      valibot: ^1.0.0
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@hono/standard-validator':
+        optional: true
+      '@hono/valibot-validator':
+        optional: true
+      '@hono/zod-openapi':
+        optional: true
+      '@hono/zod-validator':
+        optional: true
+      '@standard-schema/spec':
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
+  hono@4.12.15:
+    resolution: {integrity: sha512-qM0jDhFEaCBb4TxoW7f53Qrpv9RBiayUHo0S52JudprkhvpjIrGoU1mnnr29Fvd1U335ZFPZQY1wlkqgfGXyLg==}
+    engines: {node: '>=16.9.0'}
 
   html-entities@2.6.0:
     resolution: {integrity: sha512-kig+rMn/QOVRvr7c86gQ8lWXq+Hkv6CbAH1hLu+RG338StTpE8Z0b44SDVaqVu7HGKf27frdmUYEs9hTUX/cLQ==}
@@ -4397,6 +4512,15 @@ snapshots:
       protobufjs: 7.5.5
       yargs: 17.7.2
 
+  '@hono/node-server@2.0.0(hono@4.12.15)':
+    dependencies:
+      hono: 4.12.15
+
+  '@hono/zod-validator@0.7.6(hono@4.12.15)(zod@3.25.76)':
+    dependencies:
+      hono: 4.12.15
+      zod: 3.25.76
+
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
@@ -5772,6 +5896,8 @@ snapshots:
 
   deep-is@0.1.4: {}
 
+  defu@6.1.7: {}
+
   delayed-stream@1.0.0: {}
 
   dot-prop@5.3.0:
@@ -6322,6 +6448,21 @@ snapshots:
       function-bind: 1.1.2
 
   help-me@5.0.0: {}
+
+  hono-pino@0.10.3(hono@4.12.15)(pino@9.14.0):
+    dependencies:
+      defu: 6.1.7
+      hono: 4.12.15
+      pino: 9.14.0
+
+  hono-problem-details@0.5.0(@hono/zod-validator@0.7.6(hono@4.12.15)(zod@3.25.76))(hono@4.12.15)(zod@3.25.76):
+    dependencies:
+      hono: 4.12.15
+    optionalDependencies:
+      '@hono/zod-validator': 0.7.6(hono@4.12.15)(zod@3.25.76)
+      zod: 3.25.76
+
+  hono@4.12.15: {}
 
   html-entities@2.6.0: {}
 

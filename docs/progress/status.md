@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice D in flight: D.0 spike `cd285d6`; D.0.5 ADR-HTTP-001 `a685294`; Slice D Planning sub-phase 1 `3d29027`; D.1 Hono prototype landed `5236544` with Conditions 2 + 3 verified. Next: D.2 key rotation workflow.)
+Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice D in flight: D.0 spike `cd285d6`; D.0.5 ADR-HTTP-001 `a685294`; Slice D Planning `3d29027`; D.1 Hono prototype `5236544` with Conditions 2 + 3 verified; D.2 `tenants.rotateKeys` + worker route `6fcc2b5` with 253/253 tests passing. Next: D.3 HTTP API surface.)
 
 ## Pre-flight
 
@@ -58,12 +58,12 @@ Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice
     - Audit catalog: 14 actions registered (5 Slice A + 6 F02 lifecycle + 3 Slice C 7.5 — TENANT_FORCE_TERMINATED, LEGAL_HOLD_SET, LEGAL_HOLD_RELEASED).
     - TF: `lifecycle-queue` + `provisioning-queue` + `cortex-export-signer-{env}` + `tenant-lifecycle-runtime` SAs wired per env (sub-phase 7.6). `make tf-plan-{env}` validates; apply pending operator action.
     - 6 SC# locks + 25 Q-NEW# locks resolved across the slice.
-  - [ ] Slice D — Key rotation + HTTP API + Cloud Run TF — IN FLIGHT (D.1 ✓; next: D.2)
+  - [ ] Slice D — Key rotation + HTTP API + Cloud Run TF — IN FLIGHT (D.1 ✓ + D.2 ✓; next: D.3)
     - [x] D.0 Hono prod-readiness spike (2026-04-28, commit `cd285d6`) — GO-with-conditions; establishes `docs/spikes/` convention
     - [x] D.0.5 ADR-HTTP-001 (2026-04-29, commit `a685294`) — codifies Hono + 6 binding conditions; resolves roadmap §10.11
     - [x] Planning sub-phase 1 (2026-04-29, commit `3d29027`) — `docs/planning/f02-slice-d-scope.md`: 10 SD# locks + 12 Q-NEW-D# items + 6-sub-phase plan (D.1 → D.6); convention §7 outline
     - [x] D.1 Hono prototype (2026-04-29, commit `5236544`) — `apps/tenant-lifecycle-api/` (`/health` + `/v1/tenants/{id}` + `/v1/test/slow-5s`); ADR-HTTP-001 Condition 2 PASS row 2 on framework-attributable OTel cost (mean 142.7 ms, max 187.9 ms; n=2 smoke samples; ADR amendment scopes Condition 2 to framework cost, defers platform cost to convention §7.1 `min_instances=1` posture); Condition 3 PASS row 1 on graceful-shutdown evidence (3/3 inflight=200, served by old revision, handler delta 5.8–6.8 ms). Squashed from 10 feature-branch commits including 6 fixes (Cloud SQL IAM auth, scripts CWD, Dockerfile pnpm v10 `--legacy`, GCP label format, workspace `dist/` emit, measurement-script correctness) + 2 HOLD #2 artifacts (ADR-HTTP-001 Condition 2 scope clarification, convention §7.1 production-posture lock). D.2+ unblocked.
-    - [ ] D.2 Key rotation workflow (`tenants.rotateKeys`) + worker route + `key-rotation-queue` integration
+    - [x] D.2 Key rotation workflow + worker route (2026-04-29, commit `6fcc2b5`) — `tenants.rotateKeys` library workflow (single-tx 8-step phase sequence; FOR UPDATE concurrency guard; 24-h cooldown idempotency; post-commit KMS scheduleDestroy with best-effort semantics) + `kmsAdmin.rotateCryptoKey` + `scheduleCryptoKeyVersionDestroy` primitives in `@cortex/secrets` + `POST /v1/_workers/key-rotation` worker route (OIDC validation per ADR-LIFECYCLE-001 §3; injectable validator for tests) + `TenantRotationCooldownError` (new error class). Audit catalog UNCHANGED — `TENANT_KEY_ROTATED` was registered Slice A; emits via existing entry with workspace-standard `before_state`/`after_state` envelope. App tsconfig split (`tsconfig.build.json` for emit; `tsconfig.json` for typecheck/lint includes test/). Convention §7 grew ~30 → ~350 lines: §7.1.1 (rotation workflow shape), §7.2 (dual-key overlap mechanics), §7.3 (cadence + on-demand path + emergency runbook), §7.4 (worker route + Cloud Tasks status mapping; D.4 extends), §7.5 (failure modes + stuck-rotation runbook; D.4 extends). Tests: 253/253 (rotate-keys 13 + worker route 9 + existing 231).
     - [ ] D.3 HTTP API — 12 endpoints (9 mutating + 2 read + 1 Enterprise-approval per Q-OPEN-6)
     - [ ] D.4 TF: `tenant-cloud-run-service` module (`mode=shared|tenant`) + `key-rotation-queue` queue per env
     - [ ] D.5 IAM authz: Cloud Run invoker IAM with `--no-allow-unauthenticated`; per-method authz deferred to AC01

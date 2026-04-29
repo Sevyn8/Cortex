@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice D in flight: D.0 spike landed `cd285d6`; D.0.5 ADR-HTTP-001 landed `a685294`. Next: D.1 prototype build that satisfies ADR-HTTP-001 Conditions 2 + 3 before D.2+ implementation.)
+Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice D in flight: D.0 spike landed `cd285d6`; D.0.5 ADR-HTTP-001 landed `a685294`; Slice D Planning sub-phase 1 (this commit) locks 10 SD# decisions + 12 Q-NEW-D# items + 6-sub-phase plan. Next: D.1 prototype build that satisfies ADR-HTTP-001 Conditions 2 + 3 before D.2+ implementation.)
 
 ## Pre-flight
 
@@ -61,8 +61,13 @@ Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice
   - [ ] Slice D — Key rotation + HTTP API + Cloud Run TF — IN FLIGHT
     - [x] D.0 Hono prod-readiness spike (2026-04-28, commit `cd285d6`) — GO-with-conditions; establishes `docs/spikes/` convention
     - [x] D.0.5 ADR-HTTP-001 (2026-04-29, commit `a685294`) — codifies Hono + 6 binding conditions; resolves roadmap §10.11
+    - [x] Planning sub-phase 1 (2026-04-29, this commit) — `docs/planning/f02-slice-d-scope.md`: 10 SD# locks + 12 Q-NEW-D# items + 6-sub-phase plan (D.1 → D.6); convention §7 outline
     - [ ] D.1 Prototype build (`/health` + `/v1/tenants/{id}` GET) — must satisfy ADR-HTTP-001 Conditions 2 + 3 (cold-start measurement + SIGTERM verification) before D.2+ begins
-    - [ ] D.2+ HTTP API for 9 lifecycle endpoints + `tenants.rotateKeys` + `key-rotation-queue` TF + per-tenant Cloud Run TF module
+    - [ ] D.2 Key rotation workflow (`tenants.rotateKeys`) + worker route + `key-rotation-queue` integration
+    - [ ] D.3 HTTP API — 12 endpoints (9 mutating + 2 read + 1 Enterprise-approval per Q-OPEN-6)
+    - [ ] D.4 TF: `tenant-cloud-run-service` module (`mode=shared|tenant`) + `key-rotation-queue` queue per env
+    - [ ] D.5 IAM authz: Cloud Run invoker IAM with `--no-allow-unauthenticated`; per-method authz deferred to AC01
+    - [ ] D.6 Convention §7 finalize + Slice D close commit
 - [ ] P1.3 F03 Temporal Data Engine
 - [ ] P1.4 F04 Configuration Plane
 - [ ] P1.5 F05 Schema Evolution

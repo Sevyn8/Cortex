@@ -29,7 +29,14 @@
 
 import { createLogger, type Logger } from '@cortex/observability';
 
-export type AuditOperation = 'get' | 'put' | 'encrypt' | 'decrypt' | 'getKeyForTenant';
+export type AuditOperation =
+  | 'get'
+  | 'put'
+  | 'encrypt'
+  | 'decrypt'
+  | 'getKeyForTenant'
+  | 'rotateCryptoKey'
+  | 'scheduleCryptoKeyVersionDestroy';
 
 export interface AuditEntry {
   operation: AuditOperation;

@@ -13,6 +13,7 @@ export type TenantContextErrorCode =
   | 'TENANT_STATUS'
   | 'TENANT_LEGAL_HOLD'
   | 'TENANT_GRACE_NOT_ELAPSED'
+  | 'TENANT_ROTATION_COOLDOWN'
   | 'VALIDATION';
 
 export class TenantContextError extends Error {
@@ -155,5 +156,39 @@ export class TenantGraceNotElapsedError extends TenantContextError {
     this.graceUntil = graceUntil;
     this.now = now;
     this.name = 'TenantGraceNotElapsedError';
+  }
+}
+
+/**
+ * Thrown by `tenants.rotateKeys` when a scheduled rotation arrives
+ * within the 24-hour cooldown of the previous rotation AND the caller
+ * opted in via `options.errorOnCooldown=true`. The default behavior
+ * is silent no-op (per F02 Slice D §7.5 idempotency contract);
+ * callers wanting an explicit signal use this option (typically the
+ * Cloud Tasks worker route, which logs but does not retry).
+ */
+export class TenantRotationCooldownError extends TenantContextError {
+  readonly tenantId: string;
+  readonly lastRotatedAt: Date;
+  readonly cooldownUntil: Date;
+
+  constructor(
+    tenantId: string,
+    lastRotatedAt: Date,
+    cooldownUntil: Date,
+    options?: { cause?: Error },
+  ) {
+    super(
+      'TENANT_ROTATION_COOLDOWN',
+      `Tenant ${tenantId} key rotation in cooldown: ` +
+        `last_rotated_at=${lastRotatedAt.toISOString()}, ` +
+        `cooldown_until=${cooldownUntil.toISOString()}. ` +
+        `Pass trigger='on_demand' to override or wait for the cooldown to elapse.`,
+      options,
+    );
+    this.tenantId = tenantId;
+    this.lastRotatedAt = lastRotatedAt;
+    this.cooldownUntil = cooldownUntil;
+    this.name = 'TenantRotationCooldownError';
   }
 }

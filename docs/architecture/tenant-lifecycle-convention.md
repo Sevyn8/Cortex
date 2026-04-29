@@ -1620,9 +1620,201 @@ query. `/health` and `/v1/test/slow-5s` do NOT touch the DB; D.1
 Conditions 2 + 3 measurement runs against those two endpoints
 unchanged.
 
-D.2 → D.6 extend §7 with key rotation workflow (§7.1 expanded), dual-
-key overlap mechanics (§7.2), rotation cadence (§7.3), worker route
-(§7.4), idempotency (§7.5), and IAM authz (§7.6) per Q-NEW-D-12.
+### 7.1.1 Rotation workflow shape `[F02-D.2]`
+
+`tenants.rotateKeys(db, tenantId, ctx, options)` is the library entry
+point. Single-transaction phase sequence (mirrors Slice B/C suspend /
+resume / offboard / terminate boundaries) — KMS calls run inside the
+txn so a KMS failure rolls back the row writes; the post-commit
+schedule-destroy step is the one side effect outside the txn so a
+rollback never orphans a destruction schedule.
+
+| #   | Step                                                                                                                                                                                                                                                                                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `SELECT … FOR UPDATE` on the tenant row (concurrency guard; mirrors the §10.15 contention pattern).                                                                                                                                                                                                                                                             |
+| 2   | Preflight: tenant exists; `status === 'ACTIVE'`. SUSPENDED / OFFBOARDING / TERMINATED → `TenantStatusError`.                                                                                                                                                                                                                                                    |
+| 3   | Cooldown check: `trigger === 'scheduled'` AND `last_key_rotated_at` within 24 h → no-op (return current row); `'on_demand'` always proceeds. `errorOnCooldown=true` raises `TenantRotationCooldownError` instead of the silent no-op.                                                                                                                           |
+| 4   | Resolve `tenant_kms_key.kms_key_resource_name` (the logical key path) and call `kmsAdmin.rotateCryptoKey` — `getCryptoKey` to capture the prior primary version, `createCryptoKeyVersion` to mint the new one, `updateCryptoKeyPrimaryVersion` to promote it. Returns `{ oldPrimaryVersion, newPrimaryVersion }` (version-qualified resource names).            |
+| 5   | `UPDATE tenant_kms_key SET rotated_at = now()` (logical key resource name unchanged — only the underlying primary version increments).                                                                                                                                                                                                                          |
+| 6   | `UPDATE tenant SET last_key_rotated_at = now(), updated_at = now()`.                                                                                                                                                                                                                                                                                            |
+| 7   | `emitAuditEvent(tx, { action: TENANT_KEY_ROTATED, before_state: { kms_key_resource_name: oldPrimaryVersion }, after_state: { kms_key_resource_name: newPrimaryVersion }, payload: { trigger } })`. Workspace standard envelope; existing catalog action (do NOT register a new one). Caller actor preserved per ADR-LIFECYCLE-001 §5 (terminal-success events). |
+| 8   | Post-commit: `kmsAdmin.scheduleCryptoKeyVersionDestroy(oldPrimaryVersion)`. On failure → `console.warn` + continue (rotation already committed; §7.5 manual-cleanup runbook covers recovery).                                                                                                                                                                   |
+
+**Options shape:**
+
+```ts
+{
+  trigger: 'scheduled' | 'on_demand',  // required
+  errorOnCooldown?: boolean,           // default false
+}
+```
+
+**Error contract:** `TenantValidationError` (invalid uuid / actor /
+options); `TenantNotFoundError` (no row); `TenantStatusError` (status
+≠ ACTIVE); `TenantRotationCooldownError` (only when
+`errorOnCooldown=true` AND scheduled trigger AND within 24 h cooldown).
+
+### 7.2 Dual-key overlap mechanics `[F02-D.2]`
+
+In-flight encrypt/decrypt across a rotation cutover succeeds because
+the application layer records the encrypting key version per payload
+(`EncryptedPayload.keyResourceName`, recorded at encrypt time per the
+Slice B §4.15 cleanup vector resolution). Decryption looks up the
+recorded version, not the current primary. **The overlap window is
+functionally infinite at the application layer** — old payloads
+decrypt as long as their recorded version remains valid in KMS.
+
+The KMS-side window is governed by the crypto-key's
+`destroyScheduledDuration` config (set at crypto-key creation in
+TF, locked to 30 days per SD6). When `tenants.rotateKeys` finishes,
+it calls `kmsAdmin.scheduleCryptoKeyVersionDestroy(oldPrimaryVersion)`
+which moves the version to `DESTROY_SCHEDULED` state; the actual
+DESTROYED transition happens after the configured window. Within
+the window the version remains DECRYPT-capable, so any in-flight
+decrypt on a payload encrypted with that version continues to
+succeed.
+
+The 30-day window is **incident-recovery margin**, not a functional
+read window. Operators recovering from an accidental rotation
+(rollback within 30 days) call `gcloud kms keys versions restore`
+on the old version. After the window expires, the version's key
+material is permanently destroyed; payloads encrypted with it
+become unrecoverable.
+
+**Cross-tenant safety**: AAD-bound envelope encryption (the
+`utf8(tenantId)` AAD per `@cortex/encryption`) means a payload's
+ciphertext fails AEAD auth if decrypted under any tenant other than
+the encrypting one. Rotation does not affect this — tenant binding
+is the AAD, not the key version.
+
+### 7.3 Rotation cadence + on-demand path `[F02-D.2]`
+
+**Scheduled cadence (90-day target).** A periodic Cloud Tasks
+dispatcher (D.4 wires the queue + dispatcher) enqueues rotation
+tasks for every tenant where
+`now() - tenant.last_key_rotated_at > 90 days`. The dispatcher uses
+`taskId = 'rotate-{tenantId}'` for built-in dedup (per ADR-LIFECYCLE-001
+§3 + planning-doc D5).
+
+**On-demand path.** The HTTP endpoint
+`POST /v1/tenants/{id}/rotate-keys` (D.3 ships this; tracked as
+SD7 endpoint #9) lets operators trigger rotation outside the
+90-day cadence. Direct library calls (`tenants.rotateKeys` with
+`trigger: 'on_demand'`) bypass the cooldown.
+
+**Operator runbook (emergency rotation).** If a tenant's key
+material is suspected compromised:
+
+1. Trigger the on-demand rotation:
+   `POST /v1/tenants/{tenantId}/rotate-keys` (D.3) OR direct
+   library call from a controlled environment.
+2. Verify rotation completed via the audit chain:
+   `SELECT * FROM audit_event WHERE tenant_id = '<id>' AND action = 'TENANT_KEY_ROTATED' ORDER BY occurred_at DESC LIMIT 1;`.
+3. Confirm `tenant.last_key_rotated_at` advanced.
+4. Inventory payloads encrypted with the prior version: any data
+   path that recorded the old `keyResourceName` will continue to
+   decrypt successfully for 30 days. Hard re-encryption (re-wrap
+   under the new primary) is a separate workflow not yet shipped;
+   tracked as a follow-up if a compromise scenario forces it.
+5. Optional: restore the old version via
+   `gcloud kms keys versions restore` if rotation was accidental
+   (within the 30-day window).
+
+### 7.4 Worker route + Cloud Tasks integration `[F02-D.2 initial; D.4 extends]`
+
+**Route:** `POST /v1/_workers/key-rotation` on
+`apps/tenant-lifecycle-api/`. The `/v1/_workers/*` prefix is the
+workspace convention for internal-only endpoints — bypasses the
+user-tenant-context middleware (added to its `skipPaths`). Tenant
+ID flows from the request body, not the `x-cortex-tenant-id`
+header.
+
+**OIDC validation (per ADR-LIFECYCLE-001 §3).** A per-route
+middleware verifies the inbound `Authorization: Bearer <token>` is
+a Google-signed OIDC ID token whose `email` claim matches the
+configured Cloud Tasks invoker SA (`CLOUD_TASKS_INVOKER_SA_EMAIL`
+env, locked by D.4 to the TF-provisioned SA). Missing / malformed /
+wrong-issuer-email tokens → 401. The default validator wraps
+`google-auth-library`'s `OAuth2Client.verifyIdToken`; tests inject
+a stub via the `validateOidc` build option.
+
+**Body schema** (validated via `@hono/zod-validator`):
+
+```ts
+{
+  tenant_id: z.string().uuid(),
+  trigger: z.enum(['scheduled', 'on_demand']),
+}
+```
+
+**Actor attribution.** The worker route runs with a hardcoded
+service actor (`{ type: 'service', id: 'cortex-tenant-lifecycle-worker' }`).
+On-demand rotations from the HTTP API (D.3) carry the caller's
+actor instead; the audit-chain payload's `actor_id` distinguishes
+the two paths for forensic queries ("which rotations were
+operator-driven vs scheduled?").
+
+**Status mapping** (per the workspace error-mapper from D.1):
+
+| Library throw                 | HTTP response | Cloud Tasks behavior     |
+| ----------------------------- | ------------- | ------------------------ |
+| `TenantValidationError`       | 400           | terminal (no retry)      |
+| OIDC validation fail          | 401           | terminal                 |
+| `TenantNotFoundError`         | 404           | terminal                 |
+| `TenantStatusError`           | 409           | terminal                 |
+| `TenantRotationCooldownError` | 409           | terminal                 |
+| Other / KMS / DB transient    | 5xx           | retried per queue config |
+
+**D.4 extends:** wires the actual `key-rotation-queue` Cloud Tasks
+queue + the dispatcher SA + the OIDC audience pinning + the
+`updateCryptoKeyPrimaryVersion` post-create timing tolerance (KMS
+sometimes returns from `createCryptoKeyVersion` before the new
+version is in PRIMARY-eligible state).
+
+### 7.5 Idempotency + failure recovery `[F02-D.2 initial; D.4 extends]`
+
+**Re-dispatch idempotency.** Cloud Tasks may re-deliver a task
+within its retry window (max 5 attempts; exponential backoff
+30s → 5min → 30min per ADR-LIFECYCLE-001 §2). The 24-hour
+cooldown on scheduled rotations handles this: the second + third
+
+- … delivery within 24 h of the first successful rotation no-ops
+  silently. The receiver returns 200 (not 409), so Cloud Tasks
+  removes the task from the queue.
+
+**Failure modes:**
+
+| Failure                                 | Behavior                                                                                                                                                                                                                  |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| KMS unavailable (transient)             | Inside txn → throw → txn rolls back → 5xx → Cloud Tasks retries.                                                                                                                                                          |
+| KMS PERMISSION_DENIED                   | Same as above; Cloud Tasks retries until quota exhausted; dead-letter queue eventually surfaces it for operator triage.                                                                                                   |
+| DB write fails inside txn               | txn rolls back; rotation didn't happen; 5xx; Cloud Tasks retries.                                                                                                                                                         |
+| Audit emit fails inside txn             | txn rolls back; rotation didn't happen; 5xx; Cloud Tasks retries. Per audit-event-convention.md the audit row is in-txn.                                                                                                  |
+| KMS scheduleDestroy fails (post-commit) | Rotation IS committed; `console.warn` logged with the orphaned version name. `tenant_kms_key.rotated_at` advanced; audit row emitted; new primary in place. Manual cleanup: `gcloud kms keys versions destroy <version>`. |
+| OIDC validation fails                   | 401 → Cloud Tasks marks terminal failure → dead-letter queue.                                                                                                                                                             |
+
+**Operator runbook (stuck rotation).**
+
+1. Check the audit chain for `TENANT_KEY_ROTATED` event:
+   - Present, `last_key_rotated_at` advanced → rotation succeeded;
+     check Cloud Logging for any `console.warn` about
+     scheduleDestroy failures.
+   - Absent, `last_key_rotated_at` stale → rotation did not commit;
+     check Cloud Tasks queue depth + dead-letter queue.
+2. If a `scheduleDestroy` warning appears in logs, run the manual
+   cleanup gcloud command above and re-verify version state with
+   `gcloud kms keys versions list`.
+3. If the dead-letter queue has tasks, decode the payload to
+   recover `tenant_id` + `trigger`, investigate the underlying
+   failure (typically KMS quota or IAM), and re-enqueue manually
+   once the root cause is resolved.
+
+**D.4 extends:** wires the `key-rotation-queue` dead-letter handler
+
+- the per-task SLA monitoring + the cleanup-old-task pruner.
+
+D.6 fills §7.6 (IAM + invoker authz) + §7.7 (forensic queries) per
+Q-NEW-D-12.
 
 ## 8. Operational patterns
 

@@ -26,6 +26,7 @@ import type { Telemetry } from './observability.js';
 import { buildHealthRoutes } from './routes/health.js';
 import { buildTenantRoutes } from './routes/tenants.js';
 import { buildTestRoutes } from './routes/test.js';
+import { buildKeyRotationWorkerRoutes } from './routes/workers/key-rotation.js';
 
 export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telemetry }): Hono {
   const { config, pool, telemetry } = args;
@@ -47,11 +48,15 @@ export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telem
   );
 
   // Step 3: tenant-context binding. /health + /v1/test/* skip the
-  // header check; the slow-5s endpoint isn't tenant-scoped. The
-  // adapter is captured into a local before passing to `app.use` so
-  // `this` is preserved (lint: @typescript-eslint/unbound-method).
+  // header check; the slow-5s endpoint isn't tenant-scoped. Worker
+  // routes under /v1/_workers/* derive tenant_id from the request
+  // body (Cloud Tasks payload), not the header — also skipped here;
+  // their OIDC middleware is registered per-route inside the worker
+  // builder. The adapter is captured into a local before passing to
+  // `app.use` so `this` is preserved (lint:
+  // @typescript-eslint/unbound-method).
   const tenantMw = buildTenantContextMiddleware({
-    skipPaths: ['/health', '/v1/test/slow-5s'],
+    skipPaths: ['/health', '/v1/test/slow-5s', '/v1/_workers/key-rotation'],
     // D.1 doesn't validate tenant existence in the middleware —
     // the route handler does it via `tenants.get`. D.3 may layer
     // existence checks at the middleware for endpoints that don't
@@ -63,6 +68,7 @@ export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telem
   // Step 4: routes.
   app.route('/', buildHealthRoutes(config.COMMIT_SHA));
   app.route('/', buildTenantRoutes(pool));
+  app.route('/', buildKeyRotationWorkerRoutes({ config, pool }));
   if (config.ENABLE_TEST_ROUTES) {
     app.route('/', buildTestRoutes());
   }

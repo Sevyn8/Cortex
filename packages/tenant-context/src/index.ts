@@ -5,6 +5,7 @@ export {
   TenantGraceNotElapsedError,
   TenantLegalHoldError,
   TenantNotFoundError,
+  TenantRotationCooldownError,
   TenantStatusError,
   TenantValidationError,
 } from './errors.js';

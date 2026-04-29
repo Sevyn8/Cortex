@@ -41,6 +41,13 @@ const envSchema = z.object({
 
   // Cloud Run revision id, useful for cold-start measurement narrative.
   K_REVISION: z.string().optional(),
+
+  // F02 Slice D D.2: SA email Cloud Tasks dispatchers must impersonate
+  // when calling worker routes (validated via OIDC token's `email`
+  // claim). D.4 TF locks this to the actual provisioned SA email.
+  // Empty string disables email matching (signature + issuer still
+  // enforced) — useful for local dev or pre-D.4 deploys.
+  CLOUD_TASKS_INVOKER_SA_EMAIL: z.string().default(''),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

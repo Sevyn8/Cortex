@@ -54,7 +54,7 @@ import {
 } from '@cortex/canonical-schema';
 import { getActionByName } from '@cortex/audit-events';
 import { getTenantBucketName, getTenantPrefix, type Environment } from '@cortex/blob-storage';
-import { buildKeyResourceName } from '@cortex/secrets';
+import { buildKeyResourceName, kmsAdmin } from '@cortex/secrets';
 import { TENANT_AUDIT_ACTIONS } from './audit-actions.js';
 import { emitAuditEvent } from './audit.js';
 import { dispatchCloudTask } from './cloud-tasks.js';
@@ -63,6 +63,7 @@ import {
   TenantGraceNotElapsedError,
   TenantLegalHoldError,
   TenantNotFoundError,
+  TenantRotationCooldownError,
   TenantStatusError,
   TenantValidationError,
 } from './errors.js';
@@ -1606,6 +1607,190 @@ async function forceTerminate(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 lifecycle workflow — rotateKeys (Slice D D.2)
+// ─────────────────────────────────────────────────────────────────────
+
+const rotateKeysOptionsSchema = z
+  .object({
+    /**
+     * Discriminates scheduled (90-day cadence) from on-demand (operator
+     * trigger). Scheduled rotations within the 24-hour cooldown of the
+     * previous rotation no-op (idempotent re-dispatch protection per
+     * §7.5); on-demand rotations always proceed.
+     */
+    trigger: z.enum(['scheduled', 'on_demand'] as const),
+    /**
+     * When true and a scheduled rotation hits the cooldown, throw
+     * `TenantRotationCooldownError` instead of silently no-op'ing.
+     * Default false. Cloud Tasks worker route uses default behavior;
+     * an HTTP API caller may opt in for explicit feedback.
+     */
+    errorOnCooldown: z.boolean().default(false),
+  })
+  .strict();
+
+export type RotateKeysOptions = z.input<typeof rotateKeysOptionsSchema>;
+
+const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Rotate the tenant's CMEK key. Phase sequence (single transaction
+ * for the DB writes; KMS schedule-destroy is the one side effect
+ * that lives outside the txn — it runs last so a txn rollback
+ * cannot orphan a destruction schedule):
+ *
+ *   1. SELECT ... FOR UPDATE on the tenant row (concurrency guard).
+ *   2. Preflight: tenant exists; status === ACTIVE.
+ *   3. Idempotency: scheduled trigger within 24 h of last rotation
+ *      → no-op (return current row); on-demand always proceeds.
+ *   4. KMS createCryptoKeyVersion + updateCryptoKeyPrimaryVersion
+ *      via `kmsAdmin.rotateCryptoKey` on the tenant's logical key.
+ *   5. UPDATE `tenant_kms_key.rotated_at = now()`.
+ *   6. UPDATE `tenant.last_key_rotated_at = now()`.
+ *   7. Emit `TENANT_KEY_ROTATED` audit (catalog action; no new
+ *      registration). before_state / after_state envelope carries
+ *      the version-qualified resource names (workspace standard).
+ *   8. Schedule old version destruction (KMS destroyCryptoKeyVersion
+ *      with the crypto-key's destroyScheduledDuration governing the
+ *      30-day window per SD6). Failure here is logged + warned but
+ *      does NOT roll back the rotation — the operator runbook in
+ *      §7.5 covers manual cleanup.
+ *
+ * Per Q-NEW-D-12 + convention §7.2: dual-key overlap is functionally
+ * infinite at the application layer (envelope encryption records the
+ * encrypting key version per payload; decrypts use the recorded
+ * version regardless of current primary). The 30-day KMS window is
+ * incident-recovery margin, not a functional read window.
+ *
+ * @throws TenantValidationError invalid id / actor / options.
+ * @throws TenantNotFoundError no tenant row matches `id`.
+ * @throws TenantStatusError tenant exists but status !== ACTIVE.
+ * @throws TenantRotationCooldownError only when `options.errorOnCooldown=true`
+ *         AND scheduled trigger AND within 24 h cooldown.
+ */
+async function rotateKeys(
+  db: NodePgDatabase<Record<string, never>>,
+  id: string,
+  ctx: { actor: Actor },
+  options: RotateKeysOptions,
+): Promise<Tenant> {
+  const parsedId = parseOrThrow(idSchema, id, 'rotateKeys id');
+  const parsedActor = parseOrThrow(actorSchema, ctx.actor, 'rotateKeys actor');
+  const parsedOptions = parseOrThrow(rotateKeysOptionsSchema, options, 'rotateKeys options');
+
+  // Step 1+2+3+5+6+7 inside one transaction. Step 4 (KMS) sits inside
+  // the txn so a KMS failure rolls back the row writes (no half-state).
+  // Step 8 (KMS scheduleDestroy) runs AFTER commit so a rollback never
+  // orphans a destruction schedule.
+  const result = await db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+
+    const currentRows = await tx
+      .select()
+      .from(tenant)
+      .where(eq(tenant.id, parsedId))
+      .for('update')
+      .limit(1);
+    const current = currentRows[0];
+    if (current === undefined) {
+      throw new TenantNotFoundError(parsedId, 'id');
+    }
+
+    // Status guard: only ACTIVE tenants rotate. SUSPENDED tenants
+    // cannot mutate; OFFBOARDING / TERMINATED tenants are on the
+    // teardown path and their keys are scheduled for tombstone via
+    // tenants.terminate, not rotation.
+    if (current.status !== 'ACTIVE') {
+      throw new TenantStatusError(parsedId, current.status, ['ACTIVE']);
+    }
+
+    // Idempotency / cooldown for scheduled re-dispatch.
+    const lastRotatedAt = current.last_key_rotated_at;
+    if (
+      parsedOptions.trigger === 'scheduled' &&
+      lastRotatedAt !== null &&
+      Date.now() - lastRotatedAt.getTime() < COOLDOWN_MS
+    ) {
+      if (parsedOptions.errorOnCooldown) {
+        throw new TenantRotationCooldownError(
+          parsedId,
+          lastRotatedAt,
+          new Date(lastRotatedAt.getTime() + COOLDOWN_MS),
+        );
+      }
+      return { row: current, oldVersion: null, newVersion: null };
+    }
+
+    // Resolve the tenant's logical key resource name. RLS read is
+    // satisfied by the bind above. Both kms_key_resource_name + the
+    // version-qualified primary version flow into the audit chain.
+    const kmsRows = await tx
+      .select()
+      .from(tenantKmsKey)
+      .where(eq(tenantKmsKey.tenant_id, parsedId))
+      .limit(1);
+    const kmsRow = kmsRows[0];
+    if (kmsRow === undefined) {
+      // tenant_kms_key is provisioned at tenants.create time; absence
+      // here is a substrate corruption.
+      throw new Error(`tenants.rotateKeys: tenant_kms_key row missing for ${parsedId}`);
+    }
+
+    const { oldPrimaryVersion, newPrimaryVersion } = await kmsAdmin.rotateCryptoKey(
+      kmsRow.kms_key_resource_name,
+    );
+
+    await tx
+      .update(tenantKmsKey)
+      .set({ rotated_at: msNow })
+      .where(eq(tenantKmsKey.tenant_id, parsedId));
+
+    const updated = await tx
+      .update(tenant)
+      .set({ last_key_rotated_at: msNow, updated_at: msNow })
+      .where(eq(tenant.id, parsedId))
+      .returning();
+    const next = updated[0];
+    if (next === undefined) {
+      throw new Error('tenants.rotateKeys: UPDATE returned no row');
+    }
+
+    await emitAuditEvent(tx, {
+      tenantId: parsedId,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_KEY_ROTATED'),
+      verb: 'UPDATE',
+      resource: `tenant:${parsedId}`,
+      before_state: { kms_key_resource_name: oldPrimaryVersion },
+      after_state: { kms_key_resource_name: newPrimaryVersion },
+      payload: { trigger: parsedOptions.trigger },
+    });
+
+    return { row: next, oldVersion: oldPrimaryVersion, newVersion: newPrimaryVersion };
+  });
+
+  // Step 8: post-commit KMS schedule-destroy on the OLD version.
+  // No-op when oldVersion is null (cooldown no-op path).
+  if (result.oldVersion !== null) {
+    try {
+      await kmsAdmin.scheduleCryptoKeyVersionDestroy(result.oldVersion);
+    } catch (err) {
+      // Best-effort: rotation already committed. Log + continue.
+      // §7.5 operator runbook covers manual cleanup if this fails.
+      console.warn(
+        `tenants.rotateKeys: KMS scheduleDestroy failed for ${result.oldVersion}; ` +
+          `rotation committed but old version not scheduled for destruction. ` +
+          `Cause: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return result.row;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Public namespace
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1622,4 +1807,5 @@ export const tenants = {
   offboard,
   terminate,
   forceTerminate,
+  rotateKeys,
 };

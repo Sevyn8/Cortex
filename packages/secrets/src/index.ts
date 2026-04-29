@@ -1,6 +1,7 @@
 export { secrets } from './secret-manager.js';
 export type { GetOptions, PutResult } from './secret-manager.js';
-export { envelope } from './kms.js';
+export { envelope, kmsAdmin } from './kms.js';
+export type { RotateCryptoKeyResult } from './kms.js';
 export { getKeyForTenant } from './per-tenant-keys.js';
 /**
  * Builds the canonical Cloud KMS resource name for a key id, resolving

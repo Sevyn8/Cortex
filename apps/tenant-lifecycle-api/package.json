@@ -5,11 +5,11 @@
   "type": "module",
   "description": "F02 Slice D HTTP surface — Hono prototype (D.1) + 12 endpoints (D.3).",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b tsconfig.build.json",
     "start": "node --enable-source-maps dist/index.js",
     "dev": "tsx --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint src test",
     "test": "vitest run"
   },
   "dependencies": {
@@ -30,6 +30,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@cortex/secrets": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/pg": "catalog:",
     "tsx": "^4.19.0",

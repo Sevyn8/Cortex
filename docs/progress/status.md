@@ -1,6 +1,6 @@
 # Cortex Build Progress
 
-Last updated: 2026-04-27 (F01 Slice C shipped 2026-04-26 — closes P1.1 F01. Inter-session: workspace cycle decoupling resolved; CI green again after 3-day red — see roadmap §4.13.)
+Last updated: 2026-04-29 (F02 Slice C closed 2026-04-28 — `135c9da`. F02 Slice D in flight: D.0 spike landed `cd285d6`; D.0.5 ADR-HTTP-001 landed `a685294`. Next: D.1 prototype build that satisfies ADR-HTTP-001 Conditions 2 + 3 before D.2+ implementation.)
 
 ## Pre-flight
 
@@ -49,7 +49,20 @@ Last updated: 2026-04-27 (F01 Slice C shipped 2026-04-26 — closes P1.1 F01. In
     - 2 packages shipped: `@cortex/quotas` (56 tests), `@cortex/compute-placement` (30 tests)
     - ADR-COMPUTE-001 (Cloud Run vs K8s) + F02 swap-paths doc + convention doc landed
     - Substrate: NONE NEEDED (`tenant_quota_usage` RLS already correctly shaped from Slice A)
-- [ ] P1.2 F02 Tenant Lifecycle
+- [ ] P1.2 F02 Tenant Lifecycle — IN FLIGHT (Slices A/B/C closed; Slice D in-flight)
+  - [x] Slice A — Provisioning workflow + state machine + stub swaps (2026-04-27, commit `35e1984`)
+  - [x] Slice B — Suspension + Resume + §10.15 contention test (2026-04-27, commit `da1314d`)
+  - [x] Slice C — Offboarding + termination + force-terminate + legal-hold + TF (2026-04-28; closes Slice C at `135c9da`)
+    - 6 commits: `940a616` migration 0011 → `5716d4f` offboard → `cab6329` terminate → `c377f1b` forceTerminate + legalHolds → `e6e44c9` TF wiring → `135c9da` convention §6 final expansion
+    - Test surface: +87 across Slice C (foundation +10 legal_hold; tenant-context +77). Tenant-context now 240/240.
+    - Audit catalog: 14 actions registered (5 Slice A + 6 F02 lifecycle + 3 Slice C 7.5 — TENANT_FORCE_TERMINATED, LEGAL_HOLD_SET, LEGAL_HOLD_RELEASED).
+    - TF: `lifecycle-queue` + `provisioning-queue` + `cortex-export-signer-{env}` + `tenant-lifecycle-runtime` SAs wired per env (sub-phase 7.6). `make tf-plan-{env}` validates; apply pending operator action.
+    - 6 SC# locks + 25 Q-NEW# locks resolved across the slice.
+  - [ ] Slice D — Key rotation + HTTP API + Cloud Run TF — IN FLIGHT
+    - [x] D.0 Hono prod-readiness spike (2026-04-28, commit `cd285d6`) — GO-with-conditions; establishes `docs/spikes/` convention
+    - [x] D.0.5 ADR-HTTP-001 (2026-04-29, commit `a685294`) — codifies Hono + 6 binding conditions; resolves roadmap §10.11
+    - [ ] D.1 Prototype build (`/health` + `/v1/tenants/{id}` GET) — must satisfy ADR-HTTP-001 Conditions 2 + 3 (cold-start measurement + SIGTERM verification) before D.2+ begins
+    - [ ] D.2+ HTTP API for 9 lifecycle endpoints + `tenants.rotateKeys` + `key-rotation-queue` TF + per-tenant Cloud Run TF module
 - [ ] P1.3 F03 Temporal Data Engine
 - [ ] P1.4 F04 Configuration Plane
 - [ ] P1.5 F05 Schema Evolution
@@ -387,3 +400,140 @@ Per-prompt completion records for prompts that landed substantive work. Short su
 **Next consumer:** AC01 (P2.1) — promotion migration reads `bootstrap_admin` rows, hashes password, writes to users + user_role_assignment.
 
 **Commit:** `51253c7`
+
+### P0.6 Phase 2 — @cortex/observability library (2026-04-25)
+
+**Shipped:**
+
+- New package `packages/observability/` — OTel-native logger / tracer / metrics + correlation context + redaction + grpc/http middleware adapters + pubsub wrapper. ~77 unit tests.
+- `createLogger` consumes a `ContextProvider`; `composeContextProviders(defaultContextProvider, tenantContextProvider)` injects `tenant_id` into every log record (cycle-defensive — see roadmap §4.13 resolution).
+- ADR-OBS-001 finalized; ADR-OBS-003 (PII redaction) shipped.
+- `@cortex/secrets` and `@cortex/audit-events` audit emitters swapped to `[OBS-AUDIT]` shape via `createLogger` — retiring the `[SECRETS-AUDIT]` / `[BOOTSTRAP-AUDIT]` stderr-JSON stubs from P0.7 / P0.9.
+
+**Commit:** `15e5574`. Backfilled into resolution markers via `3cb738d`.
+
+### P0.10 — @cortex/audit-events library + tenant-context migration (2026-04-26)
+
+**Shipped:**
+
+- New package `packages/audit-events/` — verb-driven discriminated union for `emitAuditEvent(tx, params)`, action-catalog registration via `registerAuditActions([...] as const)`, canonicalization + RLS-binding + `clock_timestamp()` server-stamping per planning-doc Decision 11.
+- `@cortex/tenant-context` adopts the library; `TENANT_*` action catalog moved into `audit-actions.ts` (vitest-safe — no top-level `registerAuditActions(...)` in the audit emit path).
+- Migration `0008_audit_event_actor_type_agent.sql` — extends `audit_event.actor_type` CHECK to add `'agent'` per ADR-AU-001.
+- `tenants.create`'s 3-event chain (`TENANT_CREATED` + `TENANT_KMS_KEY_BOUND` + optional `TENANT_CONFIG_VERSION_CREATED`) emits via the library; Phase 0 closes with this commit.
+
+**Commit:** `0f4a99b`. Phase 0 close marker: `b1a23a1`.
+
+### F01 — Multi-Tenancy (closed 2026-04-26)
+
+#### Slice A — Tenant context + DB isolation (2026-04-25, commit `4811821`)
+
+**Shipped:**
+
+- Migration `0007_control_plane_tables.sql` — 4 control-plane tables: `tenant`, `tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`. RLS on the latter three; `tenant` is the registry (no RLS — circular).
+- New package `@cortex/tenant-context` — async-local tenant context (`withTenantContext` / `getTenantOrThrow`), DB session binding (`bindTenantToDbSession` / `withTenantDbClient`), framework-agnostic HTTP middleware with Hono + Express adapters, `tenants.{create, get, getByExternalId, list, update, setStatus}` CRUD with audit emission.
+- 3 new ADRs: `ADR-DB-002` (RLS session-variable contract), `ADR-AU-001` (audit-events library shape — co-shipped with tenants.ts as the first audit consumer).
+- Convention doc `docs/architecture/tenant-lifecycle-convention.md` — initial sections (state machine, transitions, RLS bind requirements).
+
+#### Slice B — Encryption + GCS isolation (2026-04-26, commit `c64192f`)
+
+**Shipped:**
+
+- New package `@cortex/encryption` — envelope encryption (AES-256-GCM with `tenantId` AAD per ADR-INFRA-007). Wraps the Phase 1 `getKeyForTenant` stub from `@cortex/secrets`.
+- New package `@cortex/blob-storage` — path validators (`buildFullObjectPath`, `assertObjectInTenantPrefix`, `getTenantPrefix`, `getTenantBucketName`) + V4 signed-URL signer (`createSignedUrlSigner`). Object emission paths deferred until first F-series consumer.
+- Migration `0009_tenant_kms_key_writes_policy.sql` — extends `tenant_kms_key` RLS to FOR ALL with WITH CHECK (Slice B writes the row in `tenants.create` under the caller's RLS-bound role).
+- TF: `tenant-data-bucket` module — per-env `cortex-{env}-tenant-data` bucket with bucket-level CMEK + `tenant-data-runtime` SA + GCS service-agent CMEK grant per ADR-INFRA-002 Quirk 1.
+- 1 new ADR: `ADR-INFRA-007` (per-tenant CMEK migration path; Phase 1 stub via env-level key + AAD; F02 swaps the resolver).
+
+**Deviation note:** dev applied; staging + prod queued for separate cycles.
+
+#### Slice C — Quotas + Compute placement (2026-04-26, commit `dcc503c`; backfill `123c58e`)
+
+**Shipped:**
+
+- New package `@cortex/quotas` — token bucket per (tenant, resource_class) backed by `tenant_quota_usage`; HTTP middleware (framework-agnostic + Hono/Express adapters); 429 + `Retry-After` + `QUOTA_EXCEEDED` audit on rejection.
+- New package `@cortex/compute-placement` — `getComputePlacement(tenantId, workload, env)` returns `ComputePlacement`. Phase 1 always returns `shared`; F02 swaps to branch on `tenant.tier`.
+- 1 new ADR: `ADR-COMPUTE-001` (Cloud Run vs K8s; service-name format `{workload}-shared` / `{workload}-tenant-{uuid}`).
+- Convention doc `docs/architecture/quotas-compute-placement-convention.md` + F02 swap-paths doc.
+
+**Substrate:** NONE NEEDED (`tenant_quota_usage` RLS already correctly shaped from Slice A migration 0007).
+
+**Workspace test count at F01 close:** 464 active tests across 10 packages.
+
+### F02 — Tenant Lifecycle (in flight)
+
+#### Slice A — Provisioning + 3 stub swaps (2026-04-27, commit `35e1984`)
+
+**Shipped:**
+
+- `tenants.provision` workflow: ENTERPRISE → REQUESTED (manual approval gate per Q-OPEN-6); STANDARD → PROVISIONING. Cloud Tasks dispatch on `provisioning-queue` with `taskId='provisioning-{tenant_id}'` (D5 dedup).
+- `provisioning-worker.ts` runs the state machine: REQUESTED → PROVISIONING → READY → ACTIVE. Smoke-test via `runSmokeTest`. Hard rollback via `cleanupFailedProvisioning` on smoke-test failure (SA10 + SA14).
+- 3 Phase 1 resolver stubs swapped to real implementations:
+  - `getKeyForTenant(tenantId)` in `@cortex/secrets` queries `tenant_kms_key` (table populated by Slice B's `tenants.create`).
+  - `getQuotaConfig(tier, resourceClass, ctx?)` in `@cortex/quotas` becomes async; consults `tenant_config_version.config_json.quotas[resource_class]` with fallback to `DEFAULT_TIER_QUOTAS`.
+  - `getComputePlacement(params)` in `@cortex/compute-placement` branches on `tenant.tier` for ENTERPRISE.
+- Migration `0010_tenant_lifecycle_metadata.sql` — extends `tenant.status` CHECK to 7 values (REQUESTED, PROVISIONING, READY, ACTIVE, SUSPENDED, OFFBOARDING, TERMINATED) + 5 lifecycle metadata columns (`last_key_rotated_at`, `terminated_at`, `offboarding_grace_until`, `legal_hold`, `dedicated_db_approved`).
+- 1 new ADR: `ADR-LIFECYCLE-001` (state machine + Cloud Tasks orchestration).
+- Convention doc `docs/architecture/tenant-lifecycle-convention.md` extended (§1–§4 + cleanup-vector resolution per §4.15/§4.16/§4.17).
+- 4 cleanup vectors resolved (§4.13 cycle decoupling RESOLVED via static observability imports — no longer dynamic-imported as cycle defense; §4.15 redundant `getKeyForTenant` consult removed; §4.16 dead logger plumbing in `@cortex/quotas` removed; §4.17 swap-paths doc retired into convention appendix).
+
+#### Slice B — Suspension + Resume + §10.15 contention test (2026-04-27, commit `da1314d`)
+
+**Shipped:**
+
+- `tenants.suspend(db, id, reason, ctx)` — flips ACTIVE → SUSPENDED; emits `TENANT_SUSPENDED` audit event with `payload.reason`. Per SB1 lock: dedicated domain action (NOT `TENANT_STATUS_CHANGED`) for cascade-event handle to AC01 / S15 / S17 (push-style event sourcing).
+- `tenants.resume(db, id, ctx)` — SUSPENDED → ACTIVE; emits `TENANT_STATUS_CHANGED` (reversible inverse with no cascade subscribers).
+- Both helpers idempotent per SB5 Option α (already-target-state returns current row, no audit re-emit).
+- §10.15 contention test (forcing function resolved): `withTwoBoundClients` test helper exercises the `SELECT ... FOR UPDATE` row lock under two concurrent transactions; barrier-based interleaving verifies tx2 blocks until tx1 commits.
+
+#### Slice C — Offboarding + termination + force-terminate + legal-hold + TF (closed 2026-04-28, `135c9da`)
+
+**Shipped (6 commits):**
+
+- `940a616` — Migration `0011_legal_hold_table.sql` (granular per-record / per-data-class hold path; 3 CHECK constraints; 2 partial indexes; RLS-protected) + Drizzle schema (`legalHold` pgTable).
+- `5716d4f` — `dispatchCloudTask` extended with optional `scheduleTime: Date` (mapped to Cloud Tasks Timestamp); `generateExportArchive` utility (gzipped JSON Lines, schema-versioned envelope, 6 entity types) using `@cortex/blob-storage`'s signer + GCS upload; `tenants.offboard(db, id, options, ctx)` 4-phase workflow (preflight → archive → state-transition-and-audit-emit txn → Cloud Task dispatch). Workspace cycle prevention: dropped 3 unused `@cortex/*` deps from `@cortex/blob-storage`.
+- `cab6329` — `tenants.terminate(db, id, ctx, options?)` 4-phase + 5-step cascade (Cloud Run STUB → GCS recursive delete → Cloud SQL STUB → shared-DB single-txn cascade → KMS tombstone-only). Soft-retain tombstone semantics per Q-NEW-C8: `status='TERMINATED' + terminated_at` UPDATE; children hard-deleted; `tenants.get`/`getByExternalId` filter to `TenantNotFoundError`. New `TenantLegalHoldError` + `TenantGraceNotElapsedError` classes.
+- `c377f1b` — `tenants.forceTerminate(db, id, reason, ctx, options?)` Super Admin override: skips legal-hold + grace-period checks; captures bypassed details in `payload.override_metadata` for forensic attribution. `legalHolds.set` + `legalHolds.release` helpers (3-scope discriminated-union options; idempotent release; cross-tenant access fails closed). 3 new audit catalog actions: `TENANT_FORCE_TERMINATED`, `LEGAL_HOLD_SET`, `LEGAL_HOLD_RELEASED` (catalog grew 11 → 14 actions).
+- `e6e44c9` — TF: `lifecycle-queue` + `provisioning-queue` instantiated per env (first env-level Cloud Tasks instantiation); `tenant-lifecycle-runtime` SA inline per env (observer pattern); new module `cortex-signer-sa` (per-env `cortex-export-signer-{env}` SA + TokenCreator grant from runtime SA + `storage.objectViewer` on tenant-data bucket). `make tf-plan-{env}` validates; apply pending operator action.
+- `135c9da` — Convention §6 final expansion: 4 → 7 subsections (added §6.5 idempotency, §6.6 failure recovery, §6.7 forensic queries — 8 SQL examples); §6.1 drift fixes (archive format + URL TTL split + audit emission shape); §9.1 audit catalog table refreshed.
+
+**Slice C numbers:**
+
+- 6 commits, 1 working day. Test surface: +87 tests (foundation +10 legal_hold; tenant-context +77 — cloud-tasks +5, export-archive +11, offboard +17, terminate +19, audit-actions +3, legal-holds +17, force-terminate +15). **Tenant-context: 240/240.**
+- 6 SC# locks + 25 Q-NEW# locks resolved.
+- Convention `tenant-lifecycle-convention.md` §6: 4 → 7 subsections; 254 → 522 lines.
+
+**5 deferred items traveling with Slice C** (tracked, not scheduled):
+
+- `tenants.regenerateOffboardingArchiveUrl` — future helper for refreshing 7-day signed URLs; documented in §6.1; implementation lands when first production offboarding requires it (Phase 1 has 0 production tenants).
+- GCS lifecycle policy for 30-day object retention — future TF in `tenant-data-bucket` module; documented in §6.1; lands when first production tenant offboards.
+- `export-archive.ts` SA impersonation — switch from default ADC signing to `GoogleAuth({ targetPrincipal: <signerSAEmail> })`. TF for the signer SA + IAM grants are already in place per sub-phase 7.6; no infrastructure rollout required when code change lands.
+- §1.3 transition-table TBDs in convention doc — separate convention §1 cleanup pass.
+- audit-event tamper-resistance hardening for parallelism flake (`suspend-resume.spec.ts:343`) — per-tenant sequence column or per-tx counter as secondary order key. Reproduces ~1-in-3 full local runs; CI hasn't reproduced.
+
+#### Slice D — Key rotation + HTTP API + Cloud Run TF (in flight)
+
+**D.0 — Hono prod-readiness spike (2026-04-28, commit `cd285d6`):**
+
+- New convention established: `docs/spikes/` for doc-only time-boxed investigations. First entry.
+- 12-category Hono evaluation across maturity / Cloud Run fit / TypeScript fit / OTel / logging / error handling / tenant-context middleware / audit lifecycle / RLS lifecycle / validation / testing / operational. Outcome: 8 green / 4 yellow / 0 red. Recommendation: GO with 6 conditions.
+
+**D.0.5 — ADR-HTTP-001 (2026-04-29, commit `a685294`):**
+
+- New ADR series: `HTTP-*`. ADR-HTTP-001 codifies Hono as the HTTP framework + the 6 binding conditions:
+  1. Pin `^4.x` minor-version range; major bumps reopen the ADR.
+  2. D.1 prototype measures cold-start p95 via OTel; reopen if > 500ms.
+  3. D.1 verifies `@hono/node-server` graceful shutdown within Cloud Run's 10s SIGTERM window (per gh:honojs/hono#3104).
+  4. Logging stack: `hono-pino`.
+  5. Error response shape: `hono-problem-details` (RFC 9457) + workspace-extended `{code, message, correlation_id, details?}` envelope.
+  6. `@hono/zod-validator` ↔ Zod 4 coupling tracked as roadmap item.
+- Resolves roadmap §10.11 (HTTP framework forcing function).
+
+**D.1 + D.2+ pending.** D.1 prototype must satisfy Conditions 2 + 3 before D.2+ implementation begins on `main`.
+
+**Slice D scope (per planning doc lines 302+):**
+
+- `tenants.rotateKeys(tenantId, ctx)` — 90-day default + on-demand; dual-key overlap window.
+- HTTP API for 9 endpoints (provision / suspend / resume / offboard / terminate / forceTerminate / rotateKeys / legalHolds.set + release).
+- TF: `infra/terraform/modules/tenant-cloud-run-service/` (generic per-tenant Cloud Run; D10).
+- TF: `key-rotation-queue` Cloud Tasks queue.
+- Cloud Run service-to-service IAM authz (D8).

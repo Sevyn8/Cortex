@@ -175,13 +175,35 @@ We're ending this Claude Code session. Before we wrap:
 
 1. Run all tests. Fix anything failing.
 2. Run the linter and type-checker. Fix anything failing.
-3. Commit all changes. Use conventional commit format: `feat(module): short description` or `fix(module): short description` or `docs(module): ...`. Include the prompt ID in the commit body.
-4. Update /docs/progress/status.md: move the current prompt ID to the appropriate section (Complete, In Progress, Blocked). If blocked, note why.
+3. Commit all changes. Conventional commit format: `feat(module): ...` / `fix(module): ...` / `docs(module): ...`. Include prompt ID in the commit body.
+4. Update /docs/progress/status.md: move the current prompt ID to the appropriate section (Complete, In Progress, Blocked). If blocked, note why. Append a completion note for any prompt or sub-phase that closed this session.
 5. Update /docs/architecture/decisions/ with an ADR for any significant architectural decision made this session.
 6. Write a short handoff note at /docs/progress/handoff-[YYYY-MM-DD].md summarizing: what was built, what's left, any surprises, any follow-up prompts recommended.
 7. Push the branch.
+8. Emit a final block titled `CLAUDE.AI PROJECT REFRESH` listing every doc file that changed (added, modified, or deleted) in this session's commits. Generate from `git diff --name-only --diff-filter=AMD origin/main~N..HEAD` scoped to `docs/` — do NOT generate from memory. Group by category in this exact order, one path per line, with a one-line reason in parentheses. Use `(none)` for empty categories. Mark deletions with `[deleted]` prefix.
 
-Do not fabricate progress. If something isn't working, say so.
+   Format:
+     CLAUDE.AI PROJECT REFRESH
+     status:
+       docs/progress/status.md (Slice C completion notes + tracker update)
+     adr:
+       docs/architecture/decisions/ADR-HTTP-001-hono-as-http-framework.md (new)
+     convention:
+       docs/architecture/tenant-lifecycle-convention.md (§6 expanded 254→522 lines)
+     planning:
+       (none)
+     spike:
+       docs/spikes/2026-04-28-hono-prod-readiness.md (new)
+     handoff:
+       docs/progress/handoff-2026-04-29.md (new)
+     build-prompts:
+       (none)
+     other:
+       [deleted] docs/architecture/f02-swap-paths-for-slice-c-resolvers.md (absorbed into convention Appendix A)
+
+   This is the upload manifest for the claude.ai Projects tab. The operator drags these exact files into the Project after the session ends.
+
+Do not fabricate progress. If something isn't working, say so. The refresh manifest must reflect actual git state, not intended state.
 ```
 
 ## M3: Spec Lookup (use when you need Claude Code to quote/summarize spec)

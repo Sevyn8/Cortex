@@ -1791,6 +1791,135 @@ async function rotateKeys(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// F02 Slice D D.3 — approveDedicatedDb (Q-OPEN-6 fold-in)
+// ─────────────────────────────────────────────────────────────────────
+
+const approveDedicatedDbOptionsSchema = z
+  .object({
+    /**
+     * User id of the operator approving the dedicated-DB provisioning.
+     * Phase 1: free-form string (Sevyn8 operator's id); AC01 will
+     * standardize the format. Captured in the audit payload for
+     * forensic attribution.
+     */
+    approvedByUserId: z.string().min(1).max(255),
+    /**
+     * Optional approval-context note (e.g., ticket id, cost
+     * justification). Stored in the audit payload.
+     */
+    notes: z.string().max(2000).optional(),
+  })
+  .strict();
+
+export type ApproveDedicatedDbOptions = z.input<typeof approveDedicatedDbOptionsSchema>;
+
+/**
+ * Approve a tenant's dedicated-DB provisioning (Q-OPEN-6 manual gate).
+ *
+ * ENTERPRISE-tier provisioning sets `tenant.status='REQUESTED'` and
+ * waits — the worker only advances REQUESTED → PROVISIONING when
+ * `tenant.dedicated_db_approved=true`. Phase 1 cost rationale: each
+ * dedicated Cloud SQL instance is $50–200/month; auto-provisioning on
+ * every Enterprise signup is operationally risky at low volume. An
+ * operator approves explicitly via this function (HTTP endpoint #12);
+ * D.4 + AC01 may automate the gate when Enterprise volume reaches
+ * ~10/month.
+ *
+ * Idempotent: re-approving a tenant whose flag is already true is a
+ * no-op (returns the row; no audit emit, no UPDATE). Mirrors the
+ * SB5 Option α pattern from `suspend` / `resume`.
+ *
+ * Phase sequence (single transaction):
+ *   1. SELECT … FOR UPDATE on the tenant row.
+ *   2. Idempotency: if `dedicated_db_approved=true` already, return.
+ *   3. Validation: tenant must be REQUESTED tier=ENTERPRISE. Other
+ *      statuses / tiers reject with TenantStatusError (the gate is
+ *      meaningful only for ENTERPRISE tenants awaiting provisioning).
+ *   4. UPDATE tenant SET dedicated_db_approved=true, updated_at=now().
+ *   5. Emit TENANT_DEDICATED_DB_APPROVED audit (UPDATE verb;
+ *      before_state.dedicated_db_approved=false, after_state=true;
+ *      payload.approved_by_user_id + optional payload.notes).
+ *
+ * The actual provisioning advance (REQUESTED → PROVISIONING) is the
+ * worker's job (Slice A). This function only flips the gate.
+ *
+ * @throws TenantValidationError invalid id / actor / options.
+ * @throws TenantNotFoundError no row matches `id`.
+ * @throws TenantStatusError tenant not REQUESTED OR not ENTERPRISE.
+ */
+async function approveDedicatedDb(
+  db: NodePgDatabase<Record<string, never>>,
+  id: string,
+  ctx: { actor: Actor },
+  options: ApproveDedicatedDbOptions,
+): Promise<Tenant> {
+  const parsedId = parseOrThrow(idSchema, id, 'approveDedicatedDb id');
+  const parsedActor = parseOrThrow(actorSchema, ctx.actor, 'approveDedicatedDb actor');
+  const parsedOptions = parseOrThrow(
+    approveDedicatedDbOptionsSchema,
+    options,
+    'approveDedicatedDb options',
+  );
+
+  return db.transaction(async (tx) => {
+    await bindTenantToDbSession(tx, parsedId);
+
+    const currentRows = await tx
+      .select()
+      .from(tenant)
+      .where(eq(tenant.id, parsedId))
+      .for('update')
+      .limit(1);
+    const current = currentRows[0];
+    if (current === undefined) {
+      throw new TenantNotFoundError(parsedId, 'id');
+    }
+
+    // Idempotent re-approve: already approved → return current row,
+    // no audit emit. Mirrors suspend/resume SB5 Option α.
+    if (current.dedicated_db_approved === true) {
+      return current;
+    }
+
+    // The gate is meaningful only for ENTERPRISE tenants in REQUESTED
+    // status. STANDARD tenants don't need the flag (no dedicated DB);
+    // post-REQUESTED tenants have already been provisioned (or are
+    // mid-provisioning, past the gate).
+    if (current.tier !== 'ENTERPRISE' || current.status !== 'REQUESTED') {
+      throw new TenantStatusError(parsedId, current.status, ['REQUESTED']);
+    }
+
+    const updated = await tx
+      .update(tenant)
+      .set({ dedicated_db_approved: true, updated_at: msNow })
+      .where(eq(tenant.id, parsedId))
+      .returning();
+    const next = updated[0];
+    if (next === undefined) {
+      throw new Error('tenants.approveDedicatedDb: UPDATE returned no row');
+    }
+
+    await emitAuditEvent(tx, {
+      tenantId: parsedId,
+      actorType: parsedActor.type,
+      actorId: parsedActor.id,
+      ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
+      action: getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_DEDICATED_DB_APPROVED'),
+      verb: 'UPDATE',
+      resource: `tenant:${parsedId}`,
+      before_state: { dedicated_db_approved: false },
+      after_state: { dedicated_db_approved: true },
+      payload: {
+        approved_by_user_id: parsedOptions.approvedByUserId,
+        ...(parsedOptions.notes !== undefined && { notes: parsedOptions.notes }),
+      },
+    });
+
+    return next;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Public namespace
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1808,4 +1937,5 @@ export const tenants = {
   terminate,
   forceTerminate,
   rotateKeys,
+  approveDedicatedDb,
 };

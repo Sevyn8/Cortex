@@ -67,6 +67,14 @@ export type { SetHoldOptions, ReleaseHoldOptions } from './legal-holds.js';
 
 // HTTP middleware
 export { buildTenantContextMiddleware, defaultHeaderExtractor } from './middleware.js';
+
+// Test-only escape — replaces the Cloud Tasks client factory with a
+// caller-supplied stub. Aliased on re-export to disambiguate at the
+// package boundary (plain `__setClientForTesting` is too generic
+// when multiple clients exist). Production code MUST NOT call this;
+// the `__` prefix is the workspace convention marking test-only API
+// (mirrors `@cortex/secrets`'s `__setClientFactoryForTesting`).
+export { __setClientForTesting as __setCloudTasksClientForTesting } from './cloud-tasks.js';
 export type {
   TenantContextMiddleware,
   TenantContextMiddlewareOptions,

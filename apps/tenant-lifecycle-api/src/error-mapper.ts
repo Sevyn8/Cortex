@@ -20,7 +20,7 @@ import {
   TenantStatusError,
   TenantValidationError,
 } from '@cortex/tenant-context';
-import { getCorrelationId } from '@cortex/observability';
+import { createLogger, getCorrelationId, type Logger } from '@cortex/observability';
 import type { ProblemDetailsInput } from 'hono-problem-details';
 
 export type CortexProblemExtensions = {
@@ -28,6 +28,18 @@ export type CortexProblemExtensions = {
   correlation_id?: string;
   details?: Record<string, unknown>;
 } & Record<string, unknown>;
+
+// Lazy-initialized observability logger for unhandled errors. The
+// production-safe response sent to the client stays generic ("An
+// unexpected error occurred"); the server-side log captures the
+// original error message + stack so D.3+ diagnostics aren't blind.
+// Lazy so the logger isn't constructed at module-eval time (keeps
+// cold-start instrumentation per ADR-HTTP-001 Condition 2 clean).
+let cachedLogger: Logger | undefined;
+function getErrorLogger(): Logger {
+  cachedLogger ??= createLogger({ moduleId: 'tenant-lifecycle-api' });
+  return cachedLogger;
+}
 
 export function mapError(err: Error): ProblemDetailsInput<CortexProblemExtensions> | undefined {
   const correlation_id = getCorrelationId();
@@ -83,7 +95,19 @@ export function mapError(err: Error): ProblemDetailsInput<CortexProblemExtension
     };
   }
 
-  // Returning undefined hands control back to problemDetailsHandler's
-  // default behavior (500 with RFC 9457 envelope).
+  // Unhandled error path → 500. Log the original message + stack to
+  // the observability logger BEFORE returning undefined (which hands
+  // control back to problemDetailsHandler's generic "Internal Server
+  // Error" response). The production-safe response stays generic; the
+  // server-side log captures the detail so D.3+ diagnostics aren't
+  // blind. Correlation_id (when present) ties the log line to the
+  // client's request.
+  getErrorLogger().error(
+    {
+      err: { message: err.message, stack: err.stack, name: err.name },
+      ...(correlation_id !== undefined && { correlation_id }),
+    },
+    'unhandled error in HTTP route',
+  );
   return undefined;
 }

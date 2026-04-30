@@ -52,6 +52,15 @@ export const TENANT_AUDIT_ACTIONS = registerAuditActions([
   { name: 'TENANT_FORCE_TERMINATED', verb: 'DELETE' },
   { name: 'LEGAL_HOLD_SET', verb: 'CREATE' },
   { name: 'LEGAL_HOLD_RELEASED', verb: 'DELETE' },
+  // F02 Slice D D.3 — Q-OPEN-6 fold-in. Manual operator approval gate
+  // for ENTERPRISE dedicated-DB provisioning. Sets
+  // tenant.dedicated_db_approved=true; provisioning worker advances
+  // REQUESTED → PROVISIONING only after this flag flips. UPDATE verb
+  // (boolean transition false → true; before/after state captures the
+  // flip). Caller actor preserved for forensic attribution — operators
+  // querying "who approved the dedicated DB for tenant X" filter on
+  // this action.
+  { name: 'TENANT_DEDICATED_DB_APPROVED', verb: 'UPDATE' },
 ] as const);
 
 /**

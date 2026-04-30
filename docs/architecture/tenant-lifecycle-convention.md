@@ -1813,8 +1813,161 @@ cooldown on scheduled rotations handles this: the second + third
 
 - the per-task SLA monitoring + the cleanup-old-task pruner.
 
-D.6 fills §7.6 (IAM + invoker authz) + §7.7 (forensic queries) per
-Q-NEW-D-12.
+### 7.6 HTTP API surface — 12 endpoints `[F02-D.3]`
+
+The user-facing surface ships on `apps/tenant-lifecycle-api/`. All
+endpoints under `/v1/tenants/*` go through Hono's path-param routing;
+each handler binds via `withTenantDbClient(pool, id, fn)` inline
+(per the §7.1 Cloud SQL connection model + Q-NEW-D-8). The
+header-based `buildTenantContextMiddleware` from D.1 stays in place
+with `rejectMissingTenant=false` so a future caller using
+`x-cortex-tenant-id` gets binding for free, but the routes shipped
+today don't depend on it.
+
+**Endpoints (12).** Audit emissions reference catalog actions
+registered in `packages/tenant-context/src/audit-actions.ts`. Status
+codes follow the §7.4 / §7.5 error-mapping table — no new mappings
+in D.3.
+
+| Method | Path                                   | Library                      | Audit                          | Scope       |
+| ------ | -------------------------------------- | ---------------------------- | ------------------------------ | ----------- |
+| GET    | `/v1/tenants`                          | `tenants.list`               | none (read)                    | super-admin |
+| POST   | `/v1/tenants`                          | `tenants.provision`          | TENANT_PROVISIONED (deferred¹) | open²       |
+| GET    | `/v1/tenants/:id`                      | `tenants.get`                | none (read)                    | open²       |
+| POST   | `/v1/tenants/:id/suspend`              | `tenants.suspend`            | TENANT_SUSPENDED               | open²       |
+| POST   | `/v1/tenants/:id/resume`               | `tenants.resume`             | TENANT_STATUS_CHANGED          | open²       |
+| POST   | `/v1/tenants/:id/offboard`             | `tenants.offboard`           | TENANT_OFFBOARDING_STARTED     | open²       |
+| POST   | `/v1/tenants/:id/terminate`            | `tenants.terminate`          | TENANT_TERMINATED              | open²       |
+| POST   | `/v1/tenants/:id/force-terminate`      | `tenants.forceTerminate`     | TENANT_FORCE_TERMINATED        | super-admin |
+| POST   | `/v1/tenants/:id/rotate-keys`          | `tenants.rotateKeys`         | TENANT_KEY_ROTATED             | open²       |
+| POST   | `/v1/tenants/:id/legal-holds`          | `legalHolds.set`             | LEGAL_HOLD_SET                 | open²       |
+| DELETE | `/v1/tenants/:id/legal-holds/:hold_id` | `legalHolds.release`         | LEGAL_HOLD_RELEASED            | open²       |
+| POST   | `/v1/tenants/:id/approve-dedicated-db` | `tenants.approveDedicatedDb` | TENANT_DEDICATED_DB_APPROVED   | super-admin |
+
+¹ TENANT_PROVISIONED emits when the worker advances PROVISIONING →
+READY (worker actor); the HTTP create call emits TENANT_CREATED +
+TENANT_KMS_KEY_BOUND (and optionally TENANT_CONFIG_VERSION_CREATED)
+synchronously per `tenants.create` precedent.
+
+² **Open** in Phase 1 = "deny-by-default at the SD8 Cloud Run
+invoker IAM floor; per-method gates ship with AC01." The Phase 1
+super-admin endpoints are wrapped with `requireSuperAdmin()` — a
+named, no-op middleware whose only purpose is to mark the
+extension point AC01 will replace. Real per-method enforcement is
+not in D.3.
+
+**Naming + envelope conventions.**
+
+- Path patterns: `/v1/tenants` (collection), `/v1/tenants/:id`
+  (resource), `/v1/tenants/:id/{action}` (action verb in path).
+  REST-correct DELETE for legal-hold release (idempotent;
+  204 No Content).
+- Body wire format: `snake_case` (matches the spec text + the
+  `audit_event.payload` JSONB shape per audit-event-convention.md).
+  Library functions use camelCase internally; routes do the
+  snake↔camel translation explicitly at the boundary.
+- Status codes per §7.4 error-mapping table:
+  - 200 OK — happy path for read + state-change endpoints.
+  - 201 Created — `legalHolds.set` (new resource).
+  - 202 Accepted — `tenants.create` (workflow runs async via
+    Cloud Tasks per ADR-LIFECYCLE-001).
+  - 204 No Content — `legalHolds.release` (idempotent delete).
+  - 400 — TenantValidationError + zod schema rejections.
+  - 401 — OIDC validation failure (worker route only; not D.3).
+  - 404 — TenantNotFoundError.
+  - 409 — TenantStatusError, TenantRotationCooldownError,
+    TenantLegalHoldError, TenantGraceNotElapsedError.
+  - 5xx — uncategorized (DB transient, KMS unavailable). Cloud
+    Tasks retries on 5xx; clients retry per their own policy.
+
+**On-demand vs scheduled rotation actor distinction.** The HTTP
+`POST /v1/tenants/:id/rotate-keys` path uses the caller actor
+(Phase 1 placeholder: `{ type: 'service', id:
+'cortex-tenant-lifecycle-api' }`). The Cloud Tasks worker route at
+`/v1/_workers/key-rotation` (D.2) uses
+`cortex-tenant-lifecycle-worker`. Forensic queries filter on
+`actor_id` to disambiguate operator-initiated vs scheduled
+rotations.
+
+**Operator runbook (curl).**
+
+```bash
+# All examples assume the service URL is in $URL and an identity
+# token (per SD8 Cloud Run invoker IAM) is in $TOKEN:
+URL=$(gcloud run services describe tenant-lifecycle-shared \
+  --project=sevyn8-cortex-dev --region=asia-south1 \
+  --format='value(status.url)')
+TOKEN=$(gcloud auth print-identity-token)
+H="Authorization: Bearer $TOKEN"
+
+# Read: tenant by id
+curl -sH "$H" "$URL/v1/tenants/$TENANT_ID"
+
+# List (super-admin)
+curl -sH "$H" "$URL/v1/tenants?limit=20&offset=0"
+
+# Create
+curl -sH "$H" -X POST "$URL/v1/tenants" \
+  -H 'content-type: application/json' \
+  -d '{"external_id":"acme","display_name":"Acme","tier":"STANDARD"}'
+
+# Suspend
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/suspend" \
+  -H 'content-type: application/json' \
+  -d '{"reason":"compliance review SEC-1234"}'
+
+# Resume
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/resume" \
+  -H 'content-type: application/json' -d '{}'
+
+# Offboard
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/offboard" \
+  -H 'content-type: application/json' \
+  -d '{"grace_period_days":30}'
+
+# Terminate (after grace elapses; otherwise 409)
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/terminate" \
+  -H 'content-type: application/json' -d '{}'
+
+# Force-terminate (super-admin; bypasses grace + legal hold)
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/force-terminate" \
+  -H 'content-type: application/json' \
+  -d '{"reason":"compliance escalation"}'
+
+# Rotate keys (on-demand; bypasses 24-h cooldown)
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/rotate-keys" \
+  -H 'content-type: application/json' -d '{}'
+
+# Set legal hold (scope=tenant)
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/legal-holds" \
+  -H 'content-type: application/json' \
+  -d '{"scope":"tenant","reason":"litigation","set_by_user_id":"legal-team-1"}'
+
+# Release legal hold (idempotent; 204)
+curl -sH "$H" -X DELETE "$URL/v1/tenants/$TENANT_ID/legal-holds/$HOLD_ID" \
+  -H 'content-type: application/json' \
+  -d '{"released_by_user_id":"legal-team-1"}'
+
+# Approve Enterprise dedicated-DB provisioning (super-admin)
+curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/approve-dedicated-db" \
+  -H 'content-type: application/json' \
+  -d '{"approved_by_user_id":"cfo-1","notes":"FIN-42"}'
+```
+
+**Cross-references.**
+
+- §7.4 error-mapping table is THE contract for library-throw →
+  HTTP-status. D.3 inherits verbatim; no extensions.
+- §7.5 failure-mode table covers the worker route's stuck-rotation
+  runbook; equivalent operator runbooks for the other endpoints
+  live in §4 (provisioning) / §5 (suspend/resume cascade) /
+  §6 (offboard/terminate).
+- §7.7 (D.5; not yet shipped) will document the per-method authz
+  layer when AC01 wires real super-admin checks; the
+  `requireSuperAdmin()` placeholder in D.3 is the seam.
+
+D.5 fills §7.7 (IAM + invoker authz) and D.6 fills §7.8 (forensic
+queries) per Q-NEW-D-12.
 
 ## 8. Operational patterns
 

@@ -10,8 +10,8 @@ import { getActionByName } from '@cortex/audit-events';
 import { TENANT_AUDIT_ACTIONS } from '../src/audit-actions.js';
 
 describe('TENANT_AUDIT_ACTIONS — catalog shape', () => {
-  it('has 14 total actions (5 Slice A + 6 F02 lifecycle + 3 Slice C 7.5 additions)', () => {
-    expect(TENANT_AUDIT_ACTIONS.length).toBe(14);
+  it('has 15 total actions (5 Slice A + 6 F02 lifecycle + 3 Slice C 7.5 + 1 F02 D.3 addition)', () => {
+    expect(TENANT_AUDIT_ACTIONS.length).toBe(15);
   });
 
   it('every entry has a non-empty name and a verb', () => {
@@ -94,5 +94,13 @@ describe('TENANT_AUDIT_ACTIONS — F02 Slice C 7.5 additions', () => {
 
   it('LEGAL_HOLD_RELEASED is registered with DELETE verb', () => {
     expect(getActionByName(TENANT_AUDIT_ACTIONS, 'LEGAL_HOLD_RELEASED').verb).toBe('DELETE');
+  });
+});
+
+describe('TENANT_AUDIT_ACTIONS — F02 D.3 additions', () => {
+  it('TENANT_DEDICATED_DB_APPROVED is registered with UPDATE verb (Q-OPEN-6 manual gate flip)', () => {
+    expect(getActionByName(TENANT_AUDIT_ACTIONS, 'TENANT_DEDICATED_DB_APPROVED').verb).toBe(
+      'UPDATE',
+    );
   });
 });

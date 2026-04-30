@@ -24,8 +24,8 @@ import type { AppConfig } from './config.js';
 import { mapError } from './error-mapper.js';
 import type { Telemetry } from './observability.js';
 import { buildHealthRoutes } from './routes/health.js';
-import { buildTenantRoutes } from './routes/tenants.js';
 import { buildTestRoutes } from './routes/test.js';
+import { buildV1TenantRoutes } from './routes/v1/tenants.js';
 import { buildKeyRotationWorkerRoutes } from './routes/workers/key-rotation.js';
 
 export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telemetry }): Hono {
@@ -47,27 +47,24 @@ export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telem
     }),
   );
 
-  // Step 3: tenant-context binding. /health + /v1/test/* skip the
-  // header check; the slow-5s endpoint isn't tenant-scoped. Worker
-  // routes under /v1/_workers/* derive tenant_id from the request
-  // body (Cloud Tasks payload), not the header — also skipped here;
-  // their OIDC middleware is registered per-route inside the worker
-  // builder. The adapter is captured into a local before passing to
-  // `app.use` so `this` is preserved (lint:
-  // @typescript-eslint/unbound-method).
+  // Step 3: tenant-context binding (header-based; from D.1). D.3's
+  // user routes do NOT use this — they extract tenant_id from the
+  // path parameter and bind via withTenantDbClient inline (per the
+  // §7.1 Cloud SQL connection model + Q-NEW-D-8). The middleware
+  // stays in place with rejectMissingTenant=false so a future caller
+  // that DOES set x-cortex-tenant-id gets the binding for free, but
+  // its absence is not a request-failure mode for the routes shipped
+  // today. The worker route under /v1/_workers/* bypasses entirely
+  // (its tenant_id flows from the Cloud Tasks payload).
   const tenantMw = buildTenantContextMiddleware({
     skipPaths: ['/health', '/v1/test/slow-5s', '/v1/_workers/key-rotation'],
-    // D.1 doesn't validate tenant existence in the middleware —
-    // the route handler does it via `tenants.get`. D.3 may layer
-    // existence checks at the middleware for endpoints that don't
-    // already do their own DB read.
-    rejectMissingTenant: true,
+    rejectMissingTenant: false,
   });
   app.use('*', (c, next) => tenantMw.hono(c, next));
 
   // Step 4: routes.
   app.route('/', buildHealthRoutes(config.COMMIT_SHA));
-  app.route('/', buildTenantRoutes(pool));
+  app.route('/', buildV1TenantRoutes(pool));
   app.route('/', buildKeyRotationWorkerRoutes({ config, pool }));
   if (config.ENABLE_TEST_ROUTES) {
     app.route('/', buildTestRoutes());

@@ -322,7 +322,16 @@ module "tenant_lifecycle_shared" {
     LIFECYCLE_WORKER_URL    = "${var.tenant_lifecycle_service_url}/v1/_workers/lifecycle"
   } : {}
 
-  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d4" })
+  # Invoker IAM allowlist (D.5). See dev/main.tf for rationale. Apply
+  # deferred per roadmap §2.5a (BILLING_DISABLED on prod until billing
+  # is re-attached).
+  invoker_service_accounts = [
+    "cortex-tf-admin@${var.project_id}.iam.gserviceaccount.com",
+    google_service_account.tenant_lifecycle_runtime.email,
+  ]
+  invoker_user_emails = var.operator_emails
+
+  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d5" })
 
   depends_on = [
     module.cloud_sql,

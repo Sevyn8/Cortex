@@ -201,3 +201,36 @@ variable "secret_env_vars" {
     populate this.
   EOT
 }
+
+variable "invoker_service_accounts" {
+  type        = list(string)
+  default     = []
+  description = <<-EOT
+    Service-account emails granted `roles/run.invoker` on this Cloud
+    Run service. Phase 1 invoker IAM allowlist per planning-doc SD8 +
+    F02 Slice D D.5 — deny-by-default at the Cloud Run platform layer;
+    explicit allowlist of caller identities. Empty list = no SA
+    invokers (combined with empty `invoker_user_emails`, the service
+    is fully unreachable; both lists empty is operationally pointless
+    and indicates a wiring error). Typical members:
+      - `cortex-tf-admin-{env}` — operator + integration-test path
+      - Cloud Tasks dispatcher SA(s) — for worker routes (Phase 1
+        uses the runtime SA per Q-NEW-D-11; not added here unless the
+        dispatcher splits)
+    Per-method authz lands in AC01 (P2.1); Phase 1 tops out at
+    invoker-level auth.
+  EOT
+}
+
+variable "invoker_user_emails" {
+  type        = list(string)
+  default     = []
+  description = <<-EOT
+    User emails granted `roles/run.invoker` on this Cloud Run service.
+    Operator break-glass identities. Mirrors the `operator_emails`
+    pattern from D.4's `lifecycle_runtime_operator_user` binding.
+    Empty list = no user invokers. Typical use: lets the on-call
+    operator hit /health + lifecycle endpoints from `gcloud auth
+    print-identity-token` without minting an impersonation token.
+  EOT
+}

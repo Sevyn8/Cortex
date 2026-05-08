@@ -2094,41 +2094,132 @@ curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/approve-dedicated-db" \
 D.5 fills §7.7 (IAM + invoker authz) and D.6 fills §7.8 (forensic
 queries) per Q-NEW-D-12.
 
-### 7.7 IAM + invoker authz `[F02-D.5; placeholder]`
+### 7.7 IAM + invoker authz `[F02-D.5]`
 
-**Status: stubbed by D.4; content lands with D.5.**
+**Status: landed 2026-05-08 (commit `<TBD>`).** Gate evidence:
+`docs/planning/d5-gate-evidence.md` (3 live curls + IAM-policy
+snapshot).
 
-D.4 sets up the **deny-by-default surface** but does not grant
-invoker IAM:
+#### 7.7.1 Invoker IAM model
 
-- TF module `tenant-cloud-run-service` deploys with
-  `--no-allow-unauthenticated` (SD8 lock).
-- No `roles/run.invoker` is granted on the deployed service. Any
-  caller — including the dispatcher SA enqueueing Cloud Tasks —
-  gets 401 / 403 today.
-- Operator access during D.4 measurement uses
-  `gcloud run services proxy` (token from operator's user identity;
-  bypasses the invoker IAM floor for local-tunnel access only).
+Cloud Run platform-layer authz floor per planning-doc SD8:
+**deny-by-default + explicit allowlist**. The service has NO
+`--allow-unauthenticated` flag set and NO `allUsers` member; every
+caller must hold `roles/run.invoker` to reach the Hono app at all.
 
-**D.5 will land:**
+The allowlist has three principal classes per env:
 
-1. `roles/run.invoker` on the runtime SA itself (so Cloud Tasks
-   self-dispatch reaches `/v1/_workers/*`). Per Q-NEW-D-11 →
-   Option 1 the dispatcher and the runtime are the same
-   principal — one binding covers both.
-2. `roles/run.invoker` on operator emails for break-glass curl
-   access. Reuses `var.operator_emails` (D.4 already accepts the
-   list for `iam.serviceAccountUser`).
-3. The `requireSuperAdmin()` placeholder middleware from D.3 gets
-   replaced with real WorkOS-backed checks (Phase 1: feature-flag
-   gated; full enforcement at AC01 / P2.1 boundary).
-4. Per-method authz — the matrix landing in this section: which
-   roles can call which `/v1/tenants/*` endpoints. Phase 1 default
-   is "all open²" per the §7.6 endpoint table; D.5 narrows to
-   admin-vs-tenant-operator splits.
+| Principal                                             | Member            | Purpose                                                                                                                                           |
+| ----------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cortex-tf-admin@sevyn8-cortex-{env}` SA              | `serviceAccount:` | Operator + integration-test path via impersonation flow                                                                                           |
+| `tenant-lifecycle-runtime@sevyn8-cortex-{env}` SA     | `serviceAccount:` | Cloud Tasks → Cloud Run worker-route dispatches (Q-NEW-D-11 Option 1: dispatcher + runtime are the same SA, so the service must allowlist itself) |
+| `var.operator_emails` (currently `[amit@sevyn8.com]`) | `user:`           | Break-glass + manual-curl paths; reuses the same list as the runtime-SA `iam.serviceAccountUser` grant from D.4                                   |
 
-The §7.6 endpoint-table column "Scope" (open² vs super-admin) is
-the seam D.5 enforces. No new endpoints in D.5.
+The runtime SA grant is what makes D.2's deployed
+`POST /v1/_workers/key-rotation` reachable — Cloud Tasks dispatches
+with an OIDC ID token whose subject is the runtime SA, target
+audience is the worker URL. Without the self-allowlist, every
+dispatched task would return 403 from the platform layer before
+reaching the Hono OIDC validation. D.4.5's future provisioning
+worker uses the same path.
+
+#### 7.7.2 TF wiring shape
+
+**Module-level** (`infra/terraform/modules/tenant-cloud-run-service/`):
+
+- `var.invoker_service_accounts` — list of SA emails (default `[]`).
+  Module emits one `google_cloud_run_v2_service_iam_member` per
+  entry with `member = "serviceAccount:${each.value}"`.
+- `var.invoker_user_emails` — list of user emails (default `[]`).
+  Module emits one `google_cloud_run_v2_service_iam_member` per
+  entry with `member = "user:${each.value}"`.
+
+Two resources rather than one with a coalesced `for_each` because
+the principal-type prefix (`serviceAccount:` vs `user:`) differs
+per identity class — clearer to reviewers, no string-mangling at
+the `for_each` boundary. Standard `google_*_iam_member` (additive)
+pattern per CLAUDE.md "Terraform conventions"; never
+`*_iam_binding` / `*_iam_policy` (authoritative).
+
+**Env-level** (e.g., `infra/terraform/environments/dev/main.tf`):
+
+```hcl
+invoker_service_accounts = [
+  "cortex-tf-admin@${var.project_id}.iam.gserviceaccount.com",
+  google_service_account.tenant_lifecycle_runtime.email,
+]
+invoker_user_emails = var.operator_emails
+```
+
+The `cortex-tf-admin-{env}` reference is a literal-string
+interpolation rather than a TF data source: bootstrap creates the
+SA with a deterministic name, and env-level main.tf doesn't manage
+its lifecycle. Hardcoded string is the workspace pattern.
+
+#### 7.7.3 The 3-case integration test
+
+`apps/tenant-lifecycle-api/test/integration/iam-authz.integration.spec.ts`
+shells out to `gcloud auth print-identity-token` and hits the
+LIVE Cloud Run dev URL. NOT in-process via `app.request()` — the
+whole point is exercising the Google front-end's invoker-IAM gate,
+which never reaches the Hono app for the deny case.
+
+| Case | Token                                                                                                           | Expected | What it proves                                                                                                                                                                                          |
+| ---- | --------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A    | none (no `Authorization` header)                                                                                | 403      | Cloud Run platform deny — no SA / user / `allUsers` member can call without a valid invoker grant                                                                                                       |
+| B    | `gcloud auth print-identity-token` (operator user identity)                                                     | 200      | `user:` invoker grant works; default audience matched against user-grant principal type                                                                                                                 |
+| C    | `gcloud auth print-identity-token --impersonate-service-account=cortex-tf-admin-{env} --audiences=$SERVICE_URL` | 200      | SA impersonation flow works (operator → tokenCreator on cortex-tf-admin via cortex-admins group → mint OIDC token → service accepts because `serviceAccount:cortex-tf-admin-dev` has the invoker grant) |
+
+**Skip semantics:** the spec is `describe.skipIf(SKIP)` where
+`SKIP = !process.env.CORTEX_INTEGRATION_TESTS`. Matches the P0.7
+precedent (`packages/secrets/test/integration/`). Operator runs
+manually:
+
+```bash
+CORTEX_INTEGRATION_TESTS=1 \
+CORTEX_TENANT_LIFECYCLE_URL=$(gcloud run services describe \
+  tenant-lifecycle-shared --project=sevyn8-cortex-dev \
+  --region=asia-south1 --format='value(status.url)') \
+  pnpm vitest run test/integration/iam-authz.integration.spec.ts
+```
+
+Not run in CI today — CI lacks `gcloud auth` wiring (D.6 may
+address via WIF). For Phase 1, the 3 manual curls in
+`docs/planning/d5-gate-evidence.md` are the authoritative
+acceptance evidence; the spec is the automation-ready form.
+
+#### 7.7.4 What's deliberately NOT in D.5
+
+- **Per-method authz** — which roles can call which
+  `/v1/tenants/*` endpoint. The §7.6 endpoint-table "Scope" column
+  (`open²` vs `super-admin`) is the seam, but the actual gate stays
+  the Phase-1 placeholder (`defaultSuperAdminGuard` no-op + Cloud
+  Run invoker IAM floor). AC01 (P2.1) replaces both with WorkOS
+  role membership checks.
+- **`allUsers` removal** — the Cortex Cloud Run service was never
+  configured with `--allow-unauthenticated` in any env. There's no
+  legacy binding to remove.
+- **Per-tenant deploy IAM** — when ENTERPRISE per-tenant Cloud Run
+  services land (post-ADR-INFRA-005 swap), each will have its own
+  invoker allowlist scoped to that tenant's operator + dispatcher
+  identities. Module's `mode="tenant"` shape supports the same
+  invoker variables; env-level wiring will populate per-tenant.
+
+#### 7.7.5 Forward-looking (D.6 + AC01)
+
+D.6 may wire CI to run the integration test under WIF (no operator
+gcloud auth needed). The 4-step sketch: WIF allows GitHub Actions
+to impersonate `cortex-ci-test-shared` SA → that SA holds
+`tokenCreator` on `cortex-tf-admin-dev` → CI mints impersonation
+ID tokens → 3-case test runs. Roadmap §4.5 already tracks the
+`cortex-ci-test-shared` provisioning trigger as "first GCP-accessing
+CI workflow needs to call GCP APIs".
+
+AC01 layers per-method authz on top of D.5's invoker floor. Cloud
+Run IAM stays as the platform-level deny; per-method WorkOS-role
+checks gate inside the app. The two compose: a request needs both
+(a) a token from a member of the invoker allowlist AND (b) the
+right WorkOS role for the route's required permission.
 
 ## 8. Operational patterns
 

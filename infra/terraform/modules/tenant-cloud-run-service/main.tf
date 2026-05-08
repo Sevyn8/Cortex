@@ -184,3 +184,35 @@ resource "google_cloud_run_v2_service" "this" {
     ]
   }
 }
+
+# ─── Invoker IAM allowlist (F02 Slice D D.5) ───────────────────────────────
+# Cloud Run service is deny-by-default — no `--allow-unauthenticated`,
+# no `allUsers` member. The two resources below grant `roles/run.invoker`
+# to the explicit lists in `var.invoker_service_accounts` +
+# `var.invoker_user_emails`. Standard `google_*_iam_member` (additive)
+# pattern per CLAUDE.md "Terraform conventions" — never `*_iam_binding`
+# / `*_iam_policy` (authoritative).
+#
+# Member-prefix split (`serviceAccount:` vs `user:`) per IAM principal-type
+# rules. Two resources rather than one with a coalesced for_each because
+# the principal-type prefix is different per identity class — clearer to
+# reviewers and avoids string-mangling at the for_each boundary.
+resource "google_cloud_run_v2_service_iam_member" "invoker_service_accounts" {
+  for_each = toset(var.invoker_service_accounts)
+
+  project  = google_cloud_run_v2_service.this.project
+  location = google_cloud_run_v2_service.this.location
+  name     = google_cloud_run_v2_service.this.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${each.value}"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "invoker_user_emails" {
+  for_each = toset(var.invoker_user_emails)
+
+  project  = google_cloud_run_v2_service.this.project
+  location = google_cloud_run_v2_service.this.location
+  name     = google_cloud_run_v2_service.this.name
+  role     = "roles/run.invoker"
+  member   = "user:${each.value}"
+}

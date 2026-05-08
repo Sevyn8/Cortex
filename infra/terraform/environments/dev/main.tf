@@ -452,7 +452,24 @@ module "tenant_lifecycle_shared" {
     } : {},
   )
 
-  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d4" })
+  # Invoker IAM allowlist (D.5).
+  #   - cortex-tf-admin-{env}: operator + integration-test access path
+  #     (impersonation flow).
+  #   - tenant-lifecycle-runtime: Cloud Tasks → Cloud Run worker-route
+  #     dispatches. Per Q-NEW-D-11 Option 1, the runtime SA is also
+  #     the Cloud Tasks OIDC token subject; the dispatcher and target
+  #     are the same SA so the service must allowlist itself as an
+  #     invoker. Two known consumers: D.2's POST /v1/_workers/key-rotation
+  #     (deployed) and D.4.5's future provisioning worker.
+  #   - operator_emails: break-glass + manual-curl paths (reuses the
+  #     same list as the runtime-SA actAs grant).
+  invoker_service_accounts = [
+    "cortex-tf-admin@${var.project_id}.iam.gserviceaccount.com",
+    google_service_account.tenant_lifecycle_runtime.email,
+  ]
+  invoker_user_emails = var.operator_emails
+
+  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d5" })
 
   depends_on = [
     module.cloud_sql,

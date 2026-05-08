@@ -2096,7 +2096,7 @@ queries) per Q-NEW-D-12.
 
 ### 7.7 IAM + invoker authz `[F02-D.5]`
 
-**Status: landed 2026-05-08 (commit `<TBD>`).** Gate evidence:
+**Status: landed 2026-05-08 (commit `c4fdc41`).** Gate evidence:
 `docs/planning/d5-gate-evidence.md` (3 live curls + IAM-policy
 snapshot).
 

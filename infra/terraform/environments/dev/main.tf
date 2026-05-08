@@ -295,3 +295,171 @@ module "cortex_signer_sa" {
   runtime_sa_email        = google_service_account.tenant_lifecycle_runtime.email
   tenant_data_bucket_name = module.tenant_data_bucket.bucket_name
 }
+
+# ─── F02 Slice D D.4 — tenant-lifecycle-shared deployment ───────────────────
+# Adds the cross-cutting bindings needed to deploy tenant-lifecycle-api as a
+# Cloud Run service running as tenant_lifecycle_runtime:
+#   1. Operator break-glass impersonation (roles/iam.serviceAccountUser)
+#   2. Cloud SQL IAM auth path (cloudsql.client + instanceUser + sql_user)
+#   3. Cross-project Artifact Registry pull (cortex-apps in shared)
+#   4. Key-rotation-queue (Cloud Tasks dispatch)
+#   5. tenant-lifecycle-shared Cloud Run service via tenant-cloud-run-service
+#
+# Companion migration 0012_tenant_lifecycle_runtime_grants.sql provisions the
+# SQL-level GRANTs for the role created by google_sql_user below.
+
+# 1. Operator-email → roles/iam.serviceAccountUser on the runtime SA. Lets
+#    listed operators run break-glass `gcloud run deploy --service-account=
+#    tenant-lifecycle-runtime@<project>.iam.gserviceaccount.com` without
+#    standing access to the SA's key material. List lives in local.auto.tfvars.
+resource "google_service_account_iam_member" "lifecycle_runtime_operator_user" {
+  for_each = toset(var.operator_emails)
+
+  service_account_id = google_service_account.tenant_lifecycle_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "user:${each.value}"
+}
+
+# 2. Cloud SQL IAM auth — three pieces. roles/cloudsql.client lets the SA
+#    reach the instance over private IP; roles/cloudsql.instanceUser lets the
+#    SA login via IAM (not password); google_sql_user of type
+#    CLOUD_IAM_SERVICE_ACCOUNT registers the SA as a Cloud SQL DB role
+#    (visible in pg_roles after first connect). Migration 0012 grants the
+#    SQL-level permissions the role then needs.
+resource "google_project_iam_member" "lifecycle_runtime_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+resource "google_project_iam_member" "lifecycle_runtime_cloudsql_instance_user" {
+  project = var.project_id
+  role    = "roles/cloudsql.instanceUser"
+  member  = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+resource "google_sql_user" "lifecycle_runtime" {
+  project  = var.project_id
+  instance = module.cloud_sql.instance_name
+  type     = "CLOUD_IAM_SERVICE_ACCOUNT"
+  # Cloud SQL IAM-auth username convention: SA email minus the
+  # ".gserviceaccount.com" suffix.
+  name = replace(google_service_account.tenant_lifecycle_runtime.email, ".gserviceaccount.com", "")
+}
+
+# 3. Cross-project Artifact Registry pull. The cortex-apps repo lives in
+#    sevyn8-cortex-shared (per shared/main.tf). Each env's runtime SA gets
+#    artifactregistry.reader on that repo so Cloud Run can pull images.
+#    Repo-level (not project-level) grant — narrowest viable scope.
+resource "google_artifact_registry_repository_iam_member" "lifecycle_runtime_apps_reader" {
+  project    = var.shared_project_id
+  location   = var.region
+  repository = "cortex-apps"
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+# Cloud Run *deployment* uses a separate identity from the runtime SA: the
+# per-project Cloud Run Service Agent (`service-{project_number}@
+# serverless-robot-prod.iam.gserviceaccount.com`). When pulling images
+# cross-project, this Service Agent ALSO needs
+# `roles/artifactregistry.reader` on cortex-apps — the runtime SA's grant
+# above only covers runtime image pulls. Without this binding,
+# `gcloud run services update --image=<cross-project>` fails with
+# "Cloud Run Service Agent must have permission to read the image".
+# Email is project-number-derived and Google-managed; one per env.
+resource "google_artifact_registry_repository_iam_member" "cloud_run_service_agent_apps_reader" {
+  project    = var.shared_project_id
+  location   = var.region
+  repository = "cortex-apps"
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"
+}
+
+# 4. Cloud Tasks queue for KMS key-rotation worker dispatches. Pattern matches
+#    provisioning-queue + lifecycle-queue above (Slice C); same dispatcher SA.
+#    Halved dispatch rate vs. the others — KMS rotation is slow async work
+#    (CreateCryptoKeyVersion + UpdateCryptoKeyPrimaryVersion + 30-day destroy
+#    schedule); 5/s is generous. max_concurrent_dispatches stays at module
+#    default (10) — tasks block on KMS API, not DB connections.
+module "cloud_tasks_key_rotation_queue" {
+  source = "../../modules/cloud-tasks-queue"
+
+  project_id                 = var.project_id
+  location                   = var.region
+  queue_name                 = "key-rotation-queue"
+  dispatcher_service_account = google_service_account.tenant_lifecycle_runtime.email
+  max_dispatches_per_second  = 5
+
+  depends_on = [module.project_baseline]
+}
+
+# 5. tenant-lifecycle-shared Cloud Run service. Mode=shared per Q-NEW-D-10
+#    (STANDARD-tier tenants share; ENTERPRISE per-tenant deploys land
+#    post-ADR-INFRA-005 swap). Image URI defaults empty + lifecycle.
+#    ignore_changes preserves out-of-band gcloud-run-deploy SHAs.
+#
+#    min_instances = 0 in dev: cold-start is observable (intentional —
+#    cold-start measurements feed §6 budget validation). Staging and prod
+#    set 1 to eliminate platform-cold-start from operator hot path.
+#
+#    Worker URLs (LIFECYCLE_WORKER_URL, PROVISIONING_WORKER_URL) are
+#    declared below as self-references — the dispatcher + worker are the
+#    same Cloud Run service. The URL `tenant_lifecycle_image_uri` is
+#    deterministic per project + service (Cloud Run v2 hash format) so
+#    can be hardcoded in `local.auto.tfvars` once the first revision
+#    lands. KEY_ROTATION_WORKER_URL is not consumed by Phase-1 code (the
+#    `/v1/_workers/key-rotation` route is pull-only); add when the
+#    enqueue path goes live. Original D.4 design said "out-of-band" but
+#    that was never wired in deploy-dev.sh — surfaced + corrected in D.4
+#    close-out.
+module "tenant_lifecycle_shared" {
+  source = "../../modules/tenant-cloud-run-service"
+
+  project_id                        = var.project_id
+  location                          = var.region
+  environment                       = "dev"
+  mode                              = "shared"
+  workload                          = "tenant-lifecycle"
+  runtime_sa_email                  = google_service_account.tenant_lifecycle_runtime.email
+  cloudsql_instance_connection_name = module.cloud_sql.connection_name
+  vpc_connector_id                  = module.networking.vpc_connector_id
+  image_uri                         = var.tenant_lifecycle_image_uri
+  min_instances                     = 0
+
+  # Dev-only env knobs. NODE_ENV=development unlocks /v1/test/slow-5s;
+  # ENABLE_TEST_ROUTES=true unlocks the test-routes mounted under
+  # /v1/test/*. Staging + prod do NOT carry these (production posture
+  # per convention §7.1). COMMIT_SHA is image-baked at build time via
+  # the Dockerfile ARG (set by `make image-bootstrap`), so it doesn't
+  # need to be a Cloud Run env var here. Closes the deploy-vs-TF
+  # env-var drift seam discovered during D.4 finalization.
+  #
+  # Worker URLs are self-references: tenant-lifecycle-shared dispatches
+  # to itself via Cloud Tasks. Cloud Run v2 service URLs are stable per
+  # `(project, region, service-name)` — sourced from
+  # `var.tenant_lifecycle_service_url` (set via local.auto.tfvars after
+  # first revision lands). Empty default → omit the env var (the create
+  # path will 500 with a clear error message). See convention §7.4.
+  extra_env_vars = merge(
+    {
+      NODE_ENV           = "development"
+      ENABLE_TEST_ROUTES = "true"
+    },
+    var.tenant_lifecycle_service_url != "" ? {
+      PROVISIONING_WORKER_URL = "${var.tenant_lifecycle_service_url}/v1/_workers/provision"
+      LIFECYCLE_WORKER_URL    = "${var.tenant_lifecycle_service_url}/v1/_workers/lifecycle"
+    } : {},
+  )
+
+  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d4" })
+
+  depends_on = [
+    module.cloud_sql,
+    google_sql_user.lifecycle_runtime,
+    google_project_iam_member.lifecycle_runtime_cloudsql_client,
+    google_project_iam_member.lifecycle_runtime_cloudsql_instance_user,
+    google_artifact_registry_repository_iam_member.lifecycle_runtime_apps_reader,
+    module.cloud_tasks_key_rotation_queue,
+  ]
+}

@@ -151,13 +151,23 @@ resource "google_vpc_access_connector" "connector" {
 }
 
 # ─── Firewall ───────────────────────────────────────────────────────────────
-# Firewall rules are intentionally minimal for P0.3.
+# Firewall posture (5 rules; ADR-INFRA-003 §3 firewall table):
+#   (1) cortex-deny-all-egress           65534 EGRESS  deny  0.0.0.0/0
+#   (2) cortex-allow-https-egress         1100 EGRESS  allow tcp:443 0.0.0.0/0
+#   (3) cortex-allow-google-apis-egress   1000 EGRESS  allow tcp:443 199.36.153.{4,8}/30
+#   (4) cortex-allow-internal-ingress     1000 INGRESS allow all      10.X.0.0/16
+#   (5) cortex-allow-internal-egress      1050 EGRESS  allow tcp/udp/icmp 10.X.0.0/16
+#
+# Rule (5) was added in F02 D.4 — its absence in the original 4-rule
+# posture broke Cloud Run → Cloud SQL via VPC connector. See ADR-INFRA-003
+# §3 firewall posture table + Decision/Observation note for the diagnosis.
+#
 # Add when the consuming workload lands:
 # - IAP-SSH allow: when first VM/bastion is provisioned
 # - GCLB health-check allow: when first load-balanced service deploys
 #   (35.191.0.0/16, 130.211.0.0/22)
 # - Cloud Run implicit internal: none needed (Cloud Run traffic flows through
-#   VPC Connector already permitted by internal-ingress rule)
+#   VPC Connector already permitted by internal-egress rule above)
 
 # (1) Default-deny egress. Overrides GCP's implicit allow-all-egress at 65535.
 resource "google_compute_firewall" "deny_all_egress" {
@@ -234,4 +244,36 @@ resource "google_compute_firewall" "allow_internal_ingress" {
   }
 
   source_ranges = [local.cidr_vpc_summary]
+}
+
+# (5) Allow internal VPC egress within the env's /16. Required for the
+# Serverless VPC Access connector subnet (10.X.32.0/28) to reach Cloud
+# SQL private IP (10.X.240.0/20 PSA range) on TCP:3307 via the Cloud
+# SQL Auth Proxy. Without this rule the deny-all-egress at 65534
+# catches the connector→PSA traffic and connections time out (10s)
+# before the proxy can establish.
+#
+# Surfaced in F02 D.4: ADR-INFRA-003's original 4-rule firewall posture
+# was missing this allow. Cloud Build private-pool reach worked because
+# its private-pool networking has its own egress path; Cloud Run via
+# the connector did not. The temp gcloud-direct rule
+# `cortex-allow-internal-egress-test` (created during diagnosis) is
+# replaced by this declarative rule.
+#
+# Scope intentionally limited to the env's /16 (`local.cidr_vpc_summary`)
+# rather than RFC 1918 / 0.0.0.0/0 — every legitimate intra-VPC
+# destination lives in the env's own range, and narrowing here keeps
+# the deny-all-egress baseline meaningful.
+resource "google_compute_firewall" "allow_internal_egress" {
+  project   = var.project_id
+  name      = "cortex-allow-internal-egress"
+  network   = google_compute_network.vpc.name
+  direction = "EGRESS"
+  priority  = 1050
+
+  allow { protocol = "tcp" }
+  allow { protocol = "udp" }
+  allow { protocol = "icmp" }
+
+  destination_ranges = [local.cidr_vpc_summary]
 }

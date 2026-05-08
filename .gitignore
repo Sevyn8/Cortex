@@ -87,3 +87,7 @@ storybook-static/
 # Playwright
 playwright-report/
 test-results/
+*.lnk
+apps/tenant-lifecycle-api/d1-*.csv
+*.lnk
+apps/tenant-lifecycle-api/d1-*.csv

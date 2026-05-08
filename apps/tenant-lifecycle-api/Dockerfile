@@ -3,6 +3,14 @@
 # Image size affects Cloud Run cold-start container-pull latency
 # (per SD3 cross-check rationale). Final image is distroless-node22.
 
+# Global build arg — bound at build time via `--build-arg COMMIT_SHA=$(git
+# rev-parse --short HEAD)` (make image-bootstrap supplies it). Baking the
+# SHA into the image at build time (vs setting via Cloud Run env var at
+# deploy time) closes the deploy-vs-TF env-var drift seam: TF's base_env
+# stays the source-of-truth for runtime env vars; per-build identifiers
+# travel with the image.
+ARG COMMIT_SHA=unknown
+
 # ── Stage 1: build (pnpm install + tsc) ─────────────────────────────
 FROM node:22-bookworm-slim AS build
 WORKDIR /repo
@@ -14,7 +22,7 @@ RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 # Copy workspace manifests for the dep graph this app needs.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
-COPY apps/tenant-lifecycle-api/package.json apps/tenant-lifecycle-api/tsconfig.json apps/tenant-lifecycle-api/
+COPY apps/tenant-lifecycle-api/package.json apps/tenant-lifecycle-api/tsconfig.json apps/tenant-lifecycle-api/tsconfig.build.json apps/tenant-lifecycle-api/
 COPY packages/observability/package.json packages/observability/
 COPY packages/tenant-context/package.json packages/tenant-context/
 COPY packages/audit-events/package.json packages/audit-events/
@@ -69,12 +77,22 @@ RUN pnpm --filter @cortex/tenant-lifecycle-api deploy --legacy --prod /out
 FROM gcr.io/distroless/nodejs22-debian12:nonroot AS runtime
 WORKDIR /app
 
+# Re-declare the global ARG to bring it into this stage's scope (Docker
+# build-arg quirk: globals declared before any FROM aren't auto-visible
+# inside stages without a no-default re-declare).
+ARG COMMIT_SHA
+
 COPY --from=build /out/dist /app/dist
 COPY --from=build /out/node_modules /app/node_modules
 COPY --from=build /out/package.json /app/package.json
 
 # Cloud Run injects PORT (default 8080); the app reads from env.
-ENV NODE_ENV=production
+# COMMIT_SHA propagates from build-arg into runtime env so the /health
+# endpoint surfaces the deployed SHA. NODE_ENV defaults to production
+# here; per-env overrides land via the TF module's extra_env_vars
+# (dev/main.tf sets NODE_ENV=development; staging/prod inherit).
+ENV NODE_ENV=production \
+    COMMIT_SHA=${COMMIT_SHA}
 EXPOSE 8080
 
 # distroless's `nonroot` user (uid 65532). PID 1 = node so SIGTERM

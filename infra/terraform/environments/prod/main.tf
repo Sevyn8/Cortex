@@ -237,3 +237,99 @@ module "cortex_signer_sa" {
   runtime_sa_email        = google_service_account.tenant_lifecycle_runtime.email
   tenant_data_bucket_name = module.tenant_data_bucket.bucket_name
 }
+
+# ─── F02 Slice D D.4 — tenant-lifecycle-shared deployment ───────────────────
+# Mirrors dev/main.tf D.4 block. See dev for design rationale + cross-refs.
+# Prod-specific: min_instances=1 (eliminate cold-start from operator hot path).
+# Apply via `make CONFIRM=yes tf-apply-prod` per Makefile prod gate.
+
+resource "google_service_account_iam_member" "lifecycle_runtime_operator_user" {
+  for_each = toset(var.operator_emails)
+
+  service_account_id = google_service_account.tenant_lifecycle_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "user:${each.value}"
+}
+
+resource "google_project_iam_member" "lifecycle_runtime_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+resource "google_project_iam_member" "lifecycle_runtime_cloudsql_instance_user" {
+  project = var.project_id
+  role    = "roles/cloudsql.instanceUser"
+  member  = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+resource "google_sql_user" "lifecycle_runtime" {
+  project  = var.project_id
+  instance = module.cloud_sql.instance_name
+  type     = "CLOUD_IAM_SERVICE_ACCOUNT"
+  name     = replace(google_service_account.tenant_lifecycle_runtime.email, ".gserviceaccount.com", "")
+}
+
+resource "google_artifact_registry_repository_iam_member" "lifecycle_runtime_apps_reader" {
+  project    = var.shared_project_id
+  location   = var.region
+  repository = "cortex-apps"
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
+# Cloud Run *deployment* needs the per-project Service Agent grant
+# alongside the runtime SA grant. See dev/main.tf for the full rationale.
+resource "google_artifact_registry_repository_iam_member" "cloud_run_service_agent_apps_reader" {
+  project    = var.shared_project_id
+  location   = var.region
+  repository = "cortex-apps"
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"
+}
+
+module "cloud_tasks_key_rotation_queue" {
+  source = "../../modules/cloud-tasks-queue"
+
+  project_id                 = var.project_id
+  location                   = var.region
+  queue_name                 = "key-rotation-queue"
+  dispatcher_service_account = google_service_account.tenant_lifecycle_runtime.email
+  max_dispatches_per_second  = 5
+
+  depends_on = [module.project_baseline]
+}
+
+module "tenant_lifecycle_shared" {
+  source = "../../modules/tenant-cloud-run-service"
+
+  project_id                        = var.project_id
+  location                          = var.region
+  environment                       = "prod"
+  mode                              = "shared"
+  workload                          = "tenant-lifecycle"
+  runtime_sa_email                  = google_service_account.tenant_lifecycle_runtime.email
+  cloudsql_instance_connection_name = module.cloud_sql.connection_name
+  vpc_connector_id                  = module.networking.vpc_connector_id
+  image_uri                         = var.tenant_lifecycle_image_uri
+  min_instances                     = 1
+
+  # Worker URLs — self-reference. Set
+  # `tenant_lifecycle_service_url` in local.auto.tfvars after the
+  # first revision lands. See dev/main.tf for the pattern's rationale.
+  extra_env_vars = var.tenant_lifecycle_service_url != "" ? {
+    PROVISIONING_WORKER_URL = "${var.tenant_lifecycle_service_url}/v1/_workers/provision"
+    LIFECYCLE_WORKER_URL    = "${var.tenant_lifecycle_service_url}/v1/_workers/lifecycle"
+  } : {}
+
+  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d4" })
+
+  depends_on = [
+    module.cloud_sql,
+    google_sql_user.lifecycle_runtime,
+    google_project_iam_member.lifecycle_runtime_cloudsql_client,
+    google_project_iam_member.lifecycle_runtime_cloudsql_instance_user,
+    google_artifact_registry_repository_iam_member.lifecycle_runtime_apps_reader,
+    module.cloud_tasks_key_rotation_queue,
+  ]
+}

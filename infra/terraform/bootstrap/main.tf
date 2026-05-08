@@ -81,13 +81,20 @@ resource "google_kms_key_ring" "keyring" {
 }
 
 # ─── KMS Keys: 17 total, defined by locals.all_keys ─────────────────────────
+# destroy_scheduled_duration = 30 days per F02 Slice D planning-doc SD6.
+# Bumped from the GCP default (24h) so accidental key-version destroys can
+# be reverted within a 30-day window — matters for the rotate-with-30-day-
+# old-version-cleanup pattern in the lifecycle worker (D.2 + D.4). State
+# already carries 30d on existing keys; declaring it explicitly here
+# brings source-TF into alignment so the next bootstrap-apply is a no-op.
 resource "google_kms_crypto_key" "keys" {
   for_each = local.all_keys
 
-  name            = each.value.key_name
-  key_ring        = google_kms_key_ring.keyring[each.value.project_key].id
-  purpose         = "ENCRYPT_DECRYPT"
-  rotation_period = local.key_rotation_period
+  name                       = each.value.key_name
+  key_ring                   = google_kms_key_ring.keyring[each.value.project_key].id
+  purpose                    = "ENCRYPT_DECRYPT"
+  rotation_period            = local.key_rotation_period
+  destroy_scheduled_duration = "2592000s"
 
   version_template {
     algorithm        = "GOOGLE_SYMMETRIC_ENCRYPTION"

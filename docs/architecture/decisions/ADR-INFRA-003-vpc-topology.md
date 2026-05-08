@@ -50,7 +50,7 @@ Specifically:
 
 8. **Serverless VPC Access Connector** at minimum size (2x e2-micro, max 3). Cloud Run → private resources flow through this.
 
-9. **Four firewall rules per VPC** (see Firewall posture below).
+9. **Five firewall rules per VPC** (see Firewall posture below).
 
 ## Subnet design rationale
 
@@ -81,19 +81,27 @@ Configuration: `nat_ip_allocate_option = "AUTO_ONLY"` (auto-allocated IPs; switc
 
 ## Firewall posture
 
-Four rules per VPC — intentionally minimal:
+Five rules per VPC — intentionally minimal:
 
-| #   | Name                              | Priority | Direction | Action | Protocol:Port | Source / Dest                             |
-| --- | --------------------------------- | -------: | --------- | ------ | ------------- | ----------------------------------------- |
-| 1   | `cortex-deny-all-egress`          |    65534 | EGRESS    | DENY   | all           | dest `0.0.0.0/0`                          |
-| 2   | `cortex-allow-google-apis-egress` |     1000 | EGRESS    | ALLOW  | TCP:443       | dest `199.36.153.4/30`, `199.36.153.8/30` |
-| 3   | `cortex-allow-https-egress`       |     1100 | EGRESS    | ALLOW  | TCP:443       | dest `0.0.0.0/0`                          |
-| 4   | `cortex-allow-internal-ingress`   |     1000 | INGRESS   | ALLOW  | all           | src `10.X.0.0/16`                         |
+| #   | Name                              | Priority | Direction | Action | Protocol:Port    | Source / Dest                             |
+| --- | --------------------------------- | -------: | --------- | ------ | ---------------- | ----------------------------------------- |
+| 1   | `cortex-deny-all-egress`          |    65534 | EGRESS    | DENY   | all              | dest `0.0.0.0/0`                          |
+| 2   | `cortex-allow-google-apis-egress` |     1000 | EGRESS    | ALLOW  | TCP:443          | dest `199.36.153.4/30`, `199.36.153.8/30` |
+| 3   | `cortex-allow-https-egress`       |     1100 | EGRESS    | ALLOW  | TCP:443          | dest `0.0.0.0/0`                          |
+| 4   | `cortex-allow-internal-ingress`   |     1000 | INGRESS   | ALLOW  | all              | src `10.X.0.0/16`                         |
+| 5   | `cortex-allow-internal-egress`    |     1050 | EGRESS    | ALLOW  | TCP / UDP / ICMP | dest `10.X.0.0/16`                        |
 
 - **Rule 1 overrides GCP's implicit `allow-all-egress` at priority 65535.** The default-deny is not a no-op.
 - **Rule 2 uses the `restricted.googleapis.com` and `private.googleapis.com` ranges** — Google API traffic takes the Private Google Access path, avoiding NAT and egress cost.
 - **Rule 3 is the open-internet hardening gap.** TCP:443 to `0.0.0.0/0` is the only outbound path to third-party APIs (Anthropic, Resend, WorkOS — all with dynamic IPs). Marked in code with a `TODO(P11.x)` comment enumerating hardening options (egress proxy, per-destination routing, Service Connect).
 - **Rule 4 allows VPC-internal traffic.** GCP's implicit ingress deny-all at 65535 handles everything else.
+- **Rule 5 allows VPC-internal egress within the env's /16.** Required for the Serverless VPC Access connector subnet (`10.X.32.0/28`) to reach Cloud SQL private IP (`10.X.240.0/20` PSA range) on TCP:3307 via the Cloud SQL Auth Proxy. Without it, rule 1's default-deny catches connector→PSA traffic before the proxy can establish.
+
+### Decision/Observation: Rule 5 was added in F02 D.4 (2026-05-08)
+
+The original posture published with this ADR contained four rules. F02 Slice D Sub-phase D.4 (`tenant-lifecycle-shared` — Cortex's first Cloud Run workload that talks to Cloud SQL via private IP through the connector) surfaced a structural gap: connector-egressed packets to the PSA range had no offsetting allow against the default-deny at 65534. Symptom: Cloud SQL Auth Proxy timed out at 10s; `/v1/tenants` returned 500. Cloud Build private-pool reach to the same Cloud SQL instance worked because the private-pool networking has its own egress path.
+
+The diagnosis was confirmed by a temporary `cortex-allow-internal-egress-test` rule created via `gcloud` direct (priority 1050, dest `10.10.0.0/16`, protocols `tcp,udp,icmp`) — with it present, `/v1/tenants` returned 200; without it, 500. Rule 5 above is the declarative replacement for that temp rule, applied across all three envs in the same D.4 commit. See `docs/planning/cortex-deviations.md` row §F02 Slice D Sub-phase D.4 for the deviation entry.
 
 **Not included in baseline** (added when consuming workloads land): IAP-SSH allow (add when first bastion or VM is provisioned), GCLB health-check allow (add when first load-balanced service deploys — `35.191.0.0/16`, `130.211.0.0/22`).
 
@@ -199,7 +207,7 @@ DR reserved (not provisioned — P11.x):
     connector 10.X.96.0/28
 ```
 
-Every VPC ships with: Cloud Router, Cloud NAT (AUTO_ONLY, min_ports_per_vm=64, log_config ALL), Serverless VPC Access Connector (e2-micro, min 2 / max 3), Private Service Access global address + service networking connection, and the 4 firewall rules.
+Every VPC ships with: Cloud Router, Cloud NAT (AUTO_ONLY, min_ports_per_vm=64, log_config ALL), Serverless VPC Access Connector (e2-micro, min 2 / max 3), Private Service Access global address + service networking connection, and the 5 firewall rules.
 
 ## Implementation notes
 

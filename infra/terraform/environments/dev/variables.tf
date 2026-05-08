@@ -56,3 +56,58 @@ variable "chat_webhook_url" {
   description = "Google Chat incoming webhook URL for the Cortex Alerts space. Lives in local.auto.tfvars (gitignored). Passed to the monitoring module's webhook_tokenauth channel for CRITICAL-route alerts."
   sensitive   = true
 }
+
+# ─── F02 Slice D D.4 additions ─────────────────────────────────────────────
+
+variable "shared_project_id" {
+  type        = string
+  default     = "sevyn8-cortex-shared"
+  description = "Project hosting the shared Artifact Registry (cortex-apps, cortex-agents, cortex-mcp). Used for cross-project IAM grants letting per-env runtime SAs pull images."
+}
+
+variable "operator_emails" {
+  type        = list(string)
+  default     = []
+  description = <<-EOT
+    Operator emails granted roles/iam.serviceAccountUser on
+    tenant-lifecycle-runtime for break-glass deploys (e.g.,
+    `gcloud run deploy --service-account=tenant-lifecycle-runtime@...`).
+    Phase 1 reconciliation per D.4: the binding D.1 created via gcloud
+    is now declared here. Operator rotation = edit this list. Lives in
+    local.auto.tfvars (gitignored) since team membership shouldn't be
+    in version control.
+  EOT
+}
+
+variable "tenant_lifecycle_image_uri" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    Fully-qualified container image URI for the tenant-lifecycle-shared
+    Cloud Run service. Empty default = lets operator set via
+    local.auto.tfvars; the tenant-cloud-run-service module's
+    `lifecycle.ignore_changes = [image]` preserves out-of-band
+    deploy-script-pushed images on subsequent applies.
+    Format:
+      asia-south1-docker.pkg.dev/sevyn8-cortex-shared/cortex-apps/tenant-lifecycle-api:sha-<git-sha>
+  EOT
+}
+
+variable "tenant_lifecycle_service_url" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    Cloud Run v2 service URL for tenant-lifecycle-shared. The dispatcher
+    + worker live in the same service (self-reference), so the create /
+    offboard / terminate APIs need PROVISIONING_WORKER_URL +
+    LIFECYCLE_WORKER_URL pointing back at this same service.
+
+    Cloud Run v2 URLs are stable per (project, region, service-name) —
+    once the first revision lands, the URL is permanent for that
+    service's lifetime. Operator pastes it into local.auto.tfvars after
+    bootstrap deploy. Empty default = the env vars are omitted (the
+    POST /v1/tenants path will 500 with the upstream "X_WORKER_URL env
+    required" error rather than silently mis-dispatching). Format:
+      https://tenant-lifecycle-shared-<hash>-<region>.a.run.app
+  EOT
+}

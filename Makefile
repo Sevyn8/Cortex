@@ -202,6 +202,49 @@ tf-apply-tfstate: ## Apply tfstate (no-op today)
 tf-plan-all: ## Plan every module (bootstrap + dev + shared + staging + prod + tfstate)
 tf-plan-all: tf-bootstrap-plan tf-plan-dev tf-plan-shared tf-plan-staging tf-plan-prod tf-plan-tfstate
 
+# --- Image bootstrap (cortex-apps registry plane in shared) ---
+# One-time-per-app push of a SHA-tagged image to
+# sevyn8-cortex-shared/cortex-apps/<APP>:sha-<HEAD>. Required before the
+# first `tf-apply` for any new control-plane workload — TF can't create a
+# Cloud Run service without an image. See tenant-lifecycle-convention.md
+# §7.4 "Deploying a new control-plane workload" for full checklist.
+#
+# Auth: impersonates cortex-tf-admin@sevyn8-cortex-shared.iam (operator
+# already holds tokenCreator on it from bootstrap). After push, set
+# <workload>_image_uri in each env's local.auto.tfvars to the printed
+# value.
+#
+# APP and WORKLOAD often differ (per ADR-COMPUTE-001 §3 / module
+# tenant-cloud-run-service variable validation: workload ≤ 19 chars).
+# Example: APP=tenant-lifecycle-api (full app dir), WORKLOAD=tenant-lifecycle
+# (matches the TF var prefix tenant_lifecycle_image_uri). When omitted,
+# WORKLOAD defaults to APP with hyphens replaced by underscores — fine
+# when the names align, wrong when the app dir has an `-api` / `-worker`
+# suffix the TF var doesn't carry.
+image-bootstrap: ## Build + push SHA-tagged image to cortex-apps. Usage: make image-bootstrap APP=<dir> [WORKLOAD=<tf-prefix>]
+	@[ -n "$(APP)" ] || (echo "Usage: make image-bootstrap APP=<app-dir-name> [WORKLOAD=<tf-var-prefix>]"; exit 1)
+	@[ -d "apps/$(APP)" ] || (echo "apps/$(APP) does not exist"; exit 1)
+	@[ -f "apps/$(APP)/Dockerfile" ] || (echo "apps/$(APP)/Dockerfile not found"; exit 1)
+	@COMMIT_SHA=$$(git rev-parse --short HEAD); \
+	REGION=asia-south1; \
+	SHARED_PROJECT=sevyn8-cortex-shared; \
+	IMAGE=$${REGION}-docker.pkg.dev/$${SHARED_PROJECT}/cortex-apps/$(APP):sha-$${COMMIT_SHA}; \
+	WORKLOAD_VAR="$(or $(WORKLOAD),$(APP))"; \
+	WORKLOAD_VAR=$$(echo "$${WORKLOAD_VAR}" | tr '-' '_'); \
+	echo "==> Authenticating Docker to $${REGION}-docker.pkg.dev (impersonating cortex-tf-admin@$${SHARED_PROJECT})"; \
+	gcloud auth print-access-token \
+		--impersonate-service-account=cortex-tf-admin@$${SHARED_PROJECT}.iam.gserviceaccount.com \
+		| docker login -u oauth2accesstoken --password-stdin $${REGION}-docker.pkg.dev; \
+	echo "==> Building $${IMAGE} (context: repo root, COMMIT_SHA=$${COMMIT_SHA})"; \
+	docker build --platform linux/amd64 \
+		--build-arg COMMIT_SHA=$${COMMIT_SHA} \
+		-t $${IMAGE} -f apps/$(APP)/Dockerfile .; \
+	echo "==> Pushing $${IMAGE}"; \
+	docker push $${IMAGE}; \
+	echo ""; \
+	echo "==> Add to each env's local.auto.tfvars:"; \
+	echo "    $${WORKLOAD_VAR}_image_uri = \"$${IMAGE}\""
+
 # Out-of-band Cloud Build private-pool config. google provider 6.50.0 does not
 # expose egress_option on google_cloudbuild_worker_pool.network_config; migrate.yaml
 # needs PUBLIC_EGRESS for apt/npm. Re-run after any pool recreate (DR, migrations).

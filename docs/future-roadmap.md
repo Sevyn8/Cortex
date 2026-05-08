@@ -189,6 +189,29 @@ Updated whenever a deferral is added or revisited.
 - **References:** ADR-INFRA-003 §Firewall posture, `infra/terraform/modules/networking/main.tf:178` (`TODO(P11.x)`).
 - **Owner phase:** P11.x Display Data hardening pass, or operator-driven if earlier trigger.
 
+### 2.5a Re-attach billing on staging + prod (and cascade-recovery checklist)
+
+- **Item:** Re-link `sevyn8-cortex-{staging,prod}` to billing account `016691-555E7E-B5AB24` so `terraform plan/apply` works against those envs again.
+- **Current state:** Both projects show `billingEnabled: false` (verified 2026-05-08). Any TF plan that touches `compute.googleapis.com` or `cloudkms.googleapis.com` resources errors with `403 BILLING_DISABLED`. F02 D.4's firewall rule (`cortex-allow-internal-egress`) and bootstrap KMS `destroy_scheduled_duration` alignment landed in TF code but apply is deferred until billing returns. Dev's 9-day prior outage proved that re-enabling billing surfaces 3 latent recoveries that TF won't auto-heal: VPC connector flips to `ERROR` and must be `gcloud delete` + re-applied; Cloud Run revision binding may be stale (revision bump needed); Service Networking peering disconnects and needs `gcloud services vpc-peerings update --force`. Expect the same on staging + prod.
+- **Future options:**
+  1. Re-link both projects via console / `gcloud beta billing projects link` then run a documented cascade-recovery checklist (connector / Cloud Run revision / peering / firewall idempotency / Cloud SQL `RUNNABLE`).
+  2. Just re-link and reactively fix whatever surfaces (likely fine for staging; risky for prod if it ever holds real workloads).
+- **Triggers:** Need to deploy to staging or prod; or pre-launch readiness pass for F-series services that need staging.
+- **References:** F02 D.4 close-out commit (this commit) for firewall rule + bootstrap apply being deferred. Dev recovery pattern documented in this commit's body. ADR-INFRA-003 §Firewall posture (Rule 5 added in D.4).
+- **Owner phase:** Operator-driven; required before any non-dev deploy.
+
+### 2.5b Billing-outage operational repeat-prevention
+
+- **Item:** Pager-grade billing alerts + status-page endpoint that aggregates billing state, VPC connector health, Service Networking peering state, Cloud SQL state.
+- **Current state:** Cortex has no billing alerts that page (only standard Cloud Monitoring alerting which doesn't watch billing). The 9-day dev billing outage (resolved 2026-04-29 → 2026-05-08) silently disabled the VPC connector, broke the Cloud Run revision binding, and disconnected Service Networking peering. None of these are visible in the existing alert set. The outage was discovered by a developer trying to deploy.
+- **Future options:**
+  1. Cloud Billing budget alerts with PagerDuty/SMS routing (not just email). Budget can be set at $1/day to catch any payment-method failure.
+  2. Synthetic check that hits a `/health` endpoint via Cloud Build Triggers daily (would have caught the Cloud Run binding break within 24h).
+  3. Status-page endpoint (e.g., `/admin/health-aggregate`) that reads billing state via Cloud Billing API + connector state via VPC Access API + peering state via Service Networking API + Cloud SQL state — operator can curl one URL.
+- **Triggers:** Once F-series services have real users, a 9-day disconnect like this would be a serious incident. Set up before launch.
+- **References:** F02 D.4 close-out commit body — "Recovery from billing-disabled gap" section. `docs/deviations.md` (this commit adds row).
+- **Owner phase:** Pre-launch — before any user-facing service.
+
 ### 2.5 Migrate inline `@google-cloud/*` deps to pnpm catalog
 
 - **Item:** `@google-cloud/secret-manager` and `@google-cloud/kms` are inline-pinned in `packages/secrets/package.json`; `@google-cloud/storage` is in the pnpm-workspace catalog (newer convention, F01 Slice B). The convention drift is benign but inconsistent.

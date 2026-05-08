@@ -1765,11 +1765,105 @@ operator-driven vs scheduled?").
 | `TenantRotationCooldownError` | 409           | terminal                 |
 | Other / KMS / DB transient    | 5xx           | retried per queue config |
 
-**D.4 extends:** wires the actual `key-rotation-queue` Cloud Tasks
-queue + the dispatcher SA + the OIDC audience pinning + the
-`updateCryptoKeyPrimaryVersion` post-create timing tolerance (KMS
-sometimes returns from `createCryptoKeyVersion` before the new
-version is in PRIMARY-eligible state).
+**D.4 wiring (landed).**
+
+- **Queue**: `key-rotation-queue` per env, declared as
+  `module.cloud_tasks_key_rotation_queue` in
+  `environments/{dev,staging,prod}/main.tf`. Module
+  `infra/terraform/modules/cloud-tasks-queue` (existing; instantiated
+  third time alongside `provisioning-queue` + `lifecycle-queue` from
+  Slice C). `max_dispatches_per_second = 5` (halved vs. the others —
+  KMS rotation is slow async work; default would saturate KMS
+  quotas faster than the work drains). `max_attempts = 5`,
+  `min_backoff = 10s`, `max_backoff = 300s`, `max_doublings = 5`
+  per module defaults — backoff schedule
+  `10s → 20s → 40s → 80s → 160s → 300s` covers the ~5 min KMS
+  PERMISSION_DENIED propagation window after a fresh tenant_kms_key
+  binding lands.
+- **Dispatcher SA**: `tenant-lifecycle-runtime@<env>.iam.gserviceaccount.com`
+  (Slice C-provisioned). Per Q-NEW-D-11 → Option 1, the same SA is
+  the Cloud Tasks **dispatcher** AND the OIDC **audience** for
+  inbound worker calls. Rationale: Phase 1 simplicity; AC01 (P2.1)
+  splits via request-scoped identity. Marginal blast-radius is
+  ~zero — the runtime SA already holds Cloud SQL write + KMS rotate
+  - Storage objectAdmin; adding `cloudtasks.enqueuer` doesn't
+    meaningfully extend reach. Audit logs collapse "runtime → self via
+    Cloud Tasks" and "runtime → self direct" into the same
+    `principalEmail`; AC01 distinguishes via request-scoped identity.
+- **OIDC audience pinning**: the TF module
+  (`tenant-cloud-run-service`) sets `CLOUD_TASKS_INVOKER_SA_EMAIL`
+  to `var.runtime_sa_email` automatically. Worker route's OIDC
+  middleware reads this env at startup (no per-request lookup);
+  inbound `Authorization: Bearer <id-token>` whose `email` claim
+  ≠ this value → 401 (terminal in Cloud Tasks). Tests inject a
+  stub via the `validateOidc` build option.
+- **Post-create timing tolerance** (`updateCryptoKeyPrimaryVersion`
+  immediately after `createCryptoKeyVersion`): the new version may
+  briefly return state `PENDING_GENERATION` before transitioning
+  to `ENABLED`. The wrapper retries the `update` call with
+  exponential backoff (200ms / 400ms / 800ms; max 3 attempts) on
+  `FAILED_PRECONDITION`. Total worst-case cold path: ~1.4s of
+  retries + the actual KMS work. Rotation worker's per-task SLA
+  budget (5 minutes; see §7.5) absorbs this comfortably.
+
+**Cross-project artifact-registry pull (D.4-established
+convention).** Cloud Run pulls images from
+`sevyn8-cortex-shared/cortex-apps/<app>` (single registry plane per
+ADR-INFRA-002). **Two** per-env IAM bindings are required for cross-
+project pulls; each grants `roles/artifactregistry.reader` at the
+repository level (not project level — narrowest viable scope):
+
+1. **Runtime SA grant** — covers runtime image pulls (Cloud Run
+   instance fetching the image as the service starts up). Wired as
+   `google_artifact_registry_repository_iam_member.<workload>_apps_reader`
+   with `member = "serviceAccount:${runtime_sa.email}"`.
+2. **Cloud Run Service Agent grant** — covers deployment-time pulls
+   (`gcloud run services update --image=<cross-project>` and the
+   equivalent TF-side service create/update). The Service Agent is
+   per-project, project-number-derived, Google-managed:
+   `service-${project_number}@serverless-robot-prod.iam.gserviceaccount.com`.
+   Wired as
+   `google_artifact_registry_repository_iam_member.cloud_run_service_agent_apps_reader`
+   with `member = "serviceAccount:service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"`.
+
+Without (2), `gcloud run services update` fails with "Cloud Run
+Service Agent must have permission to read the image". Without (1),
+the runtime container fails to pull on first request. Both are
+required; the runtime SA grant is NOT sufficient on its own. Future
+control-plane workloads inherit the dual-grant pattern.
+
+**Deploying a new control-plane workload (checklist).**
+
+1. Add the workload package under `apps/<workload>/` (Hono +
+   workspace deps; D.1 prototype shape).
+2. In `apps/<workload>/Dockerfile`, target workspace-rooted COPY
+   paths; build context = repo root.
+3. In each env's `main.tf` (dev / staging / prod) append the D.4
+   pattern: 7 IAM/resource declarations + 2 module instantiations
+   (operator-emails IAM, cloudsql.client + instanceUser, sql_user,
+   runtime-SA AR repo reader, Cloud Run Service Agent AR repo reader,
+   queue if needed, `tenant-cloud-run-service` instantiation with
+   `mode="shared"`).
+4. Add 3 vars to each env's `variables.tf` (or a workload-specific
+   subset): the workload's image URI, operator emails (re-use
+   `var.operator_emails` if they're the same set), shared project ID
+   (re-use `var.shared_project_id`).
+5. Companion migration in `services/foundation/migrations/`
+   granting the SQL-level perms the runtime role needs once
+   `google_sql_user` lands the role. Idempotent DO block per the
+   `0012_tenant_lifecycle_runtime_grants.sql` template — checks
+   `pg_roles` before granting, skips if not yet provisioned.
+6. Image bootstrap: `make image-bootstrap APP=<workload>` once
+   before the first `tf-apply` (TF can't create a Cloud Run
+   service without an image; bootstrap pushes the SHA-tagged
+   image to `cortex-apps`, then operator sets
+   `<workload>_image_uri` in `local.auto.tfvars`).
+7. `make tf-plan-{dev,staging,prod}` clean diff, then apply.
+8. `apps/<workload>/scripts/deploy-{env}.sh` for image SHA
+   updates only (`gcloud run services update --image=...`); the
+   service shape is TF-owned. NO `--service-account`, `--port`,
+   `--cpu`, `--memory`, `--labels`, etc. — those flags fight TF on
+   subsequent applies.
 
 ### 7.5 Idempotency + failure recovery `[F02-D.2 initial; D.4 extends]`
 
@@ -1809,9 +1903,40 @@ cooldown on scheduled rotations handles this: the second + third
    failure (typically KMS quota or IAM), and re-enqueue manually
    once the root cause is resolved.
 
-**D.4 extends:** wires the `key-rotation-queue` dead-letter handler
+**D.4 wiring (landed).**
 
-- the per-task SLA monitoring + the cleanup-old-task pruner.
+- **Dead-letter handler**: Cloud Tasks doesn't ship a built-in
+  dead-letter queue (DLQ) per ADR-LIFECYCLE-001 §2 — when
+  `max_attempts` is exhausted the task is silently dropped. D.4
+  substitutes a **synthetic DLQ via Cloud Logging**: every 5xx the
+  worker emits at `level: error` with structured fields
+  `{ event: 'KEY_ROTATION_TERMINAL_FAILURE', tenant_id, trigger,
+attempt, error_class }`. A log-based metric
+  (`cortex_key_rotation_terminal_failures_dev`, mirrored per env)
+  counts these; the monitoring module's WARNING channel alerts on
+  any non-zero count over a 1-hour rolling window. Deferred to D.6:
+  a real DLQ-shaped table (`tenant_lifecycle_dlq`) with re-enqueue
+  CLI; Phase 1 the volume is low enough that log-based triage is
+  sufficient.
+- **Per-task SLA monitoring**: a second log-based metric
+  (`cortex_key_rotation_duration_p95_dev`) tracks worker-route
+  latency at p95 across 1-hour windows. Alert threshold: 5 minutes
+  (the queue's `max_backoff` × `max_attempts ÷ 2` budget). KMS
+  PERMISSION_DENIED retries dominate the tail; alerting on p95
+  (not p99) catches the case where >50 % of rotations are hitting
+  the propagation race, while leaving the long-tail noise to
+  per-task investigation. Wired via `monitoring` module's
+  `log_based_metrics` input.
+- **Cleanup-old-task pruner**: completed-task records in Cloud
+  Tasks queues age out automatically after 90 days per Cloud Tasks
+  retention. No explicit pruner needed for the queue itself. The
+  KMS old-version cleanup (the "30-day overlap" path from §7.2) is
+  driven by `tenant_kms_key.previous_key_destroy_scheduled_at` +
+  the bootstrap `destroy_scheduled_duration = 2592000s` — versions
+  scheduled for destroy at rotation time auto-destroy 30 days
+  later. No CRON; KMS handles the timer. Operator runbook entry
+  in §8.2 covers manual cleanup if `scheduleDestroy` failed
+  post-commit.
 
 ### 7.6 HTTP API surface — 12 endpoints `[F02-D.3]`
 
@@ -1968,6 +2093,42 @@ curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/approve-dedicated-db" \
 
 D.5 fills §7.7 (IAM + invoker authz) and D.6 fills §7.8 (forensic
 queries) per Q-NEW-D-12.
+
+### 7.7 IAM + invoker authz `[F02-D.5; placeholder]`
+
+**Status: stubbed by D.4; content lands with D.5.**
+
+D.4 sets up the **deny-by-default surface** but does not grant
+invoker IAM:
+
+- TF module `tenant-cloud-run-service` deploys with
+  `--no-allow-unauthenticated` (SD8 lock).
+- No `roles/run.invoker` is granted on the deployed service. Any
+  caller — including the dispatcher SA enqueueing Cloud Tasks —
+  gets 401 / 403 today.
+- Operator access during D.4 measurement uses
+  `gcloud run services proxy` (token from operator's user identity;
+  bypasses the invoker IAM floor for local-tunnel access only).
+
+**D.5 will land:**
+
+1. `roles/run.invoker` on the runtime SA itself (so Cloud Tasks
+   self-dispatch reaches `/v1/_workers/*`). Per Q-NEW-D-11 →
+   Option 1 the dispatcher and the runtime are the same
+   principal — one binding covers both.
+2. `roles/run.invoker` on operator emails for break-glass curl
+   access. Reuses `var.operator_emails` (D.4 already accepts the
+   list for `iam.serviceAccountUser`).
+3. The `requireSuperAdmin()` placeholder middleware from D.3 gets
+   replaced with real WorkOS-backed checks (Phase 1: feature-flag
+   gated; full enforcement at AC01 / P2.1 boundary).
+4. Per-method authz — the matrix landing in this section: which
+   roles can call which `/v1/tenants/*` endpoints. Phase 1 default
+   is "all open²" per the §7.6 endpoint table; D.5 narrows to
+   admin-vs-tenant-operator splits.
+
+The §7.6 endpoint-table column "Scope" (open² vs super-admin) is
+the seam D.5 enforces. No new endpoints in D.5.
 
 ## 8. Operational patterns
 

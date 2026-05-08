@@ -1,114 +1,71 @@
 #!/usr/bin/env bash
-# Cloud Run dev deploy for D.1 prototype per SD2 (real Cloud Run dev,
-# not local Docker). Inline gcloud commands; D.4 ships the proper
-# tenant-cloud-run-service TF module.
+# Cloud Run dev deploy for tenant-lifecycle-shared (image-update-only).
+# Post-D.4: the TF module `tenant-cloud-run-service` (instantiated as
+# module.tenant_lifecycle_shared in dev/main.tf) owns the service
+# shape — runtime SA, Cloud SQL Unix-socket mount, scaling, ingress,
+# CPU/memory, labels. This script ONLY updates the Cloud Run service
+# to point at a SHA-tagged image already present in cortex-apps.
+#
+# Image bootstrap is a separate concern. To push a new SHA-tagged
+# image, run:
+#     make image-bootstrap APP=tenant-lifecycle-api WORKLOAD=tenant-lifecycle
+# from the repo root. That target (Makefile) handles the build +
+# push to sevyn8-cortex-shared/cortex-apps; this script handles the
+# subsequent service-image-update. Two commands per deploy, one
+# concern per command. cortex-apps has tag immutability enabled
+# (immutable_tags = true on the AR repo) — pushing the same SHA
+# twice is rejected, which is why image-bootstrap and deploy are
+# separate steps.
+#
+# TF's `lifecycle.ignore_changes = [template[0].containers[0].image]`
+# preserves the deployed SHA on subsequent `tf-apply-dev` runs.
 #
 # ── Auth model (ADR-INFRA-005 Decision 11) ──────────────────────────
 # `cloudsql.iam_authentication = on` is the only active path. The
-# postgres superuser has no password set; the break-glass secret
-# (cortex-db-postgres-break-glass-{env}) is for emergency-only
-# manual access, NOT application use.
+# postgres superuser has no password; the break-glass secret
+# (cortex-db-postgres-break-glass-{env}) is emergency-only.
 #
-# This deploy uses Cloud Run's native --add-cloudsql-instances
-# connector (option a per the operator's note): Cloud Run injects a
+# Cloud Run's --add-cloudsql-instances connector (TF-set) injects a
 # Unix socket at /cloudsql/{INSTANCE_CONNECTION_NAME}; the app's
-# pg.Pool authenticates with PG_IAM_USER + a password callback that
-# fetches OAuth tokens for the runtime SA (see src/db.ts).
+# pg.Pool authenticates with PG_IAM_USER + an OAuth-token password
+# callback for the runtime SA (see src/db.ts). All of these env vars
+# are TF-set — this script does not touch them.
 #
-# ── D.4 follow-up (TF gap, blocking /v1/tenants/{id} only) ───────────
-# The runtime SA tenant-lifecycle-runtime-dev currently lacks:
-#   1. roles/cloudsql.client on sevyn8-cortex-dev (network reach).
-#   2. roles/cloudsql.instanceUser on the cortex-dev-postgres
-#      instance (IAM-auth login).
-#   3. A google_sql_user resource of type CLOUD_IAM_SERVICE_ACCOUNT
-#      registering tenant-lifecycle-runtime@sevyn8-cortex-dev.iam
-#      as a Cloud SQL database user.
-#   4. SQL grants (CONNECT on cortex, USAGE on schema, SELECT on
-#      tenant + tenant_kms_key + …) — applied via migration in D.4.
-#
-# Until D.4 lands these, /v1/tenants/{id} returns 500 on first DB
-# query. /health and /v1/test/slow-5s do NOT touch the DB, so D.1's
-# Conditions 2 + 3 measurement (cold-start + SIGTERM) proceeds against
-# them unchanged.
-#
-# ── Per Q-NEW-D-11 + SD8 ─────────────────────────────────────────────
-# No new runtime SAs in D.1; we re-use tenant-lifecycle-runtime-dev
-# (Slice C 7.6, commit e6e44c9). Service deployed with
-# --no-allow-unauthenticated; operator access during measurement via
-# `gcloud run services proxy` or an explicit --member grant.
-#
-# Usage (invocable from anywhere inside the repo, including the root
-# and apps/tenant-lifecycle-api/):
+# Usage (invocable from anywhere inside the repo):
 #   ./scripts/deploy-dev.sh           # from apps/tenant-lifecycle-api/
 #   apps/tenant-lifecycle-api/scripts/deploy-dev.sh   # from repo root
 
 set -euo pipefail
 
-# The Dockerfile uses workspace-rooted COPY paths
-# (apps/tenant-lifecycle-api/..., packages/..., pnpm-lock.yaml, etc.) so
-# the build context MUST be the repo root. `git rev-parse` is
-# idempotent — cd-ing into a directory you're already in is a no-op,
-# so this works whether invoked from the repo root or any subdir.
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-cd "${REPO_ROOT}"
-
 ENV="${ENV:-dev}"
 PROJECT="sevyn8-cortex-${ENV}"
 REGION="${REGION:-asia-south1}"
 SERVICE="tenant-lifecycle-shared"
-RUNTIME_SA_ACCOUNT="tenant-lifecycle-runtime"
-RUNTIME_SA="${RUNTIME_SA_ACCOUNT}@${PROJECT}.iam.gserviceaccount.com"
-# Cloud SQL IAM-auth username = full SA email minus the
-# .gserviceaccount.com suffix per Cloud SQL docs.
-PG_IAM_USER="${RUNTIME_SA_ACCOUNT}@${PROJECT}.iam"
 
-# Cloud SQL instance connection name (matches infra/cloud-build/migrate.yaml).
-INSTANCE_CONNECTION_NAME="${PROJECT}:${REGION}:cortex-${ENV}-postgres"
-
-# Image tagging per CLAUDE.md §"Image tagging": SHA tags immutable;
-# floating dev tag for human convenience.
+# Image SHA derives from current HEAD. The image must already exist
+# in cortex-apps (push via `make image-bootstrap` first). git
+# rev-parse works from any subdir of the repo.
 COMMIT_SHA="$(git rev-parse --short HEAD)"
-IMAGE_REPO="${REGION}-docker.pkg.dev/${PROJECT}/cortex-images/tenant-lifecycle-api"
+SHARED_PROJECT="${SHARED_PROJECT:-sevyn8-cortex-shared}"
+IMAGE_REPO="${REGION}-docker.pkg.dev/${SHARED_PROJECT}/cortex-apps/tenant-lifecycle-api"
 IMAGE_SHA="${IMAGE_REPO}:sha-${COMMIT_SHA}"
-IMAGE_DEV="${IMAGE_REPO}:dev"
 
-echo "==> Building image ${IMAGE_SHA} (context: ${REPO_ROOT})"
-docker build \
-  --platform linux/amd64 \
-  -t "${IMAGE_SHA}" \
-  -t "${IMAGE_DEV}" \
-  -f apps/tenant-lifecycle-api/Dockerfile \
-  .
-
-echo "==> Pushing image"
-docker push "${IMAGE_SHA}"
-docker push "${IMAGE_DEV}"
-
-echo "==> Deploying to Cloud Run (${SERVICE} in ${PROJECT}/${REGION})"
-# --add-cloudsql-instances: Cloud Run mounts the Cloud SQL Auth Proxy
-# socket at /cloudsql/{INSTANCE_CONNECTION_NAME}; the app reads
-# CLOUDSQL_INSTANCE_CONNECTION_NAME and composes the host path itself.
-# Test-routes flag is the dev-only gate (per ENABLE_TEST_ROUTES in
-# config.ts). NODE_ENV=development unlocks the slow-5s endpoint.
-# COMMIT_SHA exposed for /health response shape.
-# NO --update-secrets: IAM auth replaces password-based auth; there
-# are no PG-credential secrets to inject.
-gcloud run deploy "${SERVICE}" \
+echo "==> Updating Cloud Run service image (${SERVICE} in ${PROJECT}/${REGION})"
+echo "    target image: ${IMAGE_SHA}"
+# `gcloud run services update` not `gcloud run deploy`: the latter
+# performs full revision replacement with all flags re-applied;
+# `update` is partial (only the flags supplied). For TF-managed
+# services we want partial — to avoid blanking out TF-owned config.
+#
+# Image-update-only by design — env vars are TF-managed
+# (dev/main.tf module.tenant_lifecycle_shared.extra_env_vars carries
+# NODE_ENV=development + ENABLE_TEST_ROUTES=true) and COMMIT_SHA is
+# baked into the image at build time (Dockerfile ARG, set by
+# `make image-bootstrap`). Both seams that D.4 finalization closed.
+gcloud run services update "${SERVICE}" \
   --project="${PROJECT}" \
   --region="${REGION}" \
-  --image="${IMAGE_SHA}" \
-  --service-account="${RUNTIME_SA}" \
-  --no-allow-unauthenticated \
-  --port=8080 \
-  --min-instances=0 \
-  --max-instances=10 \
-  --cpu=1 \
-  --memory=512Mi \
-  --concurrency=80 \
-  --timeout=60 \
-  --add-cloudsql-instances="${INSTANCE_CONNECTION_NAME}" \
-  --set-env-vars="NODE_ENV=development,ENABLE_TEST_ROUTES=true,COMMIT_SHA=${COMMIT_SHA},GCP_PROJECT_ID=${PROJECT},CLOUDSQL_INSTANCE_CONNECTION_NAME=${INSTANCE_CONNECTION_NAME},PG_IAM_USER=${PG_IAM_USER},PGDATABASE=cortex" \
-  --labels="workload=tenant-lifecycle,placement=shared,managed_by=manual,prompt=p1-2-slice-d-d1"
+  --image="${IMAGE_SHA}"
 
 echo ""
 echo "==> Service URL:"
@@ -118,12 +75,7 @@ gcloud run services describe "${SERVICE}" \
   --format='value(status.url)'
 
 echo ""
-echo "==> Operator access (SD8 deny-by-default; needs invoker IAM):"
+echo "==> Operator access (SD8 deny-by-default; D.5 grants invoker IAM):"
 echo "    gcloud run services proxy ${SERVICE} --project=${PROJECT} --region=${REGION}"
 echo "    # then in another shell:"
 echo "    curl http://localhost:8080/health"
-echo ""
-echo "==> Reminder: /v1/tenants/{id} requires the D.4 TF follow-up"
-echo "    (cloudsql.client + cloudsql.instanceUser + google_sql_user +"
-echo "    SQL grants for ${PG_IAM_USER}). /health and /v1/test/slow-5s"
-echo "    work without it; cold-start + SIGTERM measurement proceeds."

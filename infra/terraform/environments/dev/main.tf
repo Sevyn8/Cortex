@@ -320,6 +320,21 @@ resource "google_service_account_iam_member" "lifecycle_runtime_operator_user" {
   member             = "user:${each.value}"
 }
 
+# Self-actAs grant. Cloud Tasks dispatcher (running as the runtime SA
+# per Q-NEW-D-11 Option 1) needs `iam.serviceAccounts.actAs` on the
+# OIDC subject SA — which is also the runtime SA. Without this,
+# `dispatchCloudTask` with `oidcServiceAccountEmail` fails at the
+# Cloud Tasks API: PERMISSION_DENIED on iam.serviceAccounts.actAs.
+# Surfaced as a real gap in F02 D.4.5 gate evidence (revision 00019
+# returned 500 on POST /v1/tenants until this binding landed).
+# `roles/iam.serviceAccountUser` contains both actAs (used here) +
+# get (harmless side benefit).
+resource "google_service_account_iam_member" "lifecycle_runtime_self_user" {
+  service_account_id = google_service_account.tenant_lifecycle_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
 # 2. Cloud SQL IAM auth — three pieces. roles/cloudsql.client lets the SA
 #    reach the instance over private IP; roles/cloudsql.instanceUser lets the
 #    SA login via IAM (not password); google_sql_user of type

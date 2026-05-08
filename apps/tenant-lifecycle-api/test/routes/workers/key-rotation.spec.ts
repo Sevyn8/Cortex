@@ -21,10 +21,8 @@ import { problemDetailsHandler } from 'hono-problem-details';
 import { __setClientFactoryForTesting } from '@cortex/secrets';
 import { tenants } from '@cortex/tenant-context';
 import { mapError } from '../../../src/error-mapper.js';
-import {
-  buildKeyRotationWorkerRoutes,
-  type OidcValidator,
-} from '../../../src/routes/workers/key-rotation.js';
+import { buildKeyRotationWorkerRoutes } from '../../../src/routes/workers/key-rotation.js';
+import type { OidcValidator } from '../../../src/routes/workers/_shared/oidc.js';
 import type { AppConfig } from '../../../src/config.js';
 import { getPool } from '../../../../../packages/tenant-context/test/helpers/db.js';
 

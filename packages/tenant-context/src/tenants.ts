@@ -616,11 +616,13 @@ async function setStatus(
  * Standard path: REQUESTED is skipped; tenant lands at PROVISIONING and
  * the worker advances PROVISIONING → READY → ACTIVE.
  *
+
  * Enterprise path: tenant lands at REQUESTED. The worker is enqueued
  * but no-ops while `tenant.dedicated_db_approved=false`. An operator
- * marks the flag true via the control plane (HTTP API in Slice D); the
- * worker is then re-enqueued (TBD — Slice A workflow code lands sub-
- * phase 4.3). Convention doc §4 captures the operator workflow.
+ * marks the flag true via the control plane HTTP API (D.3
+ * `/v1/tenants/:id/approve-dedicated-db`); the worker is then
+ * re-enqueued by that endpoint per SA13. Convention doc §4 captures
+ * the operator workflow.
  *
  * Idempotency: Cloud Tasks `taskId='provisioning-{tenantId}'` dedups
  * duplicate enqueue attempts within ~1h. Worker also pre-checks
@@ -633,7 +635,8 @@ async function setStatus(
  * txn rolls back and no row exists. If Cloud Tasks dispatch fails
  * AFTER the substrate commit, the tenant row exists at `REQUESTED` /
  * `PROVISIONING` with no scheduled worker — operator must run
- * `cleanupFailedProvisioning` (lands sub-phase 4.5) before retrying.
+ * `cleanupFailedProvisioning` (Slice A; exported from
+ * `@cortex/tenant-context`) before retrying.
  *
  * Audit emission: `tenants.create` already emits `TENANT_CREATED` +
  * `TENANT_KMS_KEY_BOUND` (+ optional `TENANT_CONFIG_VERSION_CREATED`).
@@ -667,22 +670,38 @@ async function provision(
   const created = await create(db, { ...input, initialStatus }, ctx);
 
   // Enqueue provisioning task. Worker URL is configured per env; the
-  // actual worker function lands in sub-phase 4.3.
+  // worker route HTTP wrapper lives at apps/tenant-lifecycle-api/src/
+  // routes/workers/provisioning.ts (D.4.5). The library worker function
+  // (`provisioningWorker` in `./provisioning-worker.ts`) was built in
+  // Slice A; D.4.5 added the HTTP route + snake_case wire schema.
   const targetUrl = process.env.PROVISIONING_WORKER_URL;
   if (targetUrl === undefined || targetUrl === '') {
     throw new Error('PROVISIONING_WORKER_URL env required for tenants.provision');
   }
 
+  // Snake_case wire payload — matches the convention §7.4.0 pattern
+  // shared with the key-rotation worker. The route handler transforms
+  // back to camelCase `ProvisioningTaskPayload` before invoking the
+  // library function.
+  //
+  // OIDC: the dispatch carries an OIDC ID token signed by
+  // `CLOUD_TASKS_INVOKER_SA_EMAIL` (Q-NEW-D-11 Option 1 — same SA as
+  // the runtime + worker audience). Without it, Cloud Run's invoker
+  // IAM (D.5) returns 403 to every dispatched request. Surfaced as a
+  // gap in F02 D.4.5 gate evidence + closed in this same commit.
+  const invokerSaEmail = process.env.CLOUD_TASKS_INVOKER_SA_EMAIL;
   await dispatchCloudTask({
     queueName: 'provisioning-queue',
     taskId: `provisioning-${created.id}`,
     targetUrl,
     payload: {
-      tenantId: created.id,
-      actorType: ctx.actor.type,
-      actorId: ctx.actor.id,
-      ...(ctx.actor.description !== undefined && { actorDescription: ctx.actor.description }),
+      tenant_id: created.id,
+      actor_type: ctx.actor.type,
+      actor_id: ctx.actor.id,
+      ...(ctx.actor.description !== undefined && { actor_description: ctx.actor.description }),
     },
+    ...(invokerSaEmail !== undefined &&
+      invokerSaEmail !== '' && { oidcServiceAccountEmail: invokerSaEmail }),
   });
 
   return { tenantId: created.id, status: initialStatus };
@@ -1077,6 +1096,10 @@ async function offboard(
     throw new Error('LIFECYCLE_WORKER_URL env required for tenants.offboard');
   }
 
+  // OIDC: see provisioning-dispatch comment above for rationale.
+  // Forward-compat for D.6's lifecycle worker route — landing this
+  // here prevents a repeat of the D.4.5 surface gap.
+  const invokerSaEmail = process.env.CLOUD_TASKS_INVOKER_SA_EMAIL;
   await dispatchCloudTask({
     queueName: 'lifecycle-queue',
     taskId: `terminate-${parsedId}`,
@@ -1090,6 +1113,8 @@ async function offboard(
       ...(parsedActor.description !== undefined && { actorDescription: parsedActor.description }),
     },
     scheduleTime: graceUntil,
+    ...(invokerSaEmail !== undefined &&
+      invokerSaEmail !== '' && { oidcServiceAccountEmail: invokerSaEmail }),
   });
 
   // If Phase 3 returned the already-OFFBOARDING current row (race

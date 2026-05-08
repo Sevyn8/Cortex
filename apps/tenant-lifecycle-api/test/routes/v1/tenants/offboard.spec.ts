@@ -10,13 +10,19 @@
  * same error mapping (suspend.spec.ts + resume.spec.ts cover the
  * wrapper-layer correctness invariant).
  *
- * D.4's deploy smoke test will exercise this end-to-end against
- * the live Cloud Tasks queue + GCS bucket.
+ * D.4.5 gate evidence (`docs/planning/d4.5-gate-evidence.md`)
+ * captures the live offboard happy-path against the real Cloud
+ * Run service. The unit-test skip stays because GCS lacks a
+ * client-factory mock seam (KMS-style `__setClientFactoryForTesting`
+ * pattern not yet replicated in `@cortex/blob-storage`); a route-
+ * level `cascadeOverrides?` DI seam was considered + deferred at
+ * D.4.5 HOLD-#2 reconciliation per Option B (keep-skip + live-
+ * integration-only).
  */
 import { describe, it } from 'vitest';
 
 describe('POST /v1/tenants/:id/offboard', () => {
-  it.skip('happy + error mapping covered at library layer; D.4 smoke covers HTTP wrapper end-to-end', () => {
+  it.skip('happy + error mapping covered at library layer; D.4.5 live integration covers HTTP wrapper end-to-end', () => {
     // Intentionally empty — see file header for rationale.
   });
 });

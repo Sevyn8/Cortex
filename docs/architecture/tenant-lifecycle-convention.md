@@ -1720,91 +1720,64 @@ material is suspected compromised:
    `gcloud kms keys versions restore` if rotation was accidental
    (within the 30-day window).
 
-### 7.4 Worker route + Cloud Tasks integration `[F02-D.2 initial; D.4 extends]`
+### 7.4 Worker routes — OIDC + Cloud Tasks integration `[F02-D.2; D.4 extends; D.4.5 dual-pillars]`
 
-**Route:** `POST /v1/_workers/key-rotation` on
-`apps/tenant-lifecycle-api/`. The `/v1/_workers/*` prefix is the
-workspace convention for internal-only endpoints — bypasses the
-user-tenant-context middleware (added to its `skipPaths`). Tenant
-ID flows from the request body, not the `x-cortex-tenant-id`
-header.
+D.4.5 added a second worker route (provisioning), turning §7.4 from
+single-pillar (key-rotation) to dual-pillar. The shared pattern
+(OIDC, payload format, observability, status-mapping) lives in
+§7.4.0; per-route specifics live in §7.4.1 (key-rotation) and
+§7.4.2 (provisioning). New worker routes inherit §7.4.0 + add their
+own §7.4.N subsection.
 
-**OIDC validation (per ADR-LIFECYCLE-001 §3).** A per-route
-middleware verifies the inbound `Authorization: Bearer <token>` is
-a Google-signed OIDC ID token whose `email` claim matches the
-configured Cloud Tasks invoker SA (`CLOUD_TASKS_INVOKER_SA_EMAIL`
-env, locked by D.4 to the TF-provisioned SA). Missing / malformed /
-wrong-issuer-email tokens → 401. The default validator wraps
-`google-auth-library`'s `OAuth2Client.verifyIdToken`; tests inject
-a stub via the `validateOidc` build option.
+#### 7.4.0 Shared pattern
 
-**Body schema** (validated via `@hono/zod-validator`):
+**Route prefix:** `/v1/_workers/*` on `apps/tenant-lifecycle-api/`.
+The prefix is the workspace convention for internal-only endpoints
+— bypasses the user-tenant-context middleware (added to its
+`skipPaths`). Tenant ID flows from the Cloud Tasks request body,
+not the `x-cortex-tenant-id` header.
 
-```ts
-{
-  tenant_id: z.string().uuid(),
-  trigger: z.enum(['scheduled', 'on_demand']),
-}
-```
+**OIDC validator** (extracted to
+`apps/tenant-lifecycle-api/src/routes/workers/_shared/oidc.ts` at
+D.4.5). Each route runs a per-route middleware that calls the
+default validator (or a test stub injected via the route's
+`validateOidc?` build option). Validator wraps `google-auth-library`'s
+`OAuth2Client.verifyIdToken`. Failure modes: `missing-bearer-token`
+/ `empty-bearer-token` / `wrong-issuer` / `wrong-issuer-email` /
+`invalid-token` — all → 401 (Cloud Tasks treats as terminal, no
+retry). The validator's `expectedSaEmail` is sourced at startup
+from `config.CLOUD_TASKS_INVOKER_SA_EMAIL` (env-var pinned by D.4
+to the runtime SA per Q-NEW-D-11 Option 1).
 
-**Actor attribution.** The worker route runs with a hardcoded
-service actor (`{ type: 'service', id: 'cortex-tenant-lifecycle-worker' }`).
-On-demand rotations from the HTTP API (D.3) carry the caller's
-actor instead; the audit-chain payload's `actor_id` distinguishes
-the two paths for forensic queries ("which rotations were
-operator-driven vs scheduled?").
+**Wire format: snake_case in body schema; camelCase in library
+calls; transform at the route boundary.** Cloud Tasks dispatches
+the payload as a base64-encoded JSON body verbatim. Convention:
+the route's `dispatchCloudTask` callsite (in
+`@cortex/tenant-context/src/tenants.ts` / similar) sends snake_case;
+the route's zod body schema validates snake_case + the handler
+transforms to camelCase before calling the library function.
+Rationale: snake_case wire matches the user-facing API convention
+(GET /v1/tenants/:id returns snake_case JSON); the library functions
+take camelCase TS interfaces. Transform at the route boundary keeps
+both surfaces idiomatic.
 
 **Status mapping** (per the workspace error-mapper from D.1):
 
-| Library throw                 | HTTP response | Cloud Tasks behavior     |
-| ----------------------------- | ------------- | ------------------------ |
-| `TenantValidationError`       | 400           | terminal (no retry)      |
-| OIDC validation fail          | 401           | terminal                 |
-| `TenantNotFoundError`         | 404           | terminal                 |
-| `TenantStatusError`           | 409           | terminal                 |
-| `TenantRotationCooldownError` | 409           | terminal                 |
-| Other / KMS / DB transient    | 5xx           | retried per queue config |
+| Library throw                  | HTTP response | Cloud Tasks behavior     |
+| ------------------------------ | ------------- | ------------------------ |
+| `TenantValidationError`        | 400           | terminal (no retry)      |
+| OIDC validation fail           | 401           | terminal                 |
+| `TenantNotFoundError`          | 404           | terminal                 |
+| `TenantStatusError`            | 409           | terminal                 |
+| `TenantRotationCooldownError`  | 409           | terminal                 |
+| Other / KMS / DB / GCS / smoke | 5xx           | retried per queue config |
 
-**D.4 wiring (landed).**
-
-- **Queue**: `key-rotation-queue` per env, declared as
-  `module.cloud_tasks_key_rotation_queue` in
-  `environments/{dev,staging,prod}/main.tf`. Module
-  `infra/terraform/modules/cloud-tasks-queue` (existing; instantiated
-  third time alongside `provisioning-queue` + `lifecycle-queue` from
-  Slice C). `max_dispatches_per_second = 5` (halved vs. the others —
-  KMS rotation is slow async work; default would saturate KMS
-  quotas faster than the work drains). `max_attempts = 5`,
-  `min_backoff = 10s`, `max_backoff = 300s`, `max_doublings = 5`
-  per module defaults — backoff schedule
-  `10s → 20s → 40s → 80s → 160s → 300s` covers the ~5 min KMS
-  PERMISSION_DENIED propagation window after a fresh tenant_kms_key
-  binding lands.
-- **Dispatcher SA**: `tenant-lifecycle-runtime@<env>.iam.gserviceaccount.com`
-  (Slice C-provisioned). Per Q-NEW-D-11 → Option 1, the same SA is
-  the Cloud Tasks **dispatcher** AND the OIDC **audience** for
-  inbound worker calls. Rationale: Phase 1 simplicity; AC01 (P2.1)
-  splits via request-scoped identity. Marginal blast-radius is
-  ~zero — the runtime SA already holds Cloud SQL write + KMS rotate
-  - Storage objectAdmin; adding `cloudtasks.enqueuer` doesn't
-    meaningfully extend reach. Audit logs collapse "runtime → self via
-    Cloud Tasks" and "runtime → self direct" into the same
-    `principalEmail`; AC01 distinguishes via request-scoped identity.
-- **OIDC audience pinning**: the TF module
-  (`tenant-cloud-run-service`) sets `CLOUD_TASKS_INVOKER_SA_EMAIL`
-  to `var.runtime_sa_email` automatically. Worker route's OIDC
-  middleware reads this env at startup (no per-request lookup);
-  inbound `Authorization: Bearer <id-token>` whose `email` claim
-  ≠ this value → 401 (terminal in Cloud Tasks). Tests inject a
-  stub via the `validateOidc` build option.
-- **Post-create timing tolerance** (`updateCryptoKeyPrimaryVersion`
-  immediately after `createCryptoKeyVersion`): the new version may
-  briefly return state `PENDING_GENERATION` before transitioning
-  to `ENABLED`. The wrapper retries the `update` call with
-  exponential backoff (200ms / 400ms / 800ms; max 3 attempts) on
-  `FAILED_PRECONDITION`. Total worst-case cold path: ~1.4s of
-  retries + the actual KMS work. Rotation worker's per-task SLA
-  budget (5 minutes; see §7.5) absorbs this comfortably.
+The 4xx-terminal vs 5xx-retried distinction lets workers
+deliberately fail-fast on logic errors (wrong status, missing row)
+without burning the queue's retry budget. Transient infra blips
+(DB timeout, KMS hiccup, smoke-test failure under transient
+condition) re-throw plainly + Cloud Tasks retries per the queue
+config.
 
 **Cross-project artifact-registry pull (D.4-established
 convention).** Cloud Run pulls images from
@@ -1864,6 +1837,169 @@ control-plane workloads inherit the dual-grant pattern.
    service shape is TF-owned. NO `--service-account`, `--port`,
    `--cpu`, `--memory`, `--labels`, etc. — those flags fight TF on
    subsequent applies.
+
+#### 7.4.1 Key rotation worker `[F02-D.2 initial; D.4 wired]`
+
+**Route:** `POST /v1/_workers/key-rotation`. Inherits §7.4.0
+shared pattern.
+
+**Body schema** (validated via `@hono/zod-validator`):
+
+```ts
+{
+  tenant_id: z.string().uuid(),
+  trigger: z.enum(['scheduled', 'on_demand']),
+}
+```
+
+**Actor attribution.** The worker route runs with a hardcoded
+service actor (`{ type: 'service', id: 'cortex-tenant-lifecycle-worker' }`).
+On-demand rotations from the HTTP API (D.3) carry the caller's
+actor instead; the audit-chain payload's `actor_id` distinguishes
+the two paths for forensic queries ("which rotations were
+operator-driven vs scheduled?").
+
+**Per-route status-mapping additions** (beyond §7.4.0 shared
+table): `TenantRotationCooldownError` → 409 terminal (per the 24-h
+on-demand cooldown).
+
+**D.4 wiring (landed).**
+
+- **Queue**: `key-rotation-queue` per env, declared as
+  `module.cloud_tasks_key_rotation_queue` in
+  `environments/{dev,staging,prod}/main.tf`. Module
+  `infra/terraform/modules/cloud-tasks-queue` (existing; instantiated
+  third time alongside `provisioning-queue` + `lifecycle-queue` from
+  Slice C). `max_dispatches_per_second = 5` (halved vs. the others —
+  KMS rotation is slow async work; default would saturate KMS
+  quotas faster than the work drains). `max_attempts = 5`,
+  `min_backoff = 10s`, `max_backoff = 300s`, `max_doublings = 5`
+  per module defaults — backoff schedule
+  `10s → 20s → 40s → 80s → 160s → 300s` covers the ~5 min KMS
+  PERMISSION_DENIED propagation window after a fresh tenant_kms_key
+  binding lands.
+- **Dispatcher SA**: `tenant-lifecycle-runtime@<env>.iam.gserviceaccount.com`
+  (Slice C-provisioned). Per Q-NEW-D-11 → Option 1, the same SA is
+  the Cloud Tasks **dispatcher** AND the OIDC **audience** for
+  inbound worker calls. Rationale: Phase 1 simplicity; AC01 (P2.1)
+  splits via request-scoped identity. Marginal blast-radius is
+  ~zero — the runtime SA already holds Cloud SQL write + KMS rotate
+  - Storage objectAdmin; adding `cloudtasks.enqueuer` doesn't
+    meaningfully extend reach. Audit logs collapse "runtime → self via
+    Cloud Tasks" and "runtime → self direct" into the same
+    `principalEmail`; AC01 distinguishes via request-scoped identity.
+- **OIDC audience pinning**: the TF module
+  (`tenant-cloud-run-service`) sets `CLOUD_TASKS_INVOKER_SA_EMAIL`
+  to `var.runtime_sa_email` automatically. Worker route's OIDC
+  middleware reads this env at startup (no per-request lookup);
+  inbound `Authorization: Bearer <id-token>` whose `email` claim
+  ≠ this value → 401 (terminal in Cloud Tasks). Tests inject a
+  stub via the `validateOidc` build option.
+- **Post-create timing tolerance** (`updateCryptoKeyPrimaryVersion`
+  immediately after `createCryptoKeyVersion`): the new version may
+  briefly return state `PENDING_GENERATION` before transitioning
+  to `ENABLED`. The wrapper retries the `update` call with
+  exponential backoff (200ms / 400ms / 800ms; max 3 attempts) on
+  `FAILED_PRECONDITION`. Total worst-case cold path: ~1.4s of
+  retries + the actual KMS work. Rotation worker's per-task SLA
+  budget (5 minutes; see §7.5) absorbs this comfortably.
+
+#### 7.4.2 Provisioning worker `[F02-D.4.5]`
+
+**Route:** `POST /v1/_workers/provision`. Inherits §7.4.0 shared
+pattern. Path matches the env-var (`PROVISIONING_WORKER_URL`,
+TF-set) and the test-helper convention (D.3 era). Library function (already shipped in Slice A;
+exported from `@cortex/tenant-context`):
+`provisioningWorker(db, payload)`.
+
+**Body schema** (validated via `@hono/zod-validator`; strict —
+extra keys reject):
+
+```ts
+{
+  tenant_id: z.string().uuid(),
+  actor_type: z.enum(['service', 'user', 'system']),
+  actor_id: z.string().min(1).max(255),
+  actor_description: z.string().max(1024).optional(),
+}
+```
+
+**Actor attribution.** The worker uses a hardcoded service actor
+(`{ type: 'service', id: 'cortex-tenant-lifecycle' }`) for the
+system-driven `TENANT_STATUS_CHANGED` rows it emits per transition.
+The terminal-success `TENANT_PROVISIONED` event preserves the
+ORIGINAL caller's actor (forwarded through the Cloud Tasks payload)
+for forensic attribution — operators querying "who initiated the
+provisioning of tenant X" get the user/service that called
+`tenants.provision`, not the worker.
+
+**State-machine drive.** Worker advances the tenant per
+`ALLOWED_TRANSITIONS` (in `packages/tenant-context/src/tenants.ts`)
+
+- ADR-LIFECYCLE-001 §1:
+
+```
+REQUESTED  →  (Enterprise: dedicated_db_approved gate; SA13)  →  PROVISIONING
+PROVISIONING  →  (SA8 smoke test passes)                      →  READY
+READY  →  (smoke test gates the flip; SA5)                    →  ACTIVE
+```
+
+Each transition runs in its own DB transaction (per
+`provisioning-worker.ts` design — no super-transaction). Cloud
+Tasks retry semantics + the SA11 pre-check make per-step
+atomicity sufficient.
+
+**Idempotency.** Cloud Tasks `taskId='provisioning-{tenant_id}'`
+provides ~1-h dedup. The worker's SA11 pre-check covers the second
+layer: status past `PROVISIONING` (READY/ACTIVE/SUSPENDED/
+OFFBOARDING/TERMINATED) → no-op success; tenant doesn't exist (
+post-cleanup) → no-op success. The route handler always returns
+200 on the no-op paths; Cloud Tasks ack's + drops the task.
+
+**Failure modes (SA10 hard rollback).**
+
+- **Smoke-test failure** (substrate inconsistency — tenant row
+  exists but `tenant_kms_key` doesn't, or similar). Worker invokes
+  `cleanupFailedProvisioning` synchronously, then re-throws.
+  Cleanup deletes `tenant_config_version` + `tenant_kms_key` +
+  `tenant` rows in one transaction; ON DELETE RESTRICT FK ordering
+  enforces. The throw surfaces as 500 to Cloud Tasks; subsequent
+  retries pre-check (SA11), find no row, no-op success.
+- **Transient errors** (DB timeout, KMS hiccup, network blip).
+  Re-throw plainly (no cleanup). Cloud Tasks retries; substrate
+  intact.
+- **No FAILED state.** Per ADR-LIFECYCLE-001 §1 + planning-doc
+  SA10. Operators retry by re-running `tenants.provision` with the
+  same `external_id` after the cleanup runs.
+
+**Per-route status-mapping additions** (beyond §7.4.0 shared
+table): the smoke-test-failure cleanup-then-rethrow surfaces as
+500 (Cloud Tasks retries → next attempt finds no tenant row →
+200 no-op success → task ack'd + dropped).
+
+**D.4.5 wiring (landed).**
+
+- **Queue**: `provisioning-queue` per env (Slice C — pre-existing).
+  Module defaults: `max_dispatches_per_second = 10`,
+  `max_attempts = 5`, `min_backoff = 10s`, `max_backoff = 600s`.
+  Higher dispatch rate than `key-rotation-queue` because most
+  provisionings are quick (KMS substrate INSERT + smoke test ~1s
+  on the warm path).
+- **Dispatcher SA**: same as key-rotation —
+  `tenant-lifecycle-runtime@<env>.iam.gserviceaccount.com`. Q-NEW-D-11
+  Option 1 (single SA for runtime + dispatcher + OIDC subject).
+  D.5 added the runtime SA's `roles/run.invoker` grant on the
+  service explicitly to support this dispatch loop.
+- **OIDC audience pinning**: identical to §7.4.1 —
+  `CLOUD_TASKS_INVOKER_SA_EMAIL` env reads at route startup,
+  matched against the inbound token's `email` claim.
+- **Wire format change at D.4.5**: `tenants.provision`'s dispatch
+  payload was camelCase (`tenantId`, `actorType`, ...) pre-D.4.5;
+  flipped to snake_case (`tenant_id`, `actor_type`, ...) at D.4.5
+  to match §7.4.0 wire convention. Any in-flight pre-D.4.5 tasks
+  in `provisioning-queue` at apply time fail body validation → 400
+  → Cloud Tasks treats as terminal, drops (acceptable; no production
+  data).
 
 ### 7.5 Idempotency + failure recovery `[F02-D.2 initial; D.4 extends]`
 

@@ -251,6 +251,13 @@ resource "google_service_account_iam_member" "lifecycle_runtime_operator_user" {
   member             = "user:${each.value}"
 }
 
+# Self-actAs grant — see dev/main.tf for rationale (D.4.5).
+resource "google_service_account_iam_member" "lifecycle_runtime_self_user" {
+  service_account_id = google_service_account.tenant_lifecycle_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
 resource "google_project_iam_member" "lifecycle_runtime_cloudsql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"

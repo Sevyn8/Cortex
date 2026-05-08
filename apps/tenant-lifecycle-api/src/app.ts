@@ -27,6 +27,7 @@ import { buildHealthRoutes } from './routes/health.js';
 import { buildTestRoutes } from './routes/test.js';
 import { buildV1TenantRoutes } from './routes/v1/tenants.js';
 import { buildKeyRotationWorkerRoutes } from './routes/workers/key-rotation.js';
+import { buildProvisioningWorkerRoutes } from './routes/workers/provisioning.js';
 
 export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telemetry }): Hono {
   const { config, pool, telemetry } = args;
@@ -57,7 +58,12 @@ export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telem
   // today. The worker route under /v1/_workers/* bypasses entirely
   // (its tenant_id flows from the Cloud Tasks payload).
   const tenantMw = buildTenantContextMiddleware({
-    skipPaths: ['/health', '/v1/test/slow-5s', '/v1/_workers/key-rotation'],
+    skipPaths: [
+      '/health',
+      '/v1/test/slow-5s',
+      '/v1/_workers/key-rotation',
+      '/v1/_workers/provision',
+    ],
     rejectMissingTenant: false,
   });
   app.use('*', (c, next) => tenantMw.hono(c, next));
@@ -66,6 +72,7 @@ export function buildApp(args: { config: AppConfig; pool: Pool; telemetry: Telem
   app.route('/', buildHealthRoutes(config.COMMIT_SHA));
   app.route('/', buildV1TenantRoutes(pool));
   app.route('/', buildKeyRotationWorkerRoutes({ config, pool }));
+  app.route('/', buildProvisioningWorkerRoutes({ config, pool }));
   if (config.ENABLE_TEST_ROUTES) {
     app.route('/', buildTestRoutes());
   }

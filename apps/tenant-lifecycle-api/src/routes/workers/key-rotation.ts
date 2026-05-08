@@ -24,11 +24,11 @@
 import { tenants, withTenantDbClient } from '@cortex/tenant-context';
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
-import { OAuth2Client } from 'google-auth-library';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 
 import type { AppConfig } from '../../config.js';
+import { defaultOidcValidator, type OidcValidator } from './_shared/oidc.js';
 
 const keyRotationBodySchema = z.object({
   tenant_id: z.string().uuid(),
@@ -39,44 +39,6 @@ const WORKER_ACTOR = {
   type: 'service' as const,
   id: 'cortex-tenant-lifecycle-worker',
   description: 'Cloud Tasks worker for key rotation',
-};
-
-export interface OidcValidationResult {
-  ok: boolean;
-  reason?: string;
-}
-
-export type OidcValidator = (
-  authHeader: string | undefined,
-  expectedSaEmail: string | undefined,
-) => Promise<OidcValidationResult>;
-
-const defaultOidcValidator: OidcValidator = async (authHeader, expectedSaEmail) => {
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { ok: false, reason: 'missing-bearer-token' };
-  }
-  const token = authHeader.slice('Bearer '.length).trim();
-  if (token === '') {
-    return { ok: false, reason: 'empty-bearer-token' };
-  }
-  try {
-    const oauth2 = new OAuth2Client();
-    const ticket = await oauth2.verifyIdToken({ idToken: token });
-    const payload = ticket.getPayload();
-    if (payload?.iss !== 'https://accounts.google.com') {
-      return { ok: false, reason: 'wrong-issuer' };
-    }
-    if (
-      expectedSaEmail !== undefined &&
-      expectedSaEmail !== '' &&
-      payload?.email !== expectedSaEmail
-    ) {
-      return { ok: false, reason: 'wrong-issuer-email' };
-    }
-    return { ok: true };
-  } catch {
-    return { ok: false, reason: 'invalid-token' };
-  }
 };
 
 export interface KeyRotationWorkerOptions {

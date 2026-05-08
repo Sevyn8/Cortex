@@ -179,7 +179,11 @@ describe('tenants.provision', () => {
       expect(callArg.task.httpRequest.url).toBe('https://provisioning-worker.example.com');
     });
 
-    it('payload base64-encodes tenantId + actor metadata', async () => {
+    it('payload base64-encodes tenant_id + actor metadata in snake_case wire format', async () => {
+      // Wire format is snake_case per convention §7.4.0 (D.4.5). The
+      // worker route's zod body schema validates snake_case + transforms
+      // to camelCase `ProvisioningTaskPayload` before invoking the
+      // library function. Aligns with the key-rotation worker route.
       const result = await tenants.provision(
         db,
         { externalId: externalIdFor('dispatch-4'), displayName: 'D4', tier: 'STANDARD' },
@@ -193,10 +197,41 @@ describe('tenants.provision', () => {
       const decoded = JSON.parse(
         Buffer.from(callArg.task.httpRequest.body, 'base64').toString('utf8'),
       ) as Record<string, unknown>;
-      expect(decoded.tenantId).toBe(result.tenantId);
-      expect(decoded.actorType).toBe(ACTOR.type);
-      expect(decoded.actorId).toBe(ACTOR.id);
-      expect(decoded.actorDescription).toBe(ACTOR.description);
+      expect(decoded.tenant_id).toBe(result.tenantId);
+      expect(decoded.actor_type).toBe(ACTOR.type);
+      expect(decoded.actor_id).toBe(ACTOR.id);
+      expect(decoded.actor_description).toBe(ACTOR.description);
+    });
+
+    it('attaches oidcToken when CLOUD_TASKS_INVOKER_SA_EMAIL is set', async () => {
+      // OIDC dispatch path — required for Cloud Run invoker IAM (D.5+).
+      // Without the env var, the spread is a no-op (pre-D.5 path); with
+      // it set, dispatchCloudTask attaches an oidcToken with the SA
+      // email. Surfaced as a real gap in D.4.5 gate evidence.
+      const previous = process.env.CLOUD_TASKS_INVOKER_SA_EMAIL;
+      process.env.CLOUD_TASKS_INVOKER_SA_EMAIL =
+        'tenant-lifecycle-runtime@sevyn8-cortex-dev.iam.gserviceaccount.com';
+      try {
+        const result = await tenants.provision(
+          db,
+          { externalId: externalIdFor('dispatch-oidc'), displayName: 'OIDC', tier: 'STANDARD' },
+          { actor: ACTOR },
+        );
+        trackTenant(result.tenantId);
+
+        const callArg = mockClient.createTask.mock.calls[0]?.[0] as {
+          task: { httpRequest: { oidcToken?: { serviceAccountEmail: string } } };
+        };
+        expect(callArg.task.httpRequest.oidcToken?.serviceAccountEmail).toBe(
+          'tenant-lifecycle-runtime@sevyn8-cortex-dev.iam.gserviceaccount.com',
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.CLOUD_TASKS_INVOKER_SA_EMAIL;
+        } else {
+          process.env.CLOUD_TASKS_INVOKER_SA_EMAIL = previous;
+        }
+      }
     });
   });
 

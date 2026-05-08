@@ -76,6 +76,26 @@ export interface DispatchOptions {
    * remainder.
    */
   scheduleTime?: Date;
+  /**
+   * SA email Cloud Tasks impersonates to mint an OIDC ID token for
+   * the dispatch. Required when the target Cloud Run service has
+   * invoker IAM enforced (deny-by-default — D.5+). Cloud Tasks
+   * attaches `Authorization: Bearer <id-token>` whose `email` claim
+   * = this SA, and `aud` = `targetUrl`. The worker route's OIDC
+   * middleware (per convention §7.4.0) verifies both.
+   *
+   * Per Q-NEW-D-11 Option 1, this is the runtime SA — same identity
+   * as the dispatcher AND the worker's OIDC audience. Sourced from
+   * `CLOUD_TASKS_INVOKER_SA_EMAIL` env at the call site. Optional
+   * here so test helpers + pre-D.5 unit-test paths can dispatch
+   * without OIDC.
+   *
+   * Surfaced as a real gap in F02 D.4.5 gate evidence: pre-D.4.5
+   * dispatches landed without OIDC and the platform layer 403'd
+   * every retry. Without this field, deployed worker routes are
+   * unreachable from Cloud Tasks.
+   */
+  oidcServiceAccountEmail?: string;
 }
 
 /**
@@ -102,6 +122,7 @@ export async function dispatchCloudTask(opts: DispatchOptions): Promise<void> {
       url: string;
       headers: { 'Content-Type': string };
       body: string;
+      oidcToken?: { serviceAccountEmail: string; audience?: string };
     };
     scheduleTime?: { seconds: number; nanos: number };
   } = {
@@ -113,6 +134,14 @@ export async function dispatchCloudTask(opts: DispatchOptions): Promise<void> {
       body: Buffer.from(JSON.stringify(opts.payload)).toString('base64'),
     },
   };
+
+  if (opts.oidcServiceAccountEmail !== undefined && opts.oidcServiceAccountEmail !== '') {
+    task.httpRequest.oidcToken = {
+      serviceAccountEmail: opts.oidcServiceAccountEmail,
+      // audience defaults to targetUrl when omitted (Cloud Tasks default).
+      // Workers' OIDC middleware checks email-claim, not aud, today.
+    };
+  }
 
   if (opts.scheduleTime !== undefined) {
     const ms = opts.scheduleTime.getTime();

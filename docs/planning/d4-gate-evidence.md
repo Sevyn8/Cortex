@@ -126,5 +126,9 @@ The only D.4 architectural concern that can't be evidenced by partial-state curl
 | (c) Cloud Run service deploys + receives traffic in dev               | PASS                                        | revision 00017 (worker-URL apply) serving 100% traffic; curl 1 returns 200 with DB-sourced payload |
 | D.4 IAM gap closure end-to-end                                        | PASS                                        | curl 1                                                                                             |
 | Lifecycle routes reachable + state-machine guards work                | PASS                                        | curls 2/3/4 (409s)                                                                                 |
-| Lifecycle happy-paths (202s)                                          | DEFERRED to sub-phase 4.3                   | requires provisioning worker                                                                       |
-| §7.4 terminate-before-grace contract message                          | DEFERRED to sub-phase 4.3                   | requires `OFFBOARDING`-state tenant                                                                |
+| Lifecycle happy-paths (202s)                                          | DEFERRED to sub-phase D.4.5                 | requires provisioning worker                                                                       |
+| §7.4 terminate-before-grace contract message                          | DEFERRED to sub-phase D.4.5                 | requires `OFFBOARDING`-state tenant                                                                |
+
+## Follow-up
+
+Provisioning worker tracked as Sub-phase **D.4.5** in `docs/planning/f02-slice-d-scope.md` (plan-inserted 2026-05-08 between D.4 and D.5; see SD1 "D.4.5 lineage" note for the reasoning behind the mid-stream insert). The 3 deferred D.3 happy paths (offboard / terminate / force-terminate) + the §7.4 contract evidence land when D.4.5 closes.

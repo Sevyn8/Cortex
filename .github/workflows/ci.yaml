@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint bi-temporal migrations
+        run: node services/foundation/scripts/lint-bi-temporal.mjs --dir services/foundation/migrations/
+
       - name: Apply migrations to ephemeral Postgres
         run: pnpm db:migrate
 

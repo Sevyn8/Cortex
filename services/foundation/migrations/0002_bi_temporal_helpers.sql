@@ -27,9 +27,10 @@
 -- explicit values on INSERT. Use BEFORE INSERT triggers or application-layer
 -- computation for derived fields instead.
 --
--- 1. Attach SCD trigger:
+-- 1. Attach SCD trigger (post-0006 binding — INSERT branch normalizes
+--    timestamps to ms quantum; UPDATE / DELETE branches close the prior row):
 --      CREATE TRIGGER <t>_scd
---        BEFORE UPDATE OR DELETE ON <t>
+--        BEFORE INSERT OR UPDATE OR DELETE ON <t>
 --        FOR EACH ROW EXECUTE FUNCTION cortex.cortex_scd_trigger();
 --
 -- 2. Business-key uniqueness over current versions (ADR-DB-001 §4):

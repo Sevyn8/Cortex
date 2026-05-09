@@ -192,6 +192,58 @@ Deep rationale lives in ADR-DB-001, DB-002, DB-003.
 - Set `ALTER TABLE <t> FORCE ROW LEVEL SECURITY` in `beforeAll`, pair with `NO FORCE` in `afterAll`. Real Phase 1 tables do NOT need FORCE in production (F01 middleware never runs as superuser).
 - Use `withTenantContext(pool, tenantId, fn)` / `withoutTenantContext(pool, fn)` from `@cortex/canonical-schema/rls-test` to set / unset tenant context inside a test transaction. The helpers use `set_config` under the hood for the reason in the "Session variables" section above.
 
+### Bi-temporal table convention `[F03 Slice A]`
+
+When a tenant-scoped table is a domain entity (retains valid-time + transaction-time history per ADR-DB-001), use the bi-temporal pattern. When it's bookkeeping (queue, counter, lookup, append-only audit log), it isn't bi-temporal.
+
+**When to use:** domain entities under `tenant_id` with versioning needs (products, hierarchy nodes, facts, etc.).
+
+**When NOT to use** (allowlist of bookkeeping tables — never bi-temporal): `tenant`, `tenant_config_version`, `tenant_quota_usage`, `tenant_kms_key`, `legal_hold`, `audit_event`. New bookkeeping tables: opt out by adding a directive immediately before `CREATE TABLE`:
+
+```sql
+-- @bi-temporal: skip
+CREATE TABLE my_bookkeeping_table ( ... );
+```
+
+The lint enforces fail-closed — a tenant-scoped (`tenant_id`-bearing) table that is not in the allowlist AND lacks the directive AND lacks the recipe → CI fail. Pre-commit hook (`lint-staged`) catches at commit time; `.github/workflows/ci.yaml`'s `Lint bi-temporal migrations` step catches `--no-verify` bypasses.
+
+**Recipe** (post-0006 trigger binding; cross-ref migration 0006 for the ms-precision normalization that makes JS-Date round-trip lossless):
+
+- Two `tstzrange` columns: `valid_time` + `txn_time`
+- Trigger: `BEFORE INSERT OR UPDATE OR DELETE` calling `cortex.cortex_scd_trigger()`
+- GiST index on `(tenant_id, valid_time, txn_time)`
+- Current-version partial index `WHERE upper(txn_time) IS NULL`
+- Exclusion constraint on `(tenant_id, business_key, valid_time)` `WHERE upper(txn_time) IS NULL`
+
+**Scaffold** (preferred; produces the recipe SQL ready to redirect into a migration file):
+
+```bash
+make db-scaffold-bitemporal TABLE=<name> BUSINESS_KEY=<col> [WITH_WRAPPERS=y|n]
+```
+
+The `WITH_WRAPPERS` flag generates per-table query wrappers (`cortex.<table>_as_of_valid`, `cortex.<table>_as_of_latest`, `cortex.<table>_history`) over the shared `cortex.at_time_t` predicate. Defaults to `y`.
+
+- `WITH_WRAPPERS=y` (default; almost always): generates the 3 wrappers. Locks per-table query shape consistent across all bi-temporal tables; new consumers don't redo the design call. Closes roadmap §5.2 on a per-table basis as scaffolds run.
+- `WITH_WRAPPERS=n` (rare): generates columns + trigger + indexes only. Use when the access pattern hasn't been designed yet AND the table needs to ship bi-temporal for future-compat. The wrappers can be added later via a follow-up migration. ADR-DB-001 §Implementation Notes deferral pattern remains the fallback.
+
+The scaffold writes to stdout; redirect to a migration file path of your choosing. The scaffold deliberately does NOT touch `services/foundation/migrations/meta/_journal.json` — append the journal entry manually per the high-water-mark discipline (ADR-DB-001 §Implementation Notes).
+
+**Backfill** (legacy tables that exist without bi-temporal columns):
+
+```sql
+SELECT cortex.backfill_bitemporal('public', 'tablename', 'business_key_col');
+```
+
+Idempotent — re-running on an already-backfilled table is a no-op. Currently zero legacy tables in the codebase need this; the helper future-proofs reclassification (a bookkeeping table that becomes domain) and external imports.
+
+**Cross-refs:**
+
+- ADR-DB-001 (primary contract; recipe rationale + alternatives rejected — especially Alternative 4 (4-scalar columns) and Alternative 5 (named retrieval funcs as platform primitives))
+- Migration 0002 (`cortex.cortex_scd_trigger` + `cortex.at_time_t`); the file's header recipe was post-0006-corrected in F03 Slice A.
+- Migration 0006 (ms-precision quantum) — JS-Date round-trip safe.
+- `docs/planning/f03-temporal-data-engine-scope.md` (multi-phase close timeline; tracks Slice C / D deferrals to F04 / D04)
+- `docs/planning/f03-slice-A-scope.md` (SD-locked decisions, especially Q-NEW-F03A-1 `WITH_WRAPPERS` synthesis and SD5 lint scope)
+
 ## Feature flags
 
 - All new capabilities roll out behind a feature flag (`@cortex/feature-flags`)

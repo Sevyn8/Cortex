@@ -46,6 +46,9 @@
     ],
     "*.{json,md,yaml,yml}": [
       "prettier --write"
+    ],
+    "services/foundation/migrations/0*.sql": [
+      "node services/foundation/scripts/lint-bi-temporal.mjs --files"
     ]
   }
 }

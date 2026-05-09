@@ -86,6 +86,12 @@ db-migrate-prod: ## Apply pending migrations to prod (requires CONFIRM=yes + db-
 	PGPASSWORD=$$(gcloud secrets versions access latest --secret=cortex-db-postgres-break-glass-prod --project=sevyn8-cortex-prod) \
 		pnpm db:migrate
 
+db-scaffold-bitemporal: ## Scaffold a bi-temporal table SQL block. Usage: make db-scaffold-bitemporal TABLE=<name> BUSINESS_KEY=<col> [WITH_WRAPPERS=y|n]
+	@[ -n "$(TABLE)" ] || (echo "Usage: make db-scaffold-bitemporal TABLE=<name> BUSINESS_KEY=<col> [WITH_WRAPPERS=y|n]"; exit 1)
+	@[ -n "$(BUSINESS_KEY)" ] || (echo "Usage: make db-scaffold-bitemporal TABLE=<name> BUSINESS_KEY=<col> [WITH_WRAPPERS=y|n]"; exit 1)
+	TABLE=$(TABLE) BUSINESS_KEY=$(BUSINESS_KEY) WITH_WRAPPERS=$(or $(WITH_WRAPPERS),y) \
+		node services/foundation/scripts/scaffold-bitemporal.mjs
+
 # --- Workspace ---
 install: ## pnpm install
 	pnpm install

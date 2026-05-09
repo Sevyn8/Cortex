@@ -169,6 +169,23 @@ Updated whenever a deferral is added or revisited.
 - **References:** `services/foundation/test/audit-chain.spec.ts` (the FORCE RLS toggle); `docs/planning/f04-slice-B-scope.md` B.6 finding (Slice B's empirical verification of pre-existing race); CLAUDE.md `### Reshaping tenant-scoped substrate tables` "Workspace-wide test runner caveat".
 - **Owner phase:** Operator-driven; first session that hits the race in a way that masks a real CI miss.
 
+### 1.14 ms-precision pathology in scd-trigger row ordering and range bounds
+
+- **Symptom:** When operations on the same entity occur within the same millisecond, two pathologies surface in F03's bi-temporal trigger machinery:
+  1. `ORDER BY lower(txn_time)` ties when OLD-row close-update and NEW-row INSERT happen in the same ms quantum, making row-order non-deterministic for downstream consumers.
+  2. `tstzrange(lower, upper)` collapses to empty when `lower == upper` after `date_trunc('ms', now())`, breaking the OLD row's closed validity window (`upper()` returns NULL on an empty range).
+- **Surfaced in:** PR #6 (F03 Slice C) round-1 CI; see commits `6cba165` + `eaf6bf0`. CI's faster execution surfaced what doesn't fire in slower local environments. Test fix in `eaf6bf0` used 5ms `setTimeout` between INSERT and action-under-test + deterministic `ORDER BY upper(txn_time) NULLS LAST`; underlying substrate behavior unchanged.
+- **Production exposure:** Edge fleet automation could plausibly trigger this — fast batch config promotions, automated loops touching the same tenant entity in succession, concurrent transactions on a common row. Probability is low at current scale; surface area grows with automation density.
+- **Fix candidates (architectural tension):**
+  - **(a)** Add microsecond precision to bi-temporal columns. Conflicts with migration 0006's "no microsecond gap between OLD-close and NEW-open" invariant — close/open chain currently depends on identical-ms boundaries to be contiguous.
+  - **(b)** Use `clock_timestamp()` instead of `now()` for fresh sub-ms timestamps. Same invariant violation as (a).
+  - **(c)** Add a row-version sequence column (monotonic per-tenant or global) breaking ties when timestamps match. Adds storage + indexing cost; needs order-by-version-then-time semantics across all consumers.
+  - **(d)** Lock-and-yield in trigger to ensure ≥1ms separation between operations on the same entity. Adds latency under contention; complicates concurrent operation patterns.
+- **Trigger:** Address when first production incident points to this OR when fleet-automation density makes >1ms separation no longer a safe assumption. Until then, the test-fix workaround is sufficient.
+- **Effort estimate:** 4-8 hr investigation + design ADR; implementation depends on chosen candidate.
+- **References:** `services/foundation/migrations/0006_bi_temporal_ms_truncation.sql` (the no-µs-gap invariant); `services/foundation/migrations/0017_f03_scd_types_3_4_6.sql` (current trigger using `date_trunc('ms', now())`); `services/foundation/test/scd-policy-trigger.spec.ts` (test-fix workaround at `eaf6bf0`); `docs/planning/f03-slice-C-scope.md` (Slice C close).
+- **Owner phase:** Operator-driven; design ADR + implementation triggered by production signal or automation-density inflection.
+
 ---
 
 ## 2. Operational triggers

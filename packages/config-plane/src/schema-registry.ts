@@ -93,6 +93,32 @@ export function getNamespaceSchema<T = unknown>(
 }
 
 /**
+ * Returns the highest registered version for `namespace`. Convenience
+ * helper for callers who want to pin a draft to "the latest available
+ * schema" — per Q-NEW-F04B-9, `createDraft` requires an explicit
+ * `schemaVersion` (no auto-resolve), and this helper is the explicit
+ * way to ask "what's latest right now?"
+ *
+ * Throws `NamespaceSchemaNotRegisteredError` (re-using `get-config`'s
+ * symbol shape) if no schema is registered for the namespace.
+ */
+export function getLatestRegisteredVersion(namespace: string): number {
+  let max: number | undefined;
+  for (const entry of registry.values()) {
+    if (entry.namespace === namespace) {
+      if (max === undefined || entry.version > max) max = entry.version;
+    }
+  }
+  if (max === undefined) {
+    throw new Error(
+      `config-plane: no schema registered for namespace ${JSON.stringify(namespace)}; ` +
+        'register at least one version via registerNamespaceSchema before calling getLatestRegisteredVersion.',
+    );
+  }
+  return max;
+}
+
+/**
  * Test-only helper. Clears the registry between test cases that
  * register competing schemas. Production code should never call
  * this; the registry is meant to be append-only at module init.

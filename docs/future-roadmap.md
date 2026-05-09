@@ -156,6 +156,19 @@ Updated whenever a deferral is added or revisited.
 - **References:** `docs/planning/p1.4-f04-configuration-plane-scope.md` §1 D10 (in-process LRU lock for Phase 1) + §5 Risk register (multi-replica scaling trigger). F04 Slice C ships the in-process implementation; this entry tracks the upgrade path.
 - **Owner phase:** Operator-driven post-Phase-1 multi-replica deploy; first traffic-divergence observation.
 
+### 1.13 Fix audit-chain FORCE-RLS turbo-parallel race
+
+- **Symptom:** `pnpm test` workspace-wide intermittently fails locally — a different package per run (sometimes `@cortex/foundation`, sometimes `@cortex/temporal-query`, etc.). Verified pre-existing on `873fb33` (pre-Slice-B main HEAD) by stashing in-flight Slice B work and running on the bare main HEAD; same intermittent failure pattern. NOT a Slice B regression. CI passes the same `pnpm test` against ephemeral Postgres consistently — race is timing-dependent and apparently doesn't manifest in CI's environment.
+- **Hypothesis:** `services/foundation/test/audit-chain.spec.ts` issues `ALTER TABLE audit_event FORCE ROW LEVEL SECURITY` in `beforeAll` and `NO FORCE` in `afterAll`. While that suite is mid-run, parallel suites in other packages inserting into `audit_event` observe inconsistent RLS enforcement (the FORCE flag is a global table-level setting). The window between FORCE → NO FORCE is timing-dependent; under heavy turbo-parallel load it overlaps with cross-suite writes.
+- **Fix candidates:**
+  1. Scope FORCE RLS to a separate test schema instead of mutating the global table-level setting on the production-shaped `audit_event`.
+  2. Migrate `audit-chain.spec.ts` to a unique-per-suite tenant pattern that doesn't require global FORCE — e.g., create a parallel `audit_event_test` table with FORCE always on and run the chain tests against that.
+  3. Serialize audit-related test suites at the vitest config layer (`singleThread: true` for the affected specs; `pool: 'threads'` with limited concurrency).
+- **Trigger:** When local-only workspace-wide pre-push verification becomes load-bearing — likely when a future slice CI failure is caused by something the per-package serial run would have missed. Until then, per-package serial + CI is the verified gate (see CLAUDE.md `### Reshaping tenant-scoped substrate tables` "Workspace-wide test runner caveat").
+- **Effort estimate:** 2-4 hr investigation; fix complexity depends on which candidate is chosen. Candidate 1 is the cleanest (no test-shape changes) but requires schema-level changes to the test harness.
+- **References:** `services/foundation/test/audit-chain.spec.ts` (the FORCE RLS toggle); `docs/planning/f04-slice-B-scope.md` B.6 finding (Slice B's empirical verification of pre-existing race); CLAUDE.md `### Reshaping tenant-scoped substrate tables` "Workspace-wide test runner caveat".
+- **Owner phase:** Operator-driven; first session that hits the race in a way that masks a real CI miss.
+
 ---
 
 ## 2. Operational triggers

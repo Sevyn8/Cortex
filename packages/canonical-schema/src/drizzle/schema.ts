@@ -172,6 +172,68 @@ export type TenantConfigVersion = typeof tenantConfigVersion.$inferSelect;
 export type NewTenantConfigVersion = typeof tenantConfigVersion.$inferInsert;
 
 /**
+ * F04 Slice B draft state (migration 0015). Tenant-scoped, mutable
+ * by the author until promote/discard; sibling to the immutable
+ * `tenant_config_version` chain.
+ *
+ * Status enum: 'active' | 'promoted' | 'discarded'. Active drafts
+ * are uniquely keyed on (tenant_id, namespace, created_by_user_id)
+ * via a partial UNIQUE INDEX (`config_draft_one_active_per_author`)
+ * — only `active` rows occupy the slot, so promote/discard frees
+ * the (tenant, namespace, author) tuple for a fresh draft.
+ *
+ * Validation state lives on the row (`validation_state` +
+ * `validation_errors`). validateDraft updates these in place;
+ * promoteDraft re-validates defensively per Q-NEW-F04B-6.
+ *
+ * `promoted_to_version_id` is the post-promote audit-trail link
+ * to `tenant_config_version`. Per Q-NEW-F04B-5: drafts retain
+ * after promote (status='promoted') for "which draft became which
+ * version" forensic queries; ON DELETE SET NULL on the FK is
+ * defense in depth (in-app code never deletes versions).
+ *
+ * Author-only visibility is enforced at the application layer pre-
+ * AC01 via `created_by_user_id` filter; post-AC01 the RLS policy
+ * upgrades to reference `cortex.current_user_id()`.
+ */
+export const configDraft = pgTable(
+  'config_draft',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenant_id: uuid('tenant_id')
+      .notNull()
+      .references(() => tenant.id, { onDelete: 'restrict' }),
+    namespace: text('namespace').notNull(),
+    schema_version: integer('schema_version').notNull().default(1),
+    draft_json: jsonb('draft_json').notNull().$type<Record<string, unknown>>(),
+    status: text('status', {
+      enum: ['active', 'promoted', 'discarded'],
+    })
+      .notNull()
+      .default('active'),
+    validation_state: text('validation_state', {
+      enum: ['unvalidated', 'valid', 'invalid'],
+    })
+      .notNull()
+      .default('unvalidated'),
+    validation_errors: jsonb('validation_errors').$type<unknown>(),
+    promoted_to_version_id: uuid('promoted_to_version_id'),
+    created_by_user_id: uuid('created_by_user_id').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().default(msNow),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().default(msNow),
+  },
+  // Partial UNIQUE INDEX on (tenant_id, namespace, created_by_user_id)
+  // WHERE status='active' is created in migration 0015 — Drizzle's
+  // unique() helper doesn't express partial-with-WHERE; the SQL is
+  // the source of truth (per CLAUDE.md ## Database conventions:
+  // "raw-SQL migrations are the migration source of truth; this file
+  // mirrors shape for typed queries").
+);
+
+export type ConfigDraft = typeof configDraft.$inferSelect;
+export type NewConfigDraft = typeof configDraft.$inferInsert;
+
+/**
  * Quota counters per (tenant, resource_class, window_start). RLS enabled.
  * Slice A creates the substrate; enforcement (token bucket, 429-on-exceed)
  * lands in F01 Slice C. resource_class is free-form for now; Slice C may

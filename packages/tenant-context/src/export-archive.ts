@@ -253,8 +253,19 @@ async function collectEntities(
   const tenantRows = await db.execute<Record<string, unknown>>(
     sql`SELECT * FROM tenant WHERE id = ${tenantId}`,
   );
+  // ORDER BY (namespace, version_number) for deterministic export-row
+  // ordering across multiple namespaces. Pre-F04-Slice-A the table had
+  // one namespace's worth of rows per tenant; post-Slice-A reshape
+  // (migration 0014), the table is per-(tenant, namespace, version)
+  // and this query can return rows from multiple namespaces. Ordering
+  // by version_number alone interleaves namespaces non-deterministically
+  // (e.g., t/v1, p/v1, t/v2, p/v2, ...). Defensive fix surfaced during
+  // F04 Slice B HOLD #1 workspace-wide grep per the §5 reconciliation
+  // procedure (Class-2 read-class subtype: ORDER BY missing namespace
+  // tiebreaker; sibling of the WHERE-clause subtype that the quotas
+  // SELECT exhibited).
   const configRows = await db.execute<Record<string, unknown>>(
-    sql`SELECT * FROM tenant_config_version WHERE tenant_id = ${tenantId} ORDER BY version_number`,
+    sql`SELECT * FROM tenant_config_version WHERE tenant_id = ${tenantId} ORDER BY namespace, version_number`,
   );
   // Exclude any future key-material columns by enumerating known-safe
   // columns explicitly. Phase 1 schema has no key material in the DB

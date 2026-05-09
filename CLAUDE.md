@@ -246,6 +246,8 @@ grep -rn "insert(<drizzleTableName>)\|from(<drizzleTableName>)" workspace
 
 Pre-push verification for substrate-table reshape commits MUST be `pnpm vitest run` **workspace-wide**, not a scoped subset. Read-class failures only surface when fixtures from other namespaces exist; CI is the fallback if local skips them.
 
+**Workspace-wide test runner caveat.** `pnpm test` workspace-wide runs vitest in turbo-parallel mode and hits a pre-existing race involving `audit-chain.spec.ts`'s FORCE RLS toggle racing with parallel suites' `audit_event` INSERTs. The race is timing-dependent and apparently doesn't manifest in CI. Locally, fall back to per-package serial (run vitest in each affected package's directory) as the reliable pre-push gate; CI is the canonical workspace-wide gate. Tracked for fix at `docs/future-roadmap.md` §1.13.
+
 Pad reshape-reconciliation estimates to 2× the source-file-only estimate. Slice A's 1-hr A.6 estimate landed at ~1.5 hr after counting the test-fixture surface (+~30 min) and the CI-caught read-class fix (+~30 min).
 
 Reference: `docs/planning/p1.4-f04-configuration-plane-scope.md` §5 Risk Register (Slice A's reconciliation discovery, including the quotas reads class missed by the original grep).
@@ -353,20 +355,59 @@ Public API takes a `Queryable` interface (Q-NEW-F03B-5; productization-critical 
 
 **Slices** (per `docs/planning/p1.4-f04-configuration-plane-scope.md`):
 
-- A — Storage + Zod registry + read API ✓ (this slice)
-- B — Lifecycle (draft / validate / promote / rollback) — F03 Slice C unblocks at this slice's close per D7
+- A — Storage + Zod registry + read API ✓
+- B — Lifecycle (draft / validate / promote / rollback) ✓ — F03 Slice C unblocks at this slice's close per D7
 - C — Layered resolution + caching (in-process LRU + TTL; Redis distributed cache deferred to roadmap §1.12)
 - D — Impact analysis + breaking-change blocker
 - E — Git-sync stub + module wrap-up
 
-**Author-only draft visibility** (Slice B): pre-AC01 implementation uses explicit `created_by_user_id` filter in app code. Post-AC01 upgrades to RLS policy referencing `cortex.current_user_id()`. Documented in Slice B's `config_draft` migration header.
+### Lifecycle API (Slice B)
+
+`@cortex/config-plane` ships six lifecycle helpers in `src/lifecycle.ts`. Each opens its own `db.transaction(...)` (matches F02 precedent), binds tenant context for RLS, performs the mutation, emits the appropriate audit event, and returns / throws as documented.
+
+| Function                                | Verb   | Audit                        | Purpose                                                                                                                                                                                                                                         |
+| --------------------------------------- | ------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createDraft(db, params)`               | CREATE | `CONFIG_DRAFT_CREATED`       | Insert active draft. Pre-checks schema registration. Substrate UNIQUE catches duplicate active draft per (tenant, namespace, author).                                                                                                           |
+| `updateDraft(db, tenantId, params)`     | UPDATE | `CONFIG_DRAFT_UPDATED`       | Optimistic UPDATE on `expectedUpdatedAt`; mismatch → `DraftConcurrencyError`. Resets `validation_state` to `'unvalidated'`.                                                                                                                     |
+| `validateDraft(db, tenantId, params)`   | READ   | `CONFIG_DRAFT_VALIDATED`     | Zod parse against pinned `schema_version`; persists outcome to draft row's `validation_state` + `validation_errors`. Idempotent.                                                                                                                |
+| `promoteDraft(db, tenantId, params)`    | CREATE | `CONFIG_VERSION_PROMOTED`    | Defensive re-validate (Q-NEW-F04B-6); INSERT new `tenant_config_version` row with optimistic concurrency on `(tenant, namespace, version_number)` UNIQUE; UPDATE draft → `'promoted'` + `promoted_to_version_id`. Retries up to twice on 23505. |
+| `rollbackVersion(db, tenantId, params)` | CREATE | `CONFIG_VERSION_ROLLED_BACK` | Whole-namespace per Q-NEW-F04B-3; INSERT new version copying parent's `config_json`; new row's `parent_version_id` points to the rolled-back-FROM version (chain integrity). Same retry-twice pattern as promote. NOT author-scoped.            |
+| `discardDraft(db, tenantId, params)`    | DELETE | `CONFIG_DRAFT_DISCARDED`     | Mark `status='discarded'`. Author-only. Frees the (tenant, namespace, author) UNIQUE slot for a fresh draft.                                                                                                                                    |
+
+**Actor parameter** (Q-NEW-F04B-8): all helpers take an `Actor` with `type ∈ {'user', 'service', 'system'}`. F02 precedent. `actor.id` becomes `created_by_user_id` for drafts (column name retained for workspace consistency; stores any actor's UUID).
+
+**Author-only draft visibility** (D3 sub-lock pre-AC01): `updateDraft / validateDraft / discardDraft / promoteDraft` filter on `created_by_user_id = actor.id` in the SQL. Post-AC01, the RLS policy upgrades to reference `cortex.current_user_id()`; the explicit filter then becomes redundant defense-in-depth.
+
+**Optimistic concurrency** (D13): both promote and rollback insert into `tenant_config_version`; the UNIQUE on `(tenant_id, namespace, version_number)` catches concurrent writers. Each helper retries the WHOLE transaction up to twice — Postgres aborts the transaction on first error, so retry must wrap the entire `db.transaction(...)` call (not just the INSERT). Two consecutive 23505s → `Promote-` / `RollbackConcurrencyError`. The audit row count = number of successful operations (not attempts) because the emit is post-INSERT inside the transaction; aborted attempts never emit.
+
+**Schema-version pinning on drafts** (Q-NEW-F04B-9): `createDraft` requires explicit `schemaVersion: number`. The library exports `getLatestRegisteredVersion(namespace) → number` for callers who want "give me latest"; auto-resolving inside `createDraft` would produce a stale-validation footgun across schema-bump windows.
+
+**Error roster** (7 classes, all suffixed `Error`, all exported from package barrel):
+
+| Class                      | Origin                                       | Caller-decision typical                      |
+| -------------------------- | -------------------------------------------- | -------------------------------------------- |
+| `DraftConcurrencyError`    | optimistic UPDATE conflict on `updateDraft`  | HTTP 409; refresh + retry                    |
+| `DraftNotFoundError`       | missing / not-active / wrong-author          | HTTP 404                                     |
+| `SchemaNotRegisteredError` | `(namespace, schema_version)` not registered | HTTP 500 + log; consumer-module wiring issue |
+| `PromoteValidationError`   | defensive re-validate failed                 | HTTP 422 (carries ZodError tree for caller)  |
+| `PromoteConcurrencyError`  | both promote attempts hit 23505              | HTTP 409                                     |
+| `RollbackAtGenesisError`   | latest version has no parent                 | HTTP 422                                     |
+| `RollbackNoVersionError`   | no version exists for (tenant, namespace)    | HTTP 404                                     |
+| `RollbackConcurrencyError` | both rollback attempts hit 23505             | HTTP 409                                     |
+
+(`NamespaceSchemaNotRegisteredError` + `NamespaceSchemaConflictError` are sibling errors from `get-config.ts` + `schema-registry.ts`; same naming convention.)
+
+**Test-helper precedent** (introduced Slice B): `packages/config-plane/test/_utils/cleanup.ts` exports `cleanupConfigPlaneState(pool, tenantId)` — FK-safe DELETE chain (`audit_event` → `config_draft` → `tenant_config_version`). Used by all Slice B specs. Future config-plane tests should reuse the helper rather than inline the chain.
 
 **Cross-refs:**
 
 - `docs/planning/p1.4-f04-configuration-plane-scope.md` (module scope; D1-D14 locks)
 - `docs/planning/f04-slice-A-scope.md` (Slice A scope; sub-decision locks)
+- `docs/planning/f04-slice-B-scope.md` (Slice B scope; Q-NEW-F04B-1/3/5/6/7/8/9 locks)
 - `services/foundation/migrations/0014_f04_config_namespace_reshape.sql` (substrate reshape)
-- `packages/canonical-schema/src/drizzle/schema.ts` (`tenantConfigVersion` Drizzle definition; F02 reconciliation target)
+- `services/foundation/migrations/0015_f04_config_draft_table.sql` (config_draft table)
+- `packages/canonical-schema/src/drizzle/schema.ts` (`tenantConfigVersion` + `configDraft` Drizzle definitions)
+- `packages/config-plane/src/lifecycle.ts` (the 6 lifecycle helpers + 8 errors)
 
 ## Feature flags
 

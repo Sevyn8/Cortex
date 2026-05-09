@@ -5,16 +5,20 @@ services:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
-      POSTGRES_USER: cortex
-      POSTGRES_PASSWORD: cortex
-      POSTGRES_DB: cortex_dev
+      # Mirrors .github/workflows/ci.yaml services.postgres exactly so
+      # local `pnpm vitest` and CI exercise the same auth/user/DB shape.
+      # See CLAUDE.md ## Local development for the bootstrap workflow.
+      # Closed roadmap §4.20 (commit landing 2026-05-09).
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testpw
+      POSTGRES_DB: cortex
     ports:
       - '5432:5432'
     volumes:
       - cortex_postgres_data:/var/lib/postgresql/data
       - ./init-postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U cortex -d cortex_dev']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d cortex']
       interval: 5s
       timeout: 5s
       retries: 10

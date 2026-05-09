@@ -3,30 +3,29 @@ import { Pool } from 'pg';
 
 /**
  * Build a `pg.Pool` from PG* env vars (PGHOST/PGPORT/PGUSER/PGPASSWORD/
- * PGDATABASE). If PGPASSWORD is unset, falls back to fetching the dev
- * break-glass secret via `gcloud` for laptop convenience. Probes the
- * host:port via /dev/tcp to fail fast with a clear message if Postgres
- * isn't reachable.
+ * PGDATABASE). PGPASSWORD MUST be set explicitly; an unset PGPASSWORD
+ * is a setup error rather than something to paper over.
  *
  * Callers must ensure Postgres is reachable on the target host:port:
- *   - laptop: `make db-proxy-dev` (cloud-sql-proxy on private IP per
- *     ADR-INFRA-005).
+ *   - laptop: `make db:init-test` (boots compose Postgres + applies
+ *     migrations + bootstraps test_user; mirrors CI shape).
  *   - CI: postgres service container per `.github/workflows/ci.yaml`.
  *   - elsewhere: PGHOST/PGPORT pointing at a reachable instance.
  *
- * Local-DB credentials reconciliation tracked at future-roadmap §4.20
- * (carried across F02 D.4 / D.5 / D.4.5 / D.6 / F03 Slice A); CI's
- * ephemeral Postgres service container is the canonical exercise path.
+ * Roadmap §4.20 closed 2026-05-09 by realigning compose Postgres to
+ * the CI-shape (postgres/testpw/cortex). Prior gcloud-secret fallback
+ * masked setup errors with a wrong-DB password — explicit error
+ * replaces it.
  */
 export function getPool(): Pool {
-  const password =
-    process.env.PGPASSWORD ??
-    execSync(
-      'gcloud secrets versions access latest ' +
-        '--secret=cortex-db-postgres-break-glass-dev ' +
-        '--project=sevyn8-cortex-dev',
-      { encoding: 'utf8' },
-    ).trim();
+  const password = process.env.PGPASSWORD;
+  if (!password) {
+    throw new Error(
+      'PGPASSWORD not set. Run `make db:init-test` to bootstrap the local ' +
+        'test DB, or export PGPASSWORD=testpw if the compose stack is already ' +
+        'running. CI sets PGPASSWORD via .github/workflows/ci.yaml services env.',
+    );
+  }
 
   const host = process.env.PGHOST ?? '127.0.0.1';
   const port = Number(process.env.PGPORT ?? 5432);
@@ -39,7 +38,7 @@ export function getPool(): Pool {
   } catch {
     throw new Error(
       `Postgres is not reachable on ${host}:${port}. ` +
-        'If running locally, ensure the Cloud SQL Auth Proxy is active (make db-proxy-dev). ' +
+        'If running locally, run `make db:init-test` first to bring up the compose stack. ' +
         'If running in CI, ensure the postgres service container is healthy. ' +
         'If running elsewhere, verify PGHOST/PGPORT env vars point at a reachable instance.',
     );

@@ -445,17 +445,17 @@ at the convention doc Appendix A.
 - **References:** convention §7.5 ("Deferred indefinitely (Phase 2+)"); D.6 close commit explicitly chose NOT to land this. Effort estimate: 4–8 hr (table migration + DLQ-sink worker route + CLI + integration test).
 - **Owner phase:** Operator-driven; gated by trigger above.
 
-### 4.20 Local DB credentials reconciliation (foundation-tests Postgres)
+### 4.20 Local DB credentials reconciliation (foundation-tests Postgres) — RESOLVED 2026-05-09
 
-- **Item:** The foundation-tests local-Postgres `postgres`-user password doesn't match what `getPool()` (in `packages/tenant-context/test/helpers/db.ts`) fetches via `gcloud secrets versions access cortex-db-postgres-break-glass-dev`. DB-touching unit tests fail with `password authentication failed for user "postgres"` on every local run.
-- **Current state:** Carried across F02 D.4 / D.5 / D.4.5 / D.6 sessions — each surfaced "26 unit tests fail with password mismatch; pre-existing local-env issue". Cloud-sql-proxy on port 5432 connects, but the postgres-user auth handshake fails. Best guess: the local docker-compose Postgres (or whatever's serving 5432 locally) was provisioned with a different password than what's in the GCP break-glass secret, OR the tests should connect via cloud-sql-proxy with IAM auth (per ADR-INFRA-005's "IAM auth is the only active path") and `getPool()` is using the wrong auth shape.
-- **Future options:**
-  1. Reconcile docker compose / local-Postgres credentials against the gcloud secret OR set `PGPASSWORD` once at session start and re-run.
-  2. Switch `getPool()` to use IAM auth (matches the deployed runtime) — needs the test SA to be configured + `cloud-sql-proxy --auto-iam-authn`.
-  3. Mock the DB layer at the test boundary (vitest workspace-level setup) — heavier but eliminates the local-Postgres dependency entirely.
-- **Triggers:** Next session that touches `services/foundation/test/helpers/db.ts` OR any session where local test-runs blocking is operationally costly. CI exercises the path correctly via the foundation-tests-against-ephemeral-Postgres workflow; the gap is local-only.
-- **References:** D.4 / D.5 / D.4.5 / D.6 squash commit bodies (each calls out the same failure mode); `packages/tenant-context/test/helpers/db.ts:13-25` (`getPool()` shape); ADR-INFRA-005 Decision 11 (IAM auth posture).
-- **Owner phase:** Operator-driven; first session that needs local test runs to work.
+- **Status:** RESOLVED 2026-05-09 by realigning compose Postgres to the CI shape. Approach (b) of three considered.
+- **Approach landed (b):** `infra/dev/docker-compose.yml` Postgres service env now mirrors `.github/workflows/ci.yaml` exactly — `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD=testpw`, `POSTGRES_DB=cortex`. New `make db:init-test` target wraps `scripts/db-reset-local.sh` (already CI-shaped) so first-time setup is one command. `getPool()` no longer falls back to `gcloud secrets versions access` — explicit error if `PGPASSWORD` is unset.
+- **Alternatives rejected:**
+  - **(a) GCP IAM via `cloud-sql-proxy --auto-iam-authn`.** Wrong shape for tests — concurrent contributors collide on the dev Cloud SQL instance, network dep makes tests slow + offline-fragile, diverges from CI's ephemeral-Postgres model. ADR-INFRA-005's "IAM auth is the only active path" applies to deployed runtime, not test harness.
+  - **(c) testcontainers in vitest globalSetup.** Duplicative with the already-running compose Postgres; per-run isolation is provided by the harness's per-test transaction-rollback pattern; new dependency for no incremental fidelity.
+- **Why (b) won:** highest CI fidelity (same image, user, password, DB, bootstrap), lowest cost (~90 min vs 3-4 hr for (a) or 1.5-2 hr for (c)), reuses already-running infra (compose stack already serves Redis / Pub/Sub / fake-GCS / adminer).
+- **One-time migration cost:** `docker-compose down -v` after pulling the closure commit — the pre-closure data volume was initialized with the old `cortex/cortex/cortex_dev` shape and won't accept the new `postgres/testpw/cortex` bootstrap. Local-only; no production-data implication. Operator coordinates across the team via Slack ping.
+- **Verification:** D.6 bug + Slice B `diff` bug both surfaced because local tests couldn't run. Going forward, `pnpm vitest run` against local compose Postgres exercises the same path as CI's `Run foundation tests` job — bug parity is restored.
+- **References:** D.4 / D.5 / D.4.5 / D.6 / F03 Slice A / Slice B gate-evidence docs (each carried §4.20 forward); CLAUDE.md `## Local development` for the bootstrap workflow; closure commit on `main` (2026-05-09).
 
 ---
 

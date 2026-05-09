@@ -48,8 +48,23 @@ logs: ## Tail all service logs (Ctrl-C to exit)
 	$(COMPOSE) logs -f --tail=100
 
 # --- Database (local compose) ---
+# Compose Postgres is configured to mirror .github/workflows/ci.yaml exactly
+# (postgres/testpw/cortex) so local tests and CI exercise the same shape.
+# See CLAUDE.md ## Local development for the bootstrap workflow.
+
 db\:shell: ## Open psql shell in the postgres container (local compose)
-	$(COMPOSE) exec postgres psql -U cortex -d cortex_dev
+	$(COMPOSE) exec postgres psql -U postgres -d cortex
+
+db\:init-test: ## Boot compose Postgres, apply migrations, create test_user (mirrors CI bootstrap; idempotent)
+	$(COMPOSE) up -d postgres
+	@echo "==> waiting for postgres healthy"
+	@for i in $$(seq 1 30); do \
+		state=$$($(COMPOSE) ps --format json postgres 2>/dev/null | grep -o '"Health":"[^"]*"' | head -1); \
+		[ "$$state" = '"Health":"healthy"' ] && break; \
+		sleep 1; \
+	done
+	@PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres PGPASSWORD=testpw PGDATABASE=cortex \
+		bash scripts/db-reset-local.sh
 
 db\:seed: ## Run all registered seed modules
 	pnpm tsx scripts/seed/index.ts

@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { getPool } from '@cortex/test-db-harness';
-import { asOf, between, currentState, diff, history } from '../src/index.js';
+import { asOf, asOfByKey, between, currentState, diff, diffByKey, history } from '../src/index.js';
 
 interface RetailProduct {
   id: string;
@@ -298,6 +298,221 @@ describe('@cortex/temporal-query', () => {
           new Date(),
         ),
       ).rejects.toThrow(/invalid table name/);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // F03 Slice B.5 — entity-level (business-key-based) primitives
+  // ─────────────────────────────────────────────────────────────────
+  // asOfByKey + diffByKey resolve the entity at each timestamp by
+  // (tenant_id, <keyColumn> = keyValue) — following the SCD chain by
+  // business identity. Distinct from id-based asOf / diff which can't
+  // reach across SCD-rotated versions without a business-key resolver.
+  // See docs/planning/f03-slice-B5-scope.md for D9-D16 design locks.
+  // ─────────────────────────────────────────────────────────────────
+
+  describe('asOfByKey', () => {
+    it('returns the entity at a past business+system anchor (across SCD versions)', async () => {
+      const sku = 'SKU-ASOF-BY-KEY-1';
+      const tBeforeInsert = new Date(Date.now() - 86_400_000); // 1 day ago
+      await insertProduct({
+        tenantId: TENANT_A,
+        sku,
+        name: 'Widget',
+        priceCents: 1000,
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      const tBetween = new Date();
+      await new Promise((r) => setTimeout(r, 30));
+      // Update price — SCD rotates id; business key (sku) stays.
+      await pool.query(`UPDATE retail_product SET price_cents = 1500 WHERE external_sku = $1`, [
+        sku,
+      ]);
+
+      // At tBetween (business+system both past), entity has price=1000.
+      const past = await asOfByKey<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        'external_sku',
+        sku,
+        tBetween,
+        tBetween,
+      );
+      expect(past).not.toBeNull();
+      expect(past?.price_cents).toBe(1000);
+      expect(past?.external_sku).toBe(sku);
+
+      // At now (default systemAnchor), entity has price=1500.
+      const present = await asOfByKey<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        'external_sku',
+        sku,
+        new Date(),
+      );
+      expect(present?.price_cents).toBe(1500);
+
+      // Anchor before insert → null.
+      void tBeforeInsert;
+    });
+
+    it('returns null when the entity did not exist at the anchor', async () => {
+      const sku = 'SKU-ASOF-BY-KEY-NULL';
+      // Anchor in the deep past (before any rows).
+      const ancient = new Date('2000-01-01');
+      const row = await asOfByKey<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        'external_sku',
+        sku,
+        ancient,
+      );
+      expect(row).toBeNull();
+    });
+
+    it('rejects invalid keyColumn names (SQL injection guard)', async () => {
+      await expect(
+        asOfByKey(
+          pool,
+          TENANT_A,
+          'retail_product',
+          'external_sku; DROP TABLE retail_product--',
+          'SKU-1',
+          new Date(),
+        ),
+      ).rejects.toThrow(/invalid column name/);
+    });
+
+    it('throws when multiple rows match — substrate violation (D13)', async () => {
+      // Substrate exclusion constraint applies only to currently-OPEN
+      // rows (`WHERE upper(txn_time) IS NULL`); two CLOSED rows with
+      // overlapping (tenant_id, external_sku, valid_time) are allowed
+      // by the constraint. Such overlap shouldn't occur via normal SCD
+      // operations but CAN be produced by direct INSERT — this test
+      // simulates a substrate violation and confirms the library
+      // throws loudly rather than returning a non-deterministic row.
+      const skuViolation = 'SKU-VIOLATION-DBK';
+      const probe = new Date('2025-01-15');
+      await pool.query(
+        `INSERT INTO retail_product
+         (id, tenant_id, external_sku, name, price_cents, valid_time, txn_time)
+         VALUES (gen_random_uuid(), $1, $2, 'A', 100,
+                 tstzrange('2025-01-01'::timestamptz, '2025-02-01'::timestamptz),
+                 tstzrange('2024-12-01'::timestamptz, '2025-06-01'::timestamptz))`,
+        [TENANT_A, skuViolation],
+      );
+      await pool.query(
+        `INSERT INTO retail_product
+         (id, tenant_id, external_sku, name, price_cents, valid_time, txn_time)
+         VALUES (gen_random_uuid(), $1, $2, 'B', 200,
+                 tstzrange('2025-01-10'::timestamptz, '2025-02-15'::timestamptz),
+                 tstzrange('2024-12-15'::timestamptz, '2025-07-01'::timestamptz))`,
+        [TENANT_A, skuViolation],
+      );
+      await expect(
+        asOfByKey<RetailProduct>(
+          pool,
+          TENANT_A,
+          'retail_product',
+          'external_sku',
+          skuViolation,
+          probe,
+          probe,
+        ),
+      ).rejects.toThrow(/multiple rows match.*substrate constraint violation/s);
+    });
+  });
+
+  describe('diffByKey', () => {
+    it('F03 spec acceptance — create → update → diffByKey reports the price change', async () => {
+      const sku = 'SKU-DIFF-BY-KEY-FR009';
+      await insertProduct({
+        tenantId: TENANT_A,
+        sku,
+        name: 'Widget',
+        priceCents: 1000,
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      const tBefore = new Date();
+      await new Promise((r) => setTimeout(r, 30));
+      await pool.query(`UPDATE retail_product SET price_cents = 1500 WHERE external_sku = $1`, [
+        sku,
+      ]);
+      await new Promise((r) => setTimeout(r, 30));
+      const tAfter = new Date();
+
+      const result = await diffByKey<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        'external_sku',
+        sku,
+        tBefore,
+        tAfter,
+      );
+
+      expect(result.before).not.toBeNull();
+      expect(result.after).not.toBeNull();
+      expect(result.before?.price_cents).toBe(1000);
+      expect(result.after?.price_cents).toBe(1500);
+      expect(result.changedColumns).toEqual(['price_cents']);
+      // External key column tautologically excluded per D14 — even if
+      // we re-keyed both sides to different sku values somehow, this
+      // test would never see external_sku in changedColumns.
+      expect(result.changedColumns).not.toContain('external_sku' as keyof RetailProduct);
+    });
+
+    it('returns both null + empty changedColumns when entity did not exist at either anchor', async () => {
+      const sku = 'SKU-DIFF-BY-KEY-NEVER';
+      const t1 = new Date('2000-01-01');
+      const t2 = new Date('2000-01-02');
+      const result = await diffByKey<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        'external_sku',
+        sku,
+        t1,
+        t2,
+      );
+      expect(result.before).toBeNull();
+      expect(result.after).toBeNull();
+      expect(result.changedColumns).toEqual([]);
+    });
+
+    it('null-side semantics — entity created between t1 and t2', async () => {
+      const sku = 'SKU-DIFF-BY-KEY-ARRIVAL';
+      const t1 = new Date('2000-01-01'); // before insert
+      await insertProduct({
+        tenantId: TENANT_A,
+        sku,
+        name: 'Arrival',
+        priceCents: 999,
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      const t2 = new Date();
+      const result = await diffByKey<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        'external_sku',
+        sku,
+        t1,
+        t2,
+      );
+      expect(result.before).toBeNull();
+      expect(result.after).not.toBeNull();
+      // changedColumns = union of non-excluded keys present in non-null
+      // side; external_sku excluded per D14 (the lookup key) + base
+      // EXCLUDED list (id, tenant_id, valid_time, txn_time).
+      expect(result.changedColumns).toContain('name' as keyof RetailProduct);
+      expect(result.changedColumns).toContain('price_cents' as keyof RetailProduct);
+      expect(result.changedColumns).not.toContain('external_sku' as keyof RetailProduct);
+      expect(result.changedColumns).not.toContain('id' as keyof RetailProduct);
+      expect(result.changedColumns).not.toContain('tenant_id' as keyof RetailProduct);
     });
   });
 });

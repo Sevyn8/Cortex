@@ -1,7 +1,7 @@
 import type { BiTemporalRow } from '@cortex/canonical-schema';
 import type { Queryable } from './queryable.js';
 import { mapRows } from './_internals/deserialize.js';
-import { validateTableName } from './_internals/validate-table.js';
+import { validateIdentifier } from './_internals/validate-identifier.js';
 
 /**
  * Return all rows matching `(tenantId, id)` ordered by transaction-
@@ -24,7 +24,7 @@ export async function history<T>(
   table: string,
   id: string,
 ): Promise<BiTemporalRow<T>[]> {
-  validateTableName(table);
+  validateIdentifier(table, 'table');
   const sql = `
     SELECT *
     FROM ${table}

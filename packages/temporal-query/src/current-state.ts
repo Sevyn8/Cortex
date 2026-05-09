@@ -1,7 +1,7 @@
 import type { BiTemporalRow } from '@cortex/canonical-schema';
 import type { Queryable } from './queryable.js';
 import { mapRow } from './_internals/deserialize.js';
-import { validateTableName } from './_internals/validate-table.js';
+import { validateIdentifier } from './_internals/validate-identifier.js';
 
 /**
  * Return the current-version row identified by `(tenantId, id)` —
@@ -22,7 +22,7 @@ export async function currentState<T>(
   table: string,
   id: string,
 ): Promise<BiTemporalRow<T> | null> {
-  validateTableName(table);
+  validateIdentifier(table, 'table');
   const sql = `
     SELECT *
     FROM ${table}

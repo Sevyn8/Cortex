@@ -275,13 +275,20 @@ SELECT cortex.backfill_bitemporal('public', 'tablename', 'business_key_col');
 
 Idempotent — re-running on an already-backfilled table is a no-op. Currently zero legacy tables in the codebase need this; the helper future-proofs reclassification (a bookkeeping table that becomes domain) and external imports.
 
-**Querying bi-temporal data** — use `@cortex/temporal-query` (F03 Slice B). Five composable functions over `cortex.at_time_t`:
+**Querying bi-temporal data** — use `@cortex/temporal-query` (F03 Slice B + B.5). Composable functions over `cortex.at_time_t`:
+
+Row-version (id-based; Slice B):
 
 - `asOf<T>(client, tenantId, table, id, asOfBusinessTs, asOfSystemTs?) → BiTemporalRow<T> | null`
 - `currentState<T>(client, tenantId, table, id) → BiTemporalRow<T> | null`
 - `history<T>(client, tenantId, table, id) → BiTemporalRow<T>[]`
 - `between<T>(client, tenantId, table, id, from, to, asOfSystemTs?) → BiTemporalRow<T>[]` — closed-open `[from, to)`
-- `diff<T>(client, tenantId, table, id, t1, t2) → { before, after, changedColumns }`
+- `diff<T>(client, tenantId, table, id, t1, t2) → { before, after, changedColumns }` — `@experimental`; see caveat below
+
+Entity-level (business-key-based; Slice B.5):
+
+- `asOfByKey<T>(client, tenantId, table, keyColumn, keyValue, asOfBusinessTs, asOfSystemTs?) → BiTemporalRow<T> | null`
+- `diffByKey<T>(client, tenantId, table, keyColumn, keyValue, t1, t2) → { before, after, changedColumns }`
 
 Public API takes a `Queryable` interface (Q-NEW-F03B-5; productization-critical lock) — `pg.Pool`, `pg.PoolClient`, drizzle's underlying client, and test mocks all satisfy it. `tenantId` passed as a query parameter on every call (Q-NEW-F03B-6); RLS stays as defense-in-depth backstop. Returns are nullable for single-row functions (`null` on no match) and `T[]` (never `null`) for collection functions. Closed-open ranges throughout (matches `tstzrange` convention end-to-end). tRPC handlers + SQL views deferred to first-consumer per Q-NEW-F03B-1; tRPC will land in `@cortex/temporal-query/trpc` secondary export, SQL views land per-table at the consuming F-/D-series migration's site.
 
@@ -289,7 +296,15 @@ Public API takes a `Queryable` interface (Q-NEW-F03B-5; productization-critical 
 
 **`asOf` system-anchor default — closed prior versions need explicit `asOfSystemTs`.** The default `asOfSystemTs = now()` reaches only the row whose `txn_time` is currently OPEN. Prior-version rows closed by an SCD trigger UPDATE (which sets the OLD row's `txn_time` upper bound to `now()` AT THAT MOMENT) require an explicit past system-anchor — typically `asOfSystemTs = asOfBusinessTs` for "what was the world state at moment T". Worked example in `packages/temporal-query/src/as-of.ts` JSDoc. The asymmetric default surprised an experienced operator on first attempt; the explicit-anchor pattern is now part of the contract docs.
 
-**`diff` is row-version scoped (`@experimental`).** It operates on a specific row id, comparing the SAME row at two timestamps. For entity-level diff across business identity (the headline F03 "what changed about this product over time" use case), use `diffByKey` (Slice B.5; not yet shipped). The current `diff` primitive is useful for narrow scenarios — correction histories, txn_time-axis comparisons within a single row generation, no-change verification — and is NOT the right tool for "show me what changed about this product over time." The SCD trigger rotates `id` on UPDATE (`NEW.id := gen_random_uuid()`), so cross-version comparison via this primitive isn't achievable without a business-key resolver, which the library deliberately doesn't carry.
+**`diff` is row-version scoped (`@experimental`).** It operates on a specific row id, comparing the SAME row at two timestamps. For entity-level diff across business identity (the headline F03 "what changed about this product over time" use case), use **`diffByKey`** — same shape, but resolves the entity at each timestamp via `(tenant_id, keyColumn = keyValue)`. The row-version `diff` primitive is useful for narrow scenarios — correction histories, txn_time-axis comparisons within a single row generation, no-change verification — and is NOT the right tool for "show me what changed about this product over time." The SCD trigger rotates `id` on UPDATE (`NEW.id := gen_random_uuid()`), so cross-version comparison via the row-version primitive requires a business-key resolver — which `diffByKey` provides.
+
+**`diffByKey` defaults SYMMETRIC (historical-snapshot mode); `diff` defaults `systemAnchor=now`.** This asymmetry is deliberate. Each `t1` / `t2` passed to `diffByKey` is treated as BOTH the business AND system anchor inside the internal `asOfByKey` calls — i.e., "what did the system know at t1 about the world at t1?". Row-version `diff` defaults each anchor's system axis to `now()`, which is the source of the F03 spec acceptance test bug closed in commit `a7c9a23`. The entity-level diff's symmetric default avoids that surprise structurally — the headline use case is comparing snapshots, so the natural default IS historical-snapshot. Both behaviors documented in JSDoc + this CLAUDE.md callout.
+
+**`asOfByKey` keeps `asOf`'s asymmetric default** (`systemAnchor = now()`) because the single-anchor query has the same "current belief vs historical snapshot" choice that `asOf` does — passing only a business anchor reads "what does the system currently believe was true at businessTs". To reach a closed prior version (e.g., for a forensic replay), pass an explicit past system anchor — typically `asOfSystemTs = asOfBusinessTs`. Same idiom as `asOf`.
+
+**`asOfByKey` / `diffByKey` throw on multi-row match (D13).** The substrate exclusion constraint on bi-temporal tables only enforces no-overlap on currently-OPEN rows (`WHERE upper(txn_time) IS NULL`). Closed historical rows can in principle overlap; if a multi-row match surfaces, the library throws with `temporal-query: multiple rows match (...) — substrate constraint violation; check SCD exclusion constraint on <table>.` Loud failure beats non-deterministic row selection — exposes upstream SCD bugs rather than masking them.
+
+**Composite (multi-column) business keys are out of scope for Slice B.5.** `keyValue` is `string | number`. Most bi-temporal entities have single-column business keys (sku, customer_id, order_number). Multi-column composite-key support deferred to first-consumer per ADR-DB-001 deferral pattern.
 
 **Cross-refs:**
 

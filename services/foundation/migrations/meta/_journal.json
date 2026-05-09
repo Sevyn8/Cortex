@@ -106,6 +106,20 @@
       "when": 1778334379605,
       "tag": "0015_f04_config_draft_table",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1778341223557,
+      "tag": "0016_f03_scd_policy_aware_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1778342467620,
+      "tag": "0017_f03_scd_types_3_4_6",
+      "breakpoints": true
     }
   ]
 }

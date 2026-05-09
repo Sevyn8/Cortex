@@ -54,3 +54,11 @@ export { between } from './between.js';
 export { diff, type Diff } from './diff.js';
 export { diffByKey, type DiffByKey } from './diff-by-key.js';
 export { type Queryable } from './queryable.js';
+export {
+  SCDPolicySchema,
+  SCDEntityPolicySchema,
+  SCD_POLICY_NAMESPACE,
+  SCD_POLICY_SCHEMA_VERSION,
+  type SCDPolicy,
+  type SCDEntityPolicy,
+} from './scd-policy.js';

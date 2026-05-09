@@ -21,7 +21,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cortex/canonical-schema": "workspace:*"
+    "@cortex/canonical-schema": "workspace:*",
+    "@cortex/config-plane": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cortex/test-db-harness": "workspace:*",

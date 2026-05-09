@@ -301,14 +301,16 @@ export function buildV1TenantRoutes(arg: Pool | BuildV1TenantRoutesOptions): Hon
     zValidator('json', emptyBodySchema),
     async (c) => {
       const { id } = c.req.valid('param');
-      const terminateOpts: Parameters<typeof tenants.terminate>[2] = {
-        actor: HTTP_ACTOR,
-        ...(testHooks?.storage !== undefined && {
-          cascadeOverrides: { storage: testHooks.storage },
-        }),
-      };
+      // tenants.terminate signature: (db, id, ctx, options). D.6 conflated
+      // ctx + options into one bag (passed as ctx). With options defaulting
+      // to {}, `cascadeOverrides.storage` was undefined and `new Storage()`
+      // ran in the cascade, failing CI when GCP creds are absent.
+      const terminateOptions: Parameters<typeof tenants.terminate>[3] =
+        testHooks?.storage !== undefined
+          ? { cascadeOverrides: { storage: testHooks.storage } }
+          : {};
       const updated = await withTenantDbClient(pool, id, async (tx) =>
-        tenants.terminate(tx, id, terminateOpts),
+        tenants.terminate(tx, id, { actor: HTTP_ACTOR }, terminateOptions),
       );
       return c.json(updated);
     },
@@ -323,14 +325,14 @@ export function buildV1TenantRoutes(arg: Pool | BuildV1TenantRoutesOptions): Hon
     async (c) => {
       const { id } = c.req.valid('param');
       const body = c.req.valid('json');
-      const forceTerminateOpts: Parameters<typeof tenants.forceTerminate>[3] = {
-        actor: HTTP_ACTOR,
-        ...(testHooks?.storage !== undefined && {
-          cascadeOverrides: { storage: testHooks.storage },
-        }),
-      };
+      // forceTerminate signature: (db, id, reason, ctx, options). Same
+      // D.6 conflation bug as terminate above; same fix.
+      const forceTerminateOptions: Parameters<typeof tenants.forceTerminate>[4] =
+        testHooks?.storage !== undefined
+          ? { cascadeOverrides: { storage: testHooks.storage } }
+          : {};
       const updated = await withTenantDbClient(pool, id, async (tx) =>
-        tenants.forceTerminate(tx, id, body.reason, forceTerminateOpts),
+        tenants.forceTerminate(tx, id, body.reason, { actor: HTTP_ACTOR }, forceTerminateOptions),
       );
       return c.json(updated);
     },

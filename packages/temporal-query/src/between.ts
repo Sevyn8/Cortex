@@ -1,7 +1,7 @@
 import type { BiTemporalRow } from '@cortex/canonical-schema';
 import type { Queryable } from './queryable.js';
 import { mapRows } from './_internals/deserialize.js';
-import { validateTableName } from './_internals/validate-table.js';
+import { validateIdentifier } from './_internals/validate-identifier.js';
 import { serializeTstzRange } from './_internals/serialize.js';
 
 /**
@@ -28,7 +28,7 @@ export async function between<T>(
   to: Date,
   asOfSystemTs?: Date,
 ): Promise<BiTemporalRow<T>[]> {
-  validateTableName(table);
+  validateIdentifier(table, 'table');
   const rangeWire = serializeTstzRange(from, to);
   const sysAnchor = asOfSystemTs ?? new Date();
   const sql = `

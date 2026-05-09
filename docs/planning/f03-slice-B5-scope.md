@@ -1,6 +1,8 @@
-# F03 Slice B.5 — `diffByKey` entity-level diff
+# F03 Slice B.5 — `asOfByKey` + `diffByKey` entity-level temporal queries
 
 > Scoped 2026-05-09 in the same session that closed Slice B (`de84fb4`/`888249d`/`a7c9a23`). Slice B.5 is a fix-it follow-up — NOT a regular F-/D-series slice; one commit on main via PR, no full slice ceremony (no A/B/C/D phases, no HOLDs).
+>
+> **Scope expansion 2026-05-09**: original scope was single-function `diffByKey`; expanded to the function pair (`asOfByKey` + `diffByKey`) per operator post-lock instruction. Motivation: Slice B's `asOf` line-99 test bug — the test author wanted entity-level lookup ("what was this product at tBetween") but reached for the row-version primitive. `asOfByKey` closes that confusion structurally; ~30 min incremental cost.
 
 ## Why
 
@@ -10,9 +12,21 @@ The headline F03 use case — _"create retail.Product → update price → show 
 
 `diff` was correctly marked `@experimental` in `a7c9a23` with the caveat documented in CLAUDE.md "Querying bi-temporal data". Slice B.5 ships the entity-level primitive that resolves the F03 spec scenario.
 
-## Single function
+## Function pair (D9)
 
 ```ts
+// Single-anchor entity lookup (companion to row-version `asOf`)
+export async function asOfByKey<T>(
+  client: Queryable,
+  tenantId: string,
+  table: string,
+  keyColumn: string,
+  keyValue: string | number,
+  asOfBusinessTs: Date,
+  asOfSystemTs?: Date,
+): Promise<BiTemporalRow<T> | null>;
+
+// Two-anchor entity diff (companion to row-version `diff`)
 export interface DiffByKey<T> {
   before: BiTemporalRow<T> | null;
   after: BiTemporalRow<T> | null;
@@ -24,24 +38,40 @@ export async function diffByKey<T>(
   tenantId: string,
   table: string,
   keyColumn: string,
-  keyValue: unknown,
+  keyValue: string | number,
   t1: Date,
   t2: Date,
 ): Promise<DiffByKey<T>>;
 ```
 
-Resolves the entity at each timestamp via `(tenant_id, <keyColumn> = <keyValue>) + at_time_t(valid_time, txn_time, t, t)` predicates. Returns the same shape as `diff` — `{ before, after, changedColumns }` — with the same EXCLUDED list (`['id', 'tenant_id', 'valid_time', 'txn_time']`).
+Both resolve the entity at each timestamp via `(tenant_id, <keyColumn> = <keyValue>) + at_time_t(valid_time, txn_time, businessTs, systemTs)` predicates. `diffByKey` returns the same shape as row-version `diff` — `{ before, after, changedColumns }` — with the same base EXCLUDED list (`['id', 'tenant_id', 'valid_time', 'txn_time']`) PLUS dynamic exclusion of `keyColumn` (D14).
 
-## Contract
+## Design locks (D9-D16)
 
-- **Identifier safety**: `keyColumn` is regex-validated identical to the existing `validateTableName` shape (`/^[a-z][a-z0-9_]{0,62}$/`) — snake_case ≤ 63 chars. Throws `temporal-query: invalid column name <name>` otherwise. SQL-injection guard since column names can't be parameterized in prepared statements (same rationale as `validateTableName`).
-- **`keyValue` type**: `unknown` on the API surface; passed as a query parameter (`$N` binding) so any Postgres type works (uuid, text, integer, etc.). Library does NOT coerce.
-- **Both timestamps treated as (business, system) pair**: each internal lookup uses `at_time_t(valid_time, txn_time, t, t)` — i.e., "what was true at t, as the system knew at t." Symmetric default (unlike `asOf`'s asymmetric `now()` system-anchor default) — appropriate for a "what changed" semantic where both axes anchor to the same point.
-- **Nullable returns** independent per Q-NEW-F03B-7 — entity might not exist at one timestamp.
-- **`changedColumns` semantics** identical to `diff`:
-  - both non-null → shallow-equality scan over non-EXCLUDED keys
-  - exactly one null → union of non-EXCLUDED keys present in the non-null side
-  - both null → `[]`
+- **D9 — function pair**. `asOfByKey` (single-anchor) + `diffByKey` (two-anchor). Both share the entity-resolution predicate `(tenant_id, keyColumn = keyValue) + at_time_t(valid_time, txn_time, businessTs, systemTs)`.
+- **D10 — system-anchor defaults**:
+  - `asOfByKey`: optional `asOfSystemTs` parameter; defaults to `now()`. **Matches `asOf`'s asymmetric default** — single-anchor query has the same "current belief vs historical snapshot" choice. To reach a closed prior version, pass an explicit past system anchor (typically `asOfBusinessTs`).
+  - `diffByKey`: NO system-anchor parameter. Internally calls `asOfByKey(..., t, t)` for both `t1` and `t2` — **historical-snapshot mode by default**. **CRITICAL ASYMMETRY** with row-version `diff` which defaults each anchor's system axis to `now()`. Rationale: the headline use case for `diffByKey` IS comparing entity snapshots at two past timestamps; default-now would replicate the surprise that bit `asOf` (line-99 test bug closed in `a7c9a23`). Documented in JSDoc + CLAUDE.md.
+- **D11 — `keyColumn` validation**: same regex as the existing table-name validator (`/^[a-z][a-z0-9_]{0,62}$/`). The validator was renamed `validate-table.ts` → `validate-identifier.ts` with a generic `validateIdentifier(name, kind: 'table' | 'column')` shape. SQL-injection guard since column names can't be parameterized in prepared statements (same rationale as the table-name validator). Throws `temporal-query: invalid column name <name>...`.
+- **D12 — `keyValue` type**: `string | number`. Composite (multi-column) business keys explicitly out of scope; documented as future work in JSDoc. Most bi-temporal entities have single-column business keys (sku, customer_id, order_number, etc.). Multi-column support deferred to first-consumer per ADR-DB-001 deferral pattern.
+- **D13 — multiple-rows-at-timestamp behavior**: internal helper queries WITHOUT `LIMIT`. If >1 row returns, throw with explicit error message:
+  ```
+  temporal-query: multiple rows match (tenant_id=$1, keyColumn=$2)
+  at businessTs=<iso> systemTs=<iso> — substrate constraint violation;
+  check SCD exclusion constraint on <table>.
+  ```
+  Loud failure beats non-deterministic row selection — exposes upstream SCD bugs rather than masking them. The substrate exclusion constraint enforces no-overlap only on currently-OPEN rows (`WHERE upper(txn_time) IS NULL`); closed historical rows can in principle overlap, so this guard is required.
+- **D14 — EXCLUDED list for `diffByKey`**: base list `['id', 'tenant_id', 'valid_time', 'txn_time']` (matches `diff`) PLUS dynamic exclusion of the caller-supplied `keyColumn`. The business key is tautologically unchanged (we looked up both rows by that exact value); including it would clutter every entity-level diff with a stale "key changed" report. Implementation: build `excluded` Set at runtime from base const + `keyColumn` parameter.
+- **D15 — acceptance test scenarios**: F03 spec scenario via `diffByKey` + 4 minimum additional cases (asOfByKey past-anchor lookup, asOfByKey null-when-absent, asOfByKey invalid-column rejection, asOfByKey multi-row-substrate-violation throws).
+- **D16 — `diff` `@experimental` marker stays**. Adding `diffByKey` doesn't make `diff` non-experimental. Row-version `diff` remains useful only for narrow scenarios (correction histories, txn_time-axis comparisons within a single row generation). Keep the marker; CLAUDE.md note continues to point at `diffByKey` for the headline use case.
+
+## `changedColumns` semantics (`diffByKey`)
+
+Identical to row-version `diff`, with the D14 dynamic-exclusion of `keyColumn`:
+
+- both non-null → shallow-equality scan over non-EXCLUDED keys
+- exactly one null → union of non-EXCLUDED keys present in the non-null side
+- both null → `[]`
 
 ## Test scope
 

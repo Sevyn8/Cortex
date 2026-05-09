@@ -28,6 +28,47 @@ import { emitAuditEvent, getActionByName } from '@cortex/audit-events';
 import { CONFIG_AUDIT_ACTIONS } from './audit-actions.js';
 import { actorSchema, type Actor } from './types.js';
 import { getNamespaceSchema } from './schema-registry.js';
+import { cacheInvalidate } from './cache.js';
+
+// ──────────────────────────────────────────────────────────────────────
+// Resolver-cache invalidation helper (Q-NEW-F04C-5)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Strip the tier prefix from a literal namespace and invalidate the
+ * resolver cache entry for the underlying logical namespace.
+ *
+ * Lifecycle helpers operate on literal namespaces (e.g.,
+ * `'tenant.scd'`); the resolver cache is keyed on logical namespaces
+ * (e.g., `'scd'`). After a successful promote / rollback against a
+ * literal namespace, this strips the known tier prefix and
+ * invalidates the corresponding logical-namespace cache entry.
+ *
+ * Called POST-transaction-commit so a hypothetical late rollback
+ * doesn't leave the cache invalidated for an event that didn't
+ * happen. Safe to call when no consumer is registered for the
+ * logical namespace — the cache invalidation is idempotent on
+ * absent keys.
+ *
+ * Future workspace tier (D14 deferred): when `workspace.<wid>.<ns>`
+ * arrives, this helper will need to handle that prefix too — the
+ * resolver cache key would need to include workspace_id, which is
+ * the substantive change.
+ */
+function invalidateResolverCacheForLiteralNamespace(
+  tenantId: string,
+  literalNamespace: string,
+): void {
+  for (const prefix of ['tenant.', 'platform.', 'workspace.']) {
+    if (literalNamespace.startsWith(prefix)) {
+      cacheInvalidate(tenantId, literalNamespace.slice(prefix.length));
+      return;
+    }
+  }
+  // Literal namespace doesn't match any tier prefix — could be a
+  // legacy direct-namespace caller. No-op invalidation; cache
+  // wouldn't have an entry under such a name anyway.
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Errors (forward-declare; used by promoteDraft below)
@@ -421,7 +462,7 @@ async function attemptPromote(
   draftId: string,
   actor: Actor,
 ): Promise<PromoteDraftResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     await bindTenant(tx, tenantId);
 
     // 1. Fetch + lock the draft (author-only; FOR UPDATE prevents
@@ -506,6 +547,11 @@ async function attemptPromote(
       draft: updatedDraft.rows[0]!,
     };
   });
+
+  // Q-NEW-F04C-5: invalidate resolver cache POST-commit. If the
+  // transaction had rolled back, this code wouldn't run.
+  invalidateResolverCacheForLiteralNamespace(tenantId, result.draft.namespace);
+  return result;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -599,7 +645,7 @@ async function attemptRollback(
   namespace: string,
   actor: Actor,
 ): Promise<RollbackVersionResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     await bindTenant(tx, tenantId);
 
     // 1. Find current latest version. Inline type literal (not a
@@ -689,6 +735,10 @@ async function attemptRollback(
       rolledBackToVersionId: current.parent_version_id,
     };
   });
+
+  // Q-NEW-F04C-5: invalidate resolver cache POST-commit.
+  invalidateResolverCacheForLiteralNamespace(tenantId, namespace);
+  return result;
 }
 
 // ──────────────────────────────────────────────────────────────────────

@@ -446,6 +446,45 @@ Public API takes a `Queryable` interface (Q-NEW-F03B-5; productization-critical 
 - `packages/canonical-schema/src/drizzle/schema.ts` (`tenantConfigVersion` + `configDraft` Drizzle definitions)
 - `packages/config-plane/src/lifecycle.ts` (the 6 lifecycle helpers + 8 errors)
 
+### Layered config resolution (Slice C)
+
+`@cortex/config-plane` ships `resolveConfig<T>(client, tenantId, namespace) → Promise<T | null>` — the resolver walks tiers `tenant.<ns>` → `platform.<ns>` → registered in-code default; first match returns. Per-process LRU cache mediates (60s default TTL, per-consumer overridable). Lifecycle helpers (`promoteDraft`, `rollbackVersion`) actively invalidate the cache POST-commit.
+
+**The 3-tier walk.** First non-null win:
+
+```
+resolveConfig(client, tenantId, 'theme')
+  ├─ cache hit (key = tenantId :: 'theme')   → return cached value (may be null)
+  ├─ getConfig(client, tenantId, 'tenant.theme')   → if non-null, cache + return
+  ├─ getConfig(client, tenantId, 'platform.theme') → if non-null, cache + return
+  └─ consumer.defaultValue (registered via registerConfigConsumer) → cache + return
+```
+
+`null` only when all three tiers are empty AND no consumer is registered (or consumer registered `defaultValue: null` deliberately).
+
+**`platform.<ns>` is per-tenant, NOT cross-tenant** (D14). The `platform.*` literal namespace stores platform-shaped config as tenant-scoped rows — F04's substrate is per-tenant only; there is no cross-tenant slot. Genuine cross-tenant defaults live in-code via `registerConfigConsumer`'s `defaultValue` (the third tier). When F04 eventually ships workspace-namespace + cross-tenant substrate, in-code defaults can migrate to DB-driven without breaking consumers (the resolver's contract is tier-walk; the source of each tier is swappable).
+
+**Dual-namespace schema registration.** `registerConfigConsumer({ namespace: 'theme', schema, schemaVersion, defaultValue })` is a thin wrapper over `registerNamespaceSchema` — registers the SAME schema under both `tenant.theme` AND `platform.theme`. Don't try to "deduplicate" by registering once: Slice B's namespace-keyed registry treats `tenant.<ns>` and `platform.<ns>` as distinct namespaces; both tiers need their own registration to validate. The consumer is the single point of truth; the registry double-records on the consumer's behalf.
+
+**Cache key translation.** Cache is keyed on LOGICAL namespace (post-resolution; e.g., `'theme'`), but lifecycle operates on LITERAL namespace (the `tenant_config_version.namespace` column; e.g., `'tenant.theme'`). `invalidateResolverCacheForLiteralNamespace` strips the tier prefix (`tenant.` / `platform.` / `workspace.`) and invalidates the logical key. **Pessimistic invalidation**: ANY tier change invalidates the logical-key cache, even when a deeper tier wins (e.g., promoting `platform.theme` invalidates the `theme` cache entry even when `tenant.theme` exists and would dominate). Cost: occasional unnecessary re-reads. Benefit: correctness + simplicity (single cache entry per logical namespace; no per-tier slot management).
+
+**Cache-resolved-null pattern.** `cacheGet` distinguishes miss (`undefined`) from hit-with-null (`{ value: null }`). The resolver caches `null` results to avoid repeated empty walks for namespaces with no registered consumer + no DB rows. Subtle implication: dynamic post-cache consumer registration (a `defaultValue` registered AFTER cache populated `null`) won't reflect until the entry's TTL expires or a lifecycle action invalidates it. Not a Phase 1 concern (registration is module-init), but flagged for future-proofing.
+
+**Eviction is FIFO, not true LRU** — Map-insertion-order. True LRU would need access-time tracking. FIFO is adequate at 1000-entry / 60s TTL scale (~10 MB worst case at 10 KB/blob); when the cache fills, the oldest-inserted entries evict first. `cacheSet` deletes-and-re-sets on existing keys to bump their position (call it "insertion-order LRU bump"). Worth knowing if cache scaling ever becomes load-bearing — true LRU + access counters is a future enhancement, not a Phase 1 requirement.
+
+**Post-commit invalidation placement.** Lifecycle invalidation fires AFTER the per-attempt transaction commits (`attemptPromote` / `attemptRollback` await `db.transaction(...)`, then call invalidate, then return). A failed transaction can't leave cache cleared without a corresponding audit row — failure throws inside the await, the invalidation line is never reached. Retry-twice path (UNIQUE-violation retry) invalidates only on the successful attempt's post-commit gate; the failed first attempt leaves cache untouched.
+
+**Active invalidation vs TTL — single-replica vs multi-replica.** Phase 1 single-replica deploy gets exact consistency on the local replica via active invalidation + up-to-TTL consistency on remote replicas (none, in single-replica). Multi-replica deploy needs Redis-backed cache + Pub/Sub-broadcast invalidation — deferred to roadmap §1.12. Until §1.12 closes, multi-replica deploys see TTL-bounded staleness on non-mutating replicas (60s default; tunable per consumer).
+
+**Cross-refs:**
+
+- `docs/planning/f04-slice-C-scope.md` (Slice C scope; Q-NEW-F04C-1/2/3/4/5/6 locks)
+- `packages/config-plane/src/resolve.ts` (the resolver)
+- `packages/config-plane/src/cache.ts` (per-process LRU primitives)
+- `packages/config-plane/src/consumer-registry.ts` (registerConfigConsumer)
+- `packages/config-plane/src/lifecycle.ts` (`invalidateResolverCacheForLiteralNamespace` + the 2 post-commit call sites)
+- `docs/future-roadmap.md` §1.12 (Redis migration; multi-replica path)
+
 ## SCD policies (F03 Slice C)
 
 `@cortex/temporal-query` ships the SCD-policy schema; `cortex.cortex_scd_trigger()` (migrations 0016/0017) reads policy from F04's `tenant_config_version` namespace `tenant.scd` and dispatches by per-entity-type config. Default-when-absent = SCD Type 2 (mandatory backward compat per Q-NEW-F03C-4).

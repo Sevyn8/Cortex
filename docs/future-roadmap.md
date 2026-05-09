@@ -434,6 +434,29 @@ at the convention doc Appendix A.
 - **References:** ADR-LIFECYCLE-001 §1 (rotation flow) + §6 (90-day default cadence), `docs/architecture/tenant-lifecycle-convention.md` §7.4.1 (key-rotation worker + dispatch pattern), `infra/terraform/modules/cloud-tasks-queue/` (queue substrate from Slice A), `docs/planning/d4.5-gate-evidence.md` (Cloud Tasks → Cloud Run dispatch proven end-to-end). Effort estimate: 3–5 hr (Cloud Scheduler TF + small enqueuer logic + integration test). Surfaced in F02-D.4.5 close manifest "Forward — scheduled key-rotation enqueuer (out of D.4.5 scope)".
 - **Owner phase:** Operator-driven; gated by trigger above.
 
+### 4.19 DLQ table for terminal-failure tenant-lifecycle workflows
+
+- **Item:** A `tenant_lifecycle_dlq` table + re-enqueue CLI for tenant-lifecycle worker failures that exhaust Cloud Tasks retries (max 5 attempts; exponential backoff per ADR-LIFECYCLE-001 §2). Phase 1 surfaces these as log-based metrics + WARNING alerts (per convention §7.5); a real DLQ + ops surface lands when fleet volume justifies it.
+- **Current state:** Terminal failures emit at `level: error` with structured fields `{ event, tenant_id, trigger, attempt, error_class }`. Log-based metric `cortex_key_rotation_terminal_failures_dev` (mirrored per env) counts these; monitoring module's WARNING channel alerts on any non-zero count over 1-hour rolling window. No replay tooling — operator inspects logs + decides whether to re-trigger via the on-demand HTTP endpoint.
+- **Future options:**
+  1. New table `tenant_lifecycle_dlq (tenant_id uuid, workflow text, queue text, payload jsonb, last_error text, attempts int, dispatched_at timestamptz, last_attempt_at timestamptz)` populated by a new "DLQ sink" worker route Cloud Tasks routes to after `max_attempts` exhausted (queue-config option). Re-enqueue CLI: `pnpm cortex dlq replay --tenant-id=<uuid>`.
+  2. Reuse `audit_event` with a synthetic `WORKFLOW_EXHAUSTED` action — no new table, but conflates audit-chain (compliance) with operational queue (transient). Rejected under SC2 reasoning (distinct compliance-vs-operations event types).
+- **Triggers:** Fleet volume > ~50 tenants OR any incident where terminal-failure log triage took > 30 min of operator time. Not blocking F-series; Phase 1 fleet (< 10 tenants) makes log-based triage sufficient.
+- **References:** convention §7.5 ("Deferred indefinitely (Phase 2+)"); D.6 close commit explicitly chose NOT to land this. Effort estimate: 4–8 hr (table migration + DLQ-sink worker route + CLI + integration test).
+- **Owner phase:** Operator-driven; gated by trigger above.
+
+### 4.20 Local DB credentials reconciliation (foundation-tests Postgres)
+
+- **Item:** The foundation-tests local-Postgres `postgres`-user password doesn't match what `getPool()` (in `packages/tenant-context/test/helpers/db.ts`) fetches via `gcloud secrets versions access cortex-db-postgres-break-glass-dev`. DB-touching unit tests fail with `password authentication failed for user "postgres"` on every local run.
+- **Current state:** Carried across F02 D.4 / D.5 / D.4.5 / D.6 sessions — each surfaced "26 unit tests fail with password mismatch; pre-existing local-env issue". Cloud-sql-proxy on port 5432 connects, but the postgres-user auth handshake fails. Best guess: the local docker-compose Postgres (or whatever's serving 5432 locally) was provisioned with a different password than what's in the GCP break-glass secret, OR the tests should connect via cloud-sql-proxy with IAM auth (per ADR-INFRA-005's "IAM auth is the only active path") and `getPool()` is using the wrong auth shape.
+- **Future options:**
+  1. Reconcile docker compose / local-Postgres credentials against the gcloud secret OR set `PGPASSWORD` once at session start and re-run.
+  2. Switch `getPool()` to use IAM auth (matches the deployed runtime) — needs the test SA to be configured + `cloud-sql-proxy --auto-iam-authn`.
+  3. Mock the DB layer at the test boundary (vitest workspace-level setup) — heavier but eliminates the local-Postgres dependency entirely.
+- **Triggers:** Next session that touches `services/foundation/test/helpers/db.ts` OR any session where local test-runs blocking is operationally costly. CI exercises the path correctly via the foundation-tests-against-ephemeral-Postgres workflow; the gap is local-only.
+- **References:** D.4 / D.5 / D.4.5 / D.6 squash commit bodies (each calls out the same failure mode); `packages/tenant-context/test/helpers/db.ts:13-25` (`getPool()` shape); ADR-INFRA-005 Decision 11 (IAM auth posture).
+- **Owner phase:** Operator-driven; first session that needs local test runs to work.
+
 ---
 
 ## 5. First-consumer-driven

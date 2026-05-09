@@ -1520,8 +1520,11 @@ then `pool.end()` to release pg connections. Hard-cap fallback at 8 s
 per SD4 (Cloud Run grants 10 s; we exit by 8 s to leave 2 s margin —
 the SOFT FAIL row of the D.1 SIGTERM ladder triggers if clean exit
 takes > 10 s; the hard-cap prevents Cloud Run SIGKILL from cutting
-us off mid-flush). Test routes are removed (or moved permanently
-behind a dev-only flag) at D.6 close.
+us off mid-flush). Test routes stay behind the existing
+`ENABLE_TEST_ROUTES=true` env-var flag (set only in dev's TF
+`extra_env_vars`; staging + prod TF deliberately omit it per
+§7.1's production-posture lock). D.6 confirmed the flag-gated
+route is the right shape; no removal at Slice D close.
 
 **Cold-start instrumentation (per ADR-HTTP-001 Condition 2 + SD3):**
 
@@ -2001,7 +2004,14 @@ table): the smoke-test-failure cleanup-then-rethrow surfaces as
   → Cloud Tasks treats as terminal, drops (acceptable; no production
   data).
 
-### 7.5 Idempotency + failure recovery `[F02-D.2 initial; D.4 extends]`
+### 7.5 Idempotency + failure recovery `[F02-D.2 initial; D.4 extends; D.4.5 + D.6 close]`
+
+The provisioning worker (§7.4.2) follows the same shape:
+SA11 pre-check (no-op when status past PROVISIONING) + Cloud Tasks
+`taskId='provisioning-{uuid}'` dedup. Smoke-test failure invokes
+`cleanupFailedProvisioning` (SA10 hard rollback) — distinct from the
+key-rotation worker's failure path which has no analog (rotations
+don't construct durable substrate).
 
 **Re-dispatch idempotency.** Cloud Tasks may re-deliver a task
 within its retry window (max 5 attempts; exponential backoff
@@ -2050,10 +2060,12 @@ cooldown on scheduled rotations handles this: the second + third
 attempt, error_class }`. A log-based metric
   (`cortex_key_rotation_terminal_failures_dev`, mirrored per env)
   counts these; the monitoring module's WARNING channel alerts on
-  any non-zero count over a 1-hour rolling window. Deferred to D.6:
-  a real DLQ-shaped table (`tenant_lifecycle_dlq`) with re-enqueue
-  CLI; Phase 1 the volume is low enough that log-based triage is
-  sufficient.
+  any non-zero count over a 1-hour rolling window. Deferred
+  indefinitely (Phase 2+): a real DLQ-shaped table
+  (`tenant_lifecycle_dlq`) with re-enqueue CLI. Phase 1 volume is
+  low enough that log-based triage is sufficient. Tracked at
+  future-roadmap §4.19; D.6 explicitly chose NOT to land this in
+  Phase 1.
 - **Per-task SLA monitoring**: a second log-based metric
   (`cortex_key_rotation_duration_p95_dev`) tracks worker-route
   latency at p95 across 1-hour windows. Alert threshold: 5 minutes
@@ -2223,12 +2235,12 @@ curl -sH "$H" -X POST "$URL/v1/tenants/$TENANT_ID/approve-dedicated-db" \
   runbook; equivalent operator runbooks for the other endpoints
   live in §4 (provisioning) / §5 (suspend/resume cascade) /
   §6 (offboard/terminate).
-- §7.7 (D.5; not yet shipped) will document the per-method authz
-  layer when AC01 wires real super-admin checks; the
-  `requireSuperAdmin()` placeholder in D.3 is the seam.
+- §7.7 (landed at D.5, commit `c4fdc41`) documents the platform-
+  layer invoker IAM allowlist; AC01 layers per-method authz on top
+  via the `requireSuperAdmin()` placeholder seam D.3 added.
 
-D.5 fills §7.7 (IAM + invoker authz) and D.6 fills §7.8 (forensic
-queries) per Q-NEW-D-12.
+§7.7 (IAM + invoker authz) shipped at D.5; §7.8 (forensic queries)
+ships at D.6. Q-NEW-D-12 resolved.
 
 ### 7.7 IAM + invoker authz `[F02-D.5]`
 
@@ -2341,21 +2353,145 @@ acceptance evidence; the spec is the automation-ready form.
   identities. Module's `mode="tenant"` shape supports the same
   invoker variables; env-level wiring will populate per-tenant.
 
-#### 7.7.5 Forward-looking (D.6 + AC01)
+#### 7.7.5 Forward-looking (post-D.6 + AC01)
 
-D.6 may wire CI to run the integration test under WIF (no operator
-gcloud auth needed). The 4-step sketch: WIF allows GitHub Actions
-to impersonate `cortex-ci-test-shared` SA → that SA holds
-`tokenCreator` on `cortex-tf-admin-dev` → CI mints impersonation
-ID tokens → 3-case test runs. Roadmap §4.5 already tracks the
-`cortex-ci-test-shared` provisioning trigger as "first GCP-accessing
-CI workflow needs to call GCP APIs".
+CI integration of the 3-case integration test under WIF was
+considered for D.6 + deferred. The 4-step sketch (when triggered):
+WIF allows GitHub Actions to impersonate `cortex-ci-test-shared`
+SA → that SA holds `tokenCreator` on `cortex-tf-admin-dev` → CI
+mints impersonation ID tokens → 3-case test runs. Roadmap §4.5
+tracks the `cortex-ci-test-shared` provisioning trigger as "first
+GCP-accessing CI workflow needs to call GCP APIs". D.6 closed
+without wiring this — operator-runnable (the
+`CORTEX_INTEGRATION_TESTS=1` flag) is sufficient for Phase 1.
 
 AC01 layers per-method authz on top of D.5's invoker floor. Cloud
 Run IAM stays as the platform-level deny; per-method WorkOS-role
 checks gate inside the app. The two compose: a request needs both
 (a) a token from a member of the invoker allowlist AND (b) the
 right WorkOS role for the route's required permission.
+
+### 7.8 Forensic queries `[F02-D.6]`
+
+The audit chain (`audit_event` table, ADR-DB-003) is the
+primary forensic surface for tenant lifecycle. Three query
+patterns cover the operationally-useful 80% of lifecycle audit
+investigation; SQL below references the actual schema (per
+migration 0004 `audit_event` + 0008 actor-type constraint).
+
+All queries below run against the `cortex` database; require
+session-bound `app.tenant_id` for RLS-protected reads (currently
+`audit_event` writes are RLS-protected — ADR-DB-003; reads via
+service-role bypass at the operator session). Use `withTenantDbClient`
+or `set_config('app.tenant_id', '<uuid>', true)` per CLAUDE.md
+"Database conventions".
+
+#### 7.8.1 Provisioning timeline for a tenant
+
+When did this tenant get created, when did it reach READY,
+who initiated it?
+
+```sql
+SELECT
+  occurred_at,
+  action,
+  actor_type,
+  actor_id,
+  payload->'after_state'->>'status' AS new_status
+FROM audit_event
+WHERE tenant_id = '<tenant-uuid>'
+  AND action IN ('TENANT_CREATED', 'TENANT_PROVISIONED', 'TENANT_STATUS_CHANGED')
+ORDER BY occurred_at ASC, event_id ASC;
+```
+
+The `event_id` tiebreaker keeps within-microsecond events
+deterministic per the `audit_event_tenant_time` index ordering.
+`TENANT_CREATED` carries the original caller actor; `TENANT_PROVISIONED`
+preserves it through the worker (per §7.4.2 actor-attribution);
+intermediate `TENANT_STATUS_CHANGED` rows carry the worker's
+service actor (`cortex-tenant-lifecycle`).
+
+#### 7.8.2 Termination chain (with grace + actor)
+
+When was this tenant terminated, what was the grace period,
+who triggered (operator vs. forced)?
+
+```sql
+SELECT
+  ae.occurred_at,
+  ae.action,
+  ae.actor_type,
+  ae.actor_id,
+  ae.payload->'before_state'->>'status' AS prior_status,
+  ae.payload->'before_state'->>'offboarding_grace_until' AS grace_until,
+  ae.payload->>'reason' AS reason
+FROM audit_event ae
+WHERE ae.tenant_id = '<tenant-uuid>'
+  AND ae.action IN (
+    'TENANT_OFFBOARDING_STARTED',
+    'TENANT_TERMINATED',
+    'TENANT_FORCE_TERMINATED'
+  )
+ORDER BY ae.occurred_at ASC, ae.event_id ASC;
+```
+
+`TENANT_FORCE_TERMINATED` is the distinct compliance event for
+super-admin override (per Slice C SC2 + audit-actions.ts:52);
+filtering by action surfaces "tenant terminated despite an active
+hold or before grace" without parsing payload metadata.
+
+#### 7.8.3 Key rotation history per tenant
+
+When did keys rotate, was it scheduled or on-demand, what was
+the resource-name transition?
+
+```sql
+SELECT
+  occurred_at,
+  actor_type,
+  actor_id,
+  payload->'before_state'->>'kms_key_resource_name' AS old_key,
+  payload->'after_state'->>'kms_key_resource_name' AS new_key,
+  payload->>'trigger' AS trigger
+FROM audit_event
+WHERE tenant_id = '<tenant-uuid>'
+  AND action = 'TENANT_KEY_ROTATED'
+ORDER BY occurred_at DESC, event_id DESC;
+```
+
+`actor_id = 'cortex-tenant-lifecycle-worker'` flags scheduled
+rotations (worker route per §7.4.1); other `actor_id` values flag
+on-demand rotations from the HTTP API per §7.6's POST
+`/v1/tenants/:id/rotate-keys`.
+
+#### 7.8.4 Index notes
+
+The single index `audit_event_tenant_time (tenant_id, occurred_at
+DESC, event_id)` covers all three queries above efficiently — they
+all filter by `tenant_id` then range-scan time. Queries spanning
+multiple tenants (e.g., "all `TENANT_TERMINATED` across the
+fleet") would benefit from an additional `(action, occurred_at
+DESC)` index; tracked at future-roadmap §4.11 ("audit_event
+indexes for SCR-22 elevated-review queries"). Phase 1 fleet size
+(< 10 tenants) makes the existing index sufficient.
+
+#### 7.8.5 What's deliberately NOT here
+
+- **Cross-tenant aggregations** (e.g., "fleet-wide rotation
+  cadence histogram"). Operationally interesting, but Phase 1
+  volume doesn't justify the schema work + the RLS-bypass surface
+  it'd require. Owner-phase: F04 (Configuration Plane) reporting,
+  or whenever fleet size makes them necessary.
+- **Hash-chain verification** (re-compute `curr_hash` from
+  payload + prev_hash to detect tampering). Tracked at future-
+  roadmap §5.3 "verify_chain audit chain integrity verifier",
+  first-consumer-driven.
+- **Replay / event sourcing** (reconstruct tenant state from
+  events). Tenant table itself is the canonical state; audit_event
+  is the audit log, not an event store.
+
+Resolves Q-NEW-D-12 (convention §7 incremental extension; §7.8
+lands D.6's contribution; Slice D §7 closes here).
 
 ## 8. Operational patterns
 

@@ -258,6 +258,13 @@ resource "google_service_account_iam_member" "lifecycle_runtime_self_user" {
   member             = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
 }
 
+# Self-tokenCreator grant — see dev/main.tf for rationale (D.6).
+resource "google_service_account_iam_member" "lifecycle_runtime_self_token_creator" {
+  service_account_id = google_service_account.tenant_lifecycle_runtime.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
 resource "google_project_iam_member" "lifecycle_runtime_cloudsql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"
@@ -338,7 +345,7 @@ module "tenant_lifecycle_shared" {
   ]
   invoker_user_emails = var.operator_emails
 
-  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d5" })
+  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d6" })
 
   depends_on = [
     module.cloud_sql,

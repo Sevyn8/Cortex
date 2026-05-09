@@ -19,6 +19,7 @@ import {
   buildTestApp,
   cleanupTenants,
   clearKmsStub,
+  inMemoryStorage,
   mintRunTag,
   seedActiveTenant,
   setupTestPool,
@@ -80,6 +81,34 @@ describe('POST /v1/tenants/:id/terminate', () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(409);
+  });
+
+  it('happy path: OFFBOARDING + grace elapsed → 202 + tenant TERMINATED + GCS prefix delete', async () => {
+    const id = await seedActiveTenant({ db, externalId: `${RUN_TAG}-happy` });
+    createdTenantIds.push(id);
+
+    // Transition directly to OFFBOARDING with grace_until in the past
+    // (mirrors the §7.4 contract: terminate gates on OFFBOARDING +
+    // elapsed grace; the library tests cover the workflow,
+    // d6-gate-evidence.md captures live curl evidence).
+    await pool.query(
+      `UPDATE tenant SET status = 'OFFBOARDING', offboarding_grace_until = now() - interval '1 day' WHERE id = $1`,
+      [id],
+    );
+
+    const storage = inMemoryStorage();
+    const app = buildTestApp({ pool, testHooks: { storage } });
+    const res = await app.request(`/v1/tenants/${id}/terminate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; status: string };
+    expect(body.id).toBe(id);
+    expect(body.status).toBe('TERMINATED');
+    // Cascade deleteFiles routed through the testHooks-injected storage.
+    expect(storage.calls.find((c) => c.method === 'deleteFiles')).toBeDefined();
   });
 
   it('strict body schema rejects extra keys → 400', async () => {

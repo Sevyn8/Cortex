@@ -64,8 +64,8 @@ db\:seed: ## Run all registered seed modules
 # When P0.5 Cloud Build lands, the dev public IP exception becomes
 # unnecessary and can be reverted.
 
-db-proxy-dev: ## Start cloud-sql-proxy → dev (public IP; authorized_networks: amit-wsl-dev-migrations)
-	cloud-sql-proxy sevyn8-cortex-dev:asia-south1:cortex-dev-postgres --port=5432
+db-proxy-dev: ## Start cloud-sql-proxy → dev (private IP per ADR-INFRA-005; instance is ipv4Enabled=false; foreground)
+	cloud-sql-proxy sevyn8-cortex-dev:asia-south1:cortex-dev-postgres --private-ip --port=5432
 
 db-proxy-staging: ## Start cloud-sql-proxy → staging (foreground)
 	cloud-sql-proxy sevyn8-cortex-staging:asia-south1:cortex-staging-postgres --private-ip --port=5432

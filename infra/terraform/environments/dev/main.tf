@@ -335,6 +335,24 @@ resource "google_service_account_iam_member" "lifecycle_runtime_self_user" {
   member             = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
 }
 
+# Self-tokenCreator grant. The offboard workflow generates V4 signed
+# URLs for the export archive; per convention §6.1, the runtime SA
+# currently signs AS ITSELF via default ADC (the cortex-export-signer
+# impersonation path is deferred). Self-signing requires
+# `iam.serviceAccounts.signBlob` — held by `roles/iam.serviceAccountTokenCreator`,
+# NOT by `roles/iam.serviceAccountUser` (the latter only contains
+# actAs). Without this binding, POST /v1/tenants/:id/offboard returns
+# 500 with `Permission 'iam.serviceAccounts.signBlob' denied`.
+# Surfaced in F02 D.6 gate evidence; mirrors the D.4.5 self-actAs
+# pattern. When the deferred app-side change lands (per §6.1) — the
+# runtime SA impersonates `cortex-export-signer-dev` — this binding
+# can be removed; until then it's required.
+resource "google_service_account_iam_member" "lifecycle_runtime_self_token_creator" {
+  service_account_id = google_service_account.tenant_lifecycle_runtime.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.tenant_lifecycle_runtime.email}"
+}
+
 # 2. Cloud SQL IAM auth — three pieces. roles/cloudsql.client lets the SA
 #    reach the instance over private IP; roles/cloudsql.instanceUser lets the
 #    SA login via IAM (not password); google_sql_user of type
@@ -484,7 +502,7 @@ module "tenant_lifecycle_shared" {
   ]
   invoker_user_emails = var.operator_emails
 
-  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d5" })
+  common_labels = merge(var.common_labels, { prompt = "p1-2-slice-d-d6" })
 
   depends_on = [
     module.cloud_sql,

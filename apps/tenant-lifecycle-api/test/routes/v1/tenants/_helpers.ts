@@ -69,13 +69,18 @@ export function inMemoryKms(): KmsStub {
   };
 }
 
-export function buildTestApp(opts: { pool: Pool; superAdminGuard?: MiddlewareHandler }): Hono {
+export function buildTestApp(opts: {
+  pool: Pool;
+  superAdminGuard?: MiddlewareHandler;
+  testHooks?: { storage?: unknown };
+}): Hono {
   const app = new Hono();
   app.route(
     '/',
     buildV1TenantRoutes({
       pool: opts.pool,
       ...(opts.superAdminGuard !== undefined && { superAdminGuard: opts.superAdminGuard }),
+      ...(opts.testHooks !== undefined && { testHooks: opts.testHooks as never }),
     }),
   );
   app.onError(
@@ -85,6 +90,57 @@ export function buildTestApp(opts: { pool: Pool; superAdminGuard?: MiddlewareHan
     }),
   );
   return app;
+}
+
+/**
+ * Fake @google-cloud/storage `Storage` covering the surface the
+ * tenant cascade workflows exercise — terminate / force-terminate
+ * use `bucket().deleteFiles({prefix, force})`; offboard's archive
+ * uses `bucket().file().save(buffer, options)` + `getSignedUrl(opts)`.
+ *
+ * D.4.5 deferred + D.6 lands. Cast to `Storage` at the call site:
+ * the type surface is broad but the runtime methods we hit are
+ * narrow — see the methods enumerated below.
+ *
+ * Each per-call invocation is recorded for test assertions
+ * (`storage.calls`).
+ */
+export interface InMemoryStorage {
+  calls: { method: string; args: unknown[] }[];
+  bucket(name: string): {
+    deleteFiles(opts: { prefix?: string; force?: boolean }): Promise<unknown>;
+    file(path: string): {
+      save(buffer: Buffer, options: unknown): Promise<unknown>;
+      getSignedUrl(opts: unknown): Promise<[string]>;
+    };
+  };
+}
+
+export function inMemoryStorage(): InMemoryStorage {
+  const calls: { method: string; args: unknown[] }[] = [];
+  return {
+    calls,
+    bucket(name: string) {
+      return {
+        deleteFiles(opts: { prefix?: string; force?: boolean }) {
+          calls.push({ method: 'deleteFiles', args: [name, opts] });
+          return Promise.resolve(undefined);
+        },
+        file(path: string) {
+          return {
+            save(buffer: Buffer, options: unknown) {
+              calls.push({ method: 'save', args: [name, path, buffer.length, options] });
+              return Promise.resolve(undefined);
+            },
+            getSignedUrl(opts: unknown): Promise<[string]> {
+              calls.push({ method: 'getSignedUrl', args: [name, path, opts] });
+              return Promise.resolve([`https://signed-url-stub/${name}/${path}`]);
+            },
+          };
+        },
+      };
+    },
+  };
 }
 
 /**

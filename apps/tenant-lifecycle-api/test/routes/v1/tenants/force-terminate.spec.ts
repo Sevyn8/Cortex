@@ -1,30 +1,37 @@
 /**
  * POST /v1/tenants/:id/force-terminate (super-admin).
  *
- * Same Storage-cascade caveat as terminate.spec.ts — happy path's
- * GCS-listFiles + delete chain is library-tested in
- * packages/tenant-context/test/force-terminate.spec.ts. This spec
- * covers the HTTP wrapper's error-mapping + the super-admin guard
- * wiring; the cascade itself is library-layer.
+ * D.6 lands the happy-path test — D.4.5 deferred this pending the
+ * route-level `testHooks.storage` seam. The cascade itself is still
+ * library-layer (covered in
+ * `packages/tenant-context/test/force-terminate.spec.ts`); this
+ * spec covers the HTTP wrapper end-to-end with stubbed GCS.
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
   REJECTING_SUPER_ADMIN_GUARD,
   buildTestApp,
   cleanupTenants,
   clearKmsStub,
+  inMemoryStorage,
+  mintRunTag,
+  seedActiveTenant,
   setupTestPool,
   withKmsStub,
 } from './_helpers.js';
 
+const RUN_TAG = mintRunTag('d6-force-terminate');
+
 describe('POST /v1/tenants/:id/force-terminate', () => {
   let pool: Pool;
+  let db: NodePgDatabase<Record<string, never>>;
   const createdTenantIds: string[] = [];
 
   beforeAll(() => {
-    ({ pool } = setupTestPool());
+    ({ pool, db } = setupTestPool());
   });
   afterAll(async () => {
     await cleanupTenants(pool, createdTenantIds);
@@ -62,5 +69,27 @@ describe('POST /v1/tenants/:id/force-terminate', () => {
       body: JSON.stringify({ reason: 'test' }),
     });
     expect(res.status).toBe(403);
+  });
+
+  it('happy path: ACTIVE tenant + accepting guard + reason → 200 + tenant TERMINATED', async () => {
+    const id = await seedActiveTenant({ db, externalId: `${RUN_TAG}-happy` });
+    createdTenantIds.push(id);
+
+    const storage = inMemoryStorage();
+    // Default super-admin guard is the no-op pass-through (Phase 1
+    // SD8 — deny-by-default lives at Cloud Run invoker IAM, per
+    // §7.7.4). force-terminate cascades through GCS via testHooks-
+    // injected storage.
+    const app = buildTestApp({ pool, testHooks: { storage } });
+    const res = await app.request(`/v1/tenants/${id}/force-terminate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'D.6 force-terminate happy-path test' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; status: string };
+    expect(body.id).toBe(id);
+    expect(body.status).toBe('TERMINATED');
+    expect(storage.calls.find((c) => c.method === 'deleteFiles')).toBeDefined();
   });
 });

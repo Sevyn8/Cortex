@@ -165,6 +165,9 @@ importers:
       '@cortex/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
+      '@google-cloud/storage':
+        specifier: 'catalog:'
+        version: 7.19.0
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17

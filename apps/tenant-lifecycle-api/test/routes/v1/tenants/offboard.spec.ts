@@ -1,28 +1,77 @@
 /**
  * POST /v1/tenants/:id/offboard.
  *
- * SKIPPED. tenants.offboard requires LIFECYCLE_WORKER_URL +
- * dispatches a real Cloud Tasks task + generates a GCS archive.
- * The library tests in packages/tenant-context/test/offboard.spec.ts
- * cover the workflow end-to-end with stubs; replicating against
- * live deps in the HTTP wrapper is over-redundant. The route is
- * structurally identical to suspend/resume — same wiring pattern,
- * same error mapping (suspend.spec.ts + resume.spec.ts cover the
- * wrapper-layer correctness invariant).
- *
- * D.4.5 gate evidence (`docs/planning/d4.5-gate-evidence.md`)
- * captures the live offboard happy-path against the real Cloud
- * Run service. The unit-test skip stays because GCS lacks a
- * client-factory mock seam (KMS-style `__setClientFactoryForTesting`
- * pattern not yet replicated in `@cortex/blob-storage`); a route-
- * level `cascadeOverrides?` DI seam was considered + deferred at
- * D.4.5 HOLD-#2 reconciliation per Option B (keep-skip + live-
- * integration-only).
+ * Happy path: ACTIVE tenant → 202 + grace_until set + GCS archive
+ * created. D.4.5 deferred this; D.6 ships the route-level testHooks
+ * seam so the `archiveOverrides.storage` library DI can be reached
+ * from the HTTP wrapper without live GCS.
  */
-import { describe, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { Pool } from 'pg';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import {
+  buildTestApp,
+  cleanupTenants,
+  clearKmsStub,
+  clearCloudTasksStub,
+  inMemoryStorage,
+  mintRunTag,
+  seedActiveTenant,
+  setupTestPool,
+  withCloudTasksStub,
+  withKmsStub,
+} from './_helpers.js';
+
+const RUN_TAG = mintRunTag('d6-offboard');
 
 describe('POST /v1/tenants/:id/offboard', () => {
-  it.skip('happy + error mapping covered at library layer; D.4.5 live integration covers HTTP wrapper end-to-end', () => {
-    // Intentionally empty — see file header for rationale.
+  let pool: Pool;
+  let db: NodePgDatabase<Record<string, never>>;
+  const createdTenantIds: string[] = [];
+
+  beforeAll(() => {
+    process.env.LIFECYCLE_WORKER_URL ??= 'http://test-cloud-tasks.invalid/v1/_workers/lifecycle';
+    ({ pool, db } = setupTestPool());
+  });
+  afterAll(async () => {
+    await cleanupTenants(pool, createdTenantIds);
+    await pool.end();
+    clearKmsStub();
+    clearCloudTasksStub();
+  });
+  beforeEach(() => {
+    withKmsStub();
+    withCloudTasksStub();
+  });
+  afterEach(() => {
+    clearKmsStub();
+    clearCloudTasksStub();
+  });
+
+  it('happy path: ACTIVE tenant → 200 + grace_until + export_archive present', async () => {
+    const id = await seedActiveTenant({ db, externalId: `${RUN_TAG}-happy` });
+    createdTenantIds.push(id);
+
+    const storage = inMemoryStorage();
+    const app = buildTestApp({ pool, testHooks: { storage } });
+    const res = await app.request(`/v1/tenants/${id}/offboard`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ grace_period_days: 30 }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      tenant: { id: string; status: string };
+      grace_until: string | null;
+      export_archive: { gcsUri: string; signedUrl: string } | undefined;
+    };
+    expect(body.tenant.id).toBe(id);
+    expect(body.tenant.status).toBe('OFFBOARDING');
+    expect(body.grace_until).not.toBeNull();
+    expect(body.export_archive).toBeDefined();
+    expect(body.export_archive?.gcsUri).toMatch(/^gs:\/\//);
+    // Archive write went through the testHooks-injected storage (not live GCS).
+    const archiveSave = storage.calls.find((c) => c.method === 'save');
+    expect(archiveSave).toBeDefined();
   });
 });

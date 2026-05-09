@@ -37,6 +37,7 @@
  */
 import { zValidator } from '@hono/zod-validator';
 import { legalHolds, tenants, withTenantDbClient, type Actor } from '@cortex/tenant-context';
+import type { Storage } from '@google-cloud/storage';
 import { Hono, type MiddlewareHandler } from 'hono';
 import type { Pool } from 'pg';
 import { z } from 'zod';
@@ -165,11 +166,31 @@ export interface BuildV1TenantRoutesOptions {
    * not at this middleware).
    */
   superAdminGuard?: MiddlewareHandler;
+  /**
+   * Test-only DI seam for the cascade workflows (offboard / terminate
+   * / force-terminate) that touch GCS. Production omits — handlers
+   * default-construct `new Storage()` per the existing library-layer
+   * `cascadeOverrides` / `archiveOverrides` shape.
+   *
+   * One inbound shape (`storage`); two outbound mappings:
+   *   - offboard's `tenants.offboard` consumes `archiveOverrides:
+   *     { storage }` (export-archive uses `bucket().file().save()` +
+   *     `getSignedUrl()`).
+   *   - terminate + force-terminate consume `cascadeOverrides:
+   *     { storage }` (cascade uses `bucket().deleteFiles({prefix})`).
+   *
+   * Tests construct an `inMemoryStorage()` fake (per `_helpers.ts`)
+   * covering the surface both library functions exercise. D.4.5
+   * HOLD-#2 reconciliation deferred this to D.6; landed here.
+   */
+  testHooks?: {
+    storage?: Storage;
+  };
 }
 
 export function buildV1TenantRoutes(arg: Pool | BuildV1TenantRoutesOptions): Hono {
   const opts: BuildV1TenantRoutesOptions = 'pool' in arg ? arg : { pool: arg };
-  const { pool, superAdminGuard = defaultSuperAdminGuard } = opts;
+  const { pool, superAdminGuard = defaultSuperAdminGuard, testHooks } = opts;
   const requireSuperAdmin = (): MiddlewareHandler => superAdminGuard;
   const app = new Hono();
 
@@ -254,13 +275,16 @@ export function buildV1TenantRoutes(arg: Pool | BuildV1TenantRoutesOptions): Hon
     async (c) => {
       const { id } = c.req.valid('param');
       const body = c.req.valid('json');
+      const offboardOpts: Parameters<typeof tenants.offboard>[2] = {
+        ...(body.grace_period_days !== undefined && {
+          gracePeriodDays: body.grace_period_days,
+        }),
+        ...(testHooks?.storage !== undefined && {
+          archiveOverrides: { storage: testHooks.storage },
+        }),
+      };
       const result = await withTenantDbClient(pool, id, async (tx) =>
-        tenants.offboard(
-          tx,
-          id,
-          body.grace_period_days !== undefined ? { gracePeriodDays: body.grace_period_days } : {},
-          { actor: HTTP_ACTOR },
-        ),
+        tenants.offboard(tx, id, offboardOpts, { actor: HTTP_ACTOR }),
       );
       return c.json({
         tenant: result.tenant,
@@ -277,8 +301,14 @@ export function buildV1TenantRoutes(arg: Pool | BuildV1TenantRoutesOptions): Hon
     zValidator('json', emptyBodySchema),
     async (c) => {
       const { id } = c.req.valid('param');
+      const terminateOpts: Parameters<typeof tenants.terminate>[2] = {
+        actor: HTTP_ACTOR,
+        ...(testHooks?.storage !== undefined && {
+          cascadeOverrides: { storage: testHooks.storage },
+        }),
+      };
       const updated = await withTenantDbClient(pool, id, async (tx) =>
-        tenants.terminate(tx, id, { actor: HTTP_ACTOR }),
+        tenants.terminate(tx, id, terminateOpts),
       );
       return c.json(updated);
     },
@@ -293,8 +323,14 @@ export function buildV1TenantRoutes(arg: Pool | BuildV1TenantRoutesOptions): Hon
     async (c) => {
       const { id } = c.req.valid('param');
       const body = c.req.valid('json');
+      const forceTerminateOpts: Parameters<typeof tenants.forceTerminate>[3] = {
+        actor: HTTP_ACTOR,
+        ...(testHooks?.storage !== undefined && {
+          cascadeOverrides: { storage: testHooks.storage },
+        }),
+      };
       const updated = await withTenantDbClient(pool, id, async (tx) =>
-        tenants.forceTerminate(tx, id, body.reason, { actor: HTTP_ACTOR }),
+        tenants.forceTerminate(tx, id, body.reason, forceTerminateOpts),
       );
       return c.json(updated);
     },

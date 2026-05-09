@@ -22,6 +22,10 @@
 - Include prompt ID in commit body: `Prompt: P1.1`
 - Reference spec section: `Spec: §F01-FR-003`
 
+### Co-Authored-By trailer
+
+Commit messages MUST NOT include `Co-Authored-By: Claude` or any AI co-author trailer unless the operator explicitly requests one in the current turn. Default to no trailer. This applies to all squash bodies, single commits, and amended commits without exception.
+
 ## Branching & PR
 
 - Trunk-based. Main is always deployable

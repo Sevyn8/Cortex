@@ -94,8 +94,20 @@ describe('@cortex/temporal-query', () => {
       // 2. Update price. SCD: v1Id row closed at T_update; new row v2Id inserted with price=1500.
       await pool.query(`UPDATE retail_product SET price_cents = 1500 WHERE id = $1`, [v1Id]);
 
-      // 3. asOf(v1Id, tBetween) — returns the pre-update row.
-      const row = await asOf<RetailProduct>(pool, TENANT_A, 'retail_product', v1Id, tBetween);
+      // 3. asOf(v1Id, tBetween, tBetween) — returns the pre-update row.
+      // Both anchors must be in the past: business-anchor inside the row's
+      // valid_time AND system-anchor inside the row's txn_time. The default
+      // asOfSystemTs (now) would land AFTER t_update, when v1Id's txn_time
+      // is closed — see the JSDoc @example in as-of.ts for the asymmetric-
+      // default rationale.
+      const row = await asOf<RetailProduct>(
+        pool,
+        TENANT_A,
+        'retail_product',
+        v1Id,
+        tBetween,
+        tBetween,
+      );
       expect(row).not.toBeNull();
       expect(row?.price_cents).toBe(1000);
       expect(row?.name).toBe('Widget');
@@ -207,29 +219,34 @@ describe('@cortex/temporal-query', () => {
   });
 
   describe('diff', () => {
-    it('returns { before, after, changedColumns } for a price change', async () => {
-      const v1Id = await insertProduct({
+    it('returns { before, after, changedColumns: [] } when both anchors fall within an open row version', async () => {
+      // diff is id-scoped (NOT entity-scoped via business key) per Slice B's
+      // shipped contract — it compares the same row at two timestamps, so
+      // for a single row that hasn't been mutated, changedColumns is always
+      // [] by construction. Cross-version "what changed about this entity
+      // over time" is the diffByKey use case (Slice B.5; see CLAUDE.md
+      // "Querying bi-temporal data" for the row-version-scoped caveat on
+      // the current `diff` primitive).
+      //
+      // This test validates that diff works at all in its row-version
+      // sense: two timestamps inside a single open row → both asOf calls
+      // (system-default = now ∈ open txn_time) return the same row → diff
+      // emits the {before, after, []} shape.
+      const id = await insertProduct({
         tenantId: TENANT_A,
         sku: 'SKU-DIFF-1',
         name: 'Diffed',
         priceCents: 800,
       });
       await new Promise((r) => setTimeout(r, 30));
-      const tBefore = new Date();
+      const t1 = new Date();
       await new Promise((r) => setTimeout(r, 30));
-      await pool.query(`UPDATE retail_product SET price_cents = 900 WHERE id = $1`, [v1Id]);
-      // Anchor t1 = before update; anchor t2 = before update too (same id remains the closed v1).
-      // diff at the row-id level: pre-close vs post-close — content unchanged.
-      const result = await diff<RetailProduct>(
-        pool,
-        TENANT_A,
-        'retail_product',
-        v1Id,
-        tBefore,
-        tBefore,
-      );
+      const t2 = new Date();
+      const result = await diff<RetailProduct>(pool, TENANT_A, 'retail_product', id, t1, t2);
       expect(result.before).not.toBeNull();
       expect(result.after).not.toBeNull();
+      expect(result.before?.price_cents).toBe(800);
+      expect(result.after?.price_cents).toBe(800);
       expect(result.changedColumns).toEqual([]);
     });
 

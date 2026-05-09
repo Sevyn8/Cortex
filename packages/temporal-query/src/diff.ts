@@ -43,6 +43,19 @@ export interface Diff<T> {
  * Implemented as two `asOf` calls + a shallow-equality scan. No
  * special-case SQL — the SCD substrate already preserves all versions;
  * `asOf` finds the right one for each anchor.
+ *
+ * @experimental — `diff` is row-version scoped (id-based). It compares
+ * the SAME row at two timestamps, NOT the entity (across SCD-rotated
+ * ids) at two timestamps. For the headline F03 use case — "what
+ * changed about this product over time" — use `diffByKey` (Slice B.5;
+ * not yet shipped). The SCD trigger (migration 0002) rotates `id` on
+ * UPDATE, so cross-version comparison via this primitive isn't
+ * achievable without a business-key resolver, which the library
+ * deliberately doesn't carry. Useful in narrow scenarios — correction
+ * histories, txn_time-axis comparisons within a single row generation,
+ * or no-change verification — but it is NOT the right tool for
+ * entity-level "what changed" queries. See CLAUDE.md "Querying
+ * bi-temporal data" for the full caveat.
  */
 export async function diff<T>(
   client: Queryable,

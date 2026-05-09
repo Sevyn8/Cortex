@@ -283,6 +283,12 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           [tenantId],
         );
         const origId = inserted.rows[0]!.id;
+        // Sleep to ensure INSERT and UPDATE land in different ms.
+        // Without this, CI's fast execution can land both in the same
+        // ms quantum → close-update produces tstzrange(X, X) (empty
+        // range; upper IS NULL) and ORDER BY lower(txn_time) is
+        // non-deterministic for tied keys.
+        await new Promise((r) => setTimeout(r, 5));
 
         await withTenantContext(testPool, tenantId, async (tx) => {
           await tx.query(`UPDATE ${MAIN_TABLE} SET name = 'rotated' WHERE id = $1`, [origId]);
@@ -293,8 +299,11 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           name: string;
           txn_upper: string | null;
         }>(
+          // ORDER BY upper(txn_time) NULLS LAST — closed (OLD) first,
+          // open (NEW) last. Deterministic regardless of timestamp
+          // tie-break.
           `SELECT id, name, upper(txn_time)::text AS txn_upper FROM ${MAIN_TABLE}
-           WHERE tenant_id = $1 ORDER BY lower(txn_time)`,
+           WHERE tenant_id = $1 ORDER BY upper(txn_time) NULLS LAST`,
           [tenantId],
         );
         expect(all.rows).toHaveLength(2);
@@ -320,6 +329,7 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           [tenantId],
         );
         const id = inserted.rows[0]!.id;
+        await new Promise((r) => setTimeout(r, 5));
 
         await withTenantContext(testPool, tenantId, async (tx) => {
           await tx.query(`DELETE FROM ${MAIN_TABLE} WHERE id = $1`, [id]);
@@ -578,6 +588,8 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           [tenantId],
         );
         const origId = inserted.rows[0]!.id;
+        // Sleep to ensure INSERT and UPDATE land in different ms.
+        await new Promise((r) => setTimeout(r, 5));
 
         await withTenantContext(testPool, tenantId, async (tx) => {
           await tx.query(
@@ -596,11 +608,13 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           priority_previous: number | null;
           txn_upper: string | null;
         }>(
+          // ORDER BY upper(txn_time) NULLS LAST — closed (OLD) first,
+          // open (NEW) last. Deterministic regardless of timestamp tie.
           `SELECT id, name, status, priority, name_previous, status_previous,
                   priority_previous, upper(txn_time)::text AS txn_upper
            FROM ${MAIN_TABLE}
            WHERE tenant_id = $1
-           ORDER BY lower(txn_time)`,
+           ORDER BY upper(txn_time) NULLS LAST`,
           [tenantId],
         );
         expect(all.rows).toHaveLength(2);
@@ -633,6 +647,7 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           [tenantId],
         );
         const origId = inserted.rows[0]!.id;
+        await new Promise((r) => setTimeout(r, 5));
 
         await withTenantContext(testPool, tenantId, async (tx) => {
           await tx.query(`UPDATE ${MAIN_TABLE} SET name = 'b' WHERE id = $1`, [origId]);
@@ -640,7 +655,7 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
 
         const all = await pgPool.query<{ name: string; name_previous: string | null }>(
           `SELECT name, name_previous FROM ${MAIN_TABLE} WHERE tenant_id = $1
-           ORDER BY lower(txn_time)`,
+           ORDER BY upper(txn_time) NULLS LAST`,
           [tenantId],
         );
         expect(all.rows).toHaveLength(2);
@@ -664,6 +679,7 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           [tenantId],
         );
         const id = inserted.rows[0]!.id;
+        await new Promise((r) => setTimeout(r, 5));
 
         await withTenantContext(testPool, tenantId, async (tx) => {
           await tx.query(`DELETE FROM ${MAIN_TABLE} WHERE id = $1`, [id]);
@@ -702,6 +718,7 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
           [tenantId],
         );
         const origId = inserted.rows[0]!.id;
+        await new Promise((r) => setTimeout(r, 5));
 
         await withTenantContext(testPool, tenantId, async (tx) => {
           await tx.query(`UPDATE ${MAIN_TABLE} SET name = 'rotated' WHERE id = $1`, [origId]);
@@ -709,7 +726,7 @@ describe('cortex_scd_trigger — SCD policy dispatch (F03 Slice C C.4)', () => {
 
         const all = await pgPool.query<{ id: string; txn_upper: string | null }>(
           `SELECT id, upper(txn_time)::text AS txn_upper FROM ${MAIN_TABLE}
-           WHERE tenant_id = $1 ORDER BY lower(txn_time)`,
+           WHERE tenant_id = $1 ORDER BY upper(txn_time) NULLS LAST`,
           [tenantId],
         );
         // Type 2 row rotation: 2 rows, OLD closed, NEW open.

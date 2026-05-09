@@ -145,11 +145,12 @@ describe('control-plane tables (migration 0007)', () => {
   });
 
   it('FK ON DELETE RESTRICT prevents tenant deletion when a config row references it', async () => {
-    // Insert a config_version for TENANT_A.
+    // Insert a config_version for TENANT_A. Namespace='tenant' per F04
+    // D1 reshape (migration 0014); schema_version defaults to 1.
     await withBoundClient(pool, TENANT_A_ID, async (client) => {
       await client.query(
-        `INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-           VALUES ($1, 1, '{}'::jsonb)
+        `INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+           VALUES ($1, 'tenant', 1, '{}'::jsonb)
            ON CONFLICT DO NOTHING`,
         [TENANT_A_ID],
       );
@@ -181,13 +182,15 @@ describe('control-plane tables (migration 0007)', () => {
   });
 
   it('UNIQUE composites on tenant_config_version + tenant_quota_usage reject duplicates', async () => {
-    // (tenant_id, version_number) — TENANT_A already has v=1 from FK test.
+    // (tenant_id, namespace, version_number) per F04 D1 reshape
+    // (migration 0014). TENANT_A already has (tenant, 1) from FK test;
+    // re-inserting the same triple should violate UNIQUE.
     let configCaptured: { code?: string } | undefined;
     try {
       await withBoundClient(pool, TENANT_A_ID, async (client) => {
         await client.query(
-          `INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-             VALUES ($1, 1, '{}'::jsonb)`,
+          `INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+             VALUES ($1, 'tenant', 1, '{}'::jsonb)`,
           [TENANT_A_ID],
         );
       });
@@ -302,11 +305,12 @@ describe('control-plane tables (migration 0007)', () => {
 
   it('RLS isolation: tenant B cannot see tenant A config rows', async () => {
     // TENANT_A already has a config row (v=1) from the FK test. Insert
-    // a B-owned row to keep both sides non-empty.
+    // a B-owned row to keep both sides non-empty. Namespace='tenant'
+    // per F04 D1 reshape (migration 0014).
     await withBoundClient(pool, TENANT_B_ID, async (client) => {
       await client.query(
-        `INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-           VALUES ($1, 1, '{}'::jsonb)
+        `INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+           VALUES ($1, 'tenant', 1, '{}'::jsonb)
            ON CONFLICT DO NOTHING`,
         [TENANT_B_ID],
       );

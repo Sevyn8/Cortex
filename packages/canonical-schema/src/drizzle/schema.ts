@@ -130,9 +130,19 @@ export type Tenant = typeof tenant.$inferSelect;
 export type NewTenant = typeof tenant.$inferInsert;
 
 /**
- * Per-tenant versioned configuration (F04 consumer). RLS enabled in 0007 —
- * reads/writes scoped by app.tenant_id. version_number is monotonic per
- * tenant. created_by_user_id NULL pre-AC01.
+ * Per-tenant per-namespace versioned configuration (F04 substrate). RLS
+ * enabled in 0007 — reads/writes scoped by app.tenant_id. UNIQUE
+ * `(tenant_id, namespace, version_number)` enforces monotonic
+ * version_number per (tenant, namespace) per F04 D1 reshape (migration
+ * 0014). `parent_version_id` is the self-FK forming the append-only
+ * chain per D2; NULL for genesis (v=1) rows. `schema_version` pins
+ * each row to a specific Zod schema version per D12.
+ *
+ * F02 writer at `packages/tenant-context/src/tenants.ts` provisions
+ * v=1 rows with `namespace='tenant'`; subsequent writes go through
+ * F04 Slice B's lifecycle (draft / validate / promote / rollback).
+ *
+ * `created_by_user_id` NULL pre-AC01.
  */
 export const tenantConfigVersion = pgTable(
   'tenant_config_version',
@@ -141,14 +151,18 @@ export const tenantConfigVersion = pgTable(
     tenant_id: uuid('tenant_id')
       .notNull()
       .references(() => tenant.id, { onDelete: 'restrict' }),
+    namespace: text('namespace').notNull(),
     version_number: integer('version_number').notNull(),
+    parent_version_id: uuid('parent_version_id'),
+    schema_version: integer('schema_version').notNull().default(1),
     config_json: jsonb('config_json').notNull().$type<Record<string, unknown>>().default({}),
     created_at: timestamp('created_at', { withTimezone: true }).notNull().default(msNow),
     created_by_user_id: uuid('created_by_user_id'),
   },
   (t) => ({
-    tenantVersionUnique: unique('tenant_config_version_tenant_id_version_number_key').on(
+    tenantNamespaceVersionUnique: unique('tenant_config_version_tenant_namespace_version_key').on(
       t.tenant_id,
+      t.namespace,
       t.version_number,
     ),
   }),

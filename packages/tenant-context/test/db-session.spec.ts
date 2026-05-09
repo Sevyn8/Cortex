@@ -121,8 +121,8 @@ describe('db-session', () => {
     try {
       await db.transaction(async (tx) => {
         await tx.execute(
-          sql`INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-              VALUES (${TENANT_ID}, 100, '{}'::jsonb)`,
+          sql`INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+              VALUES (${TENANT_ID}, 'tenant', 100, '{}'::jsonb)`,
         );
       });
     } catch (err) {
@@ -135,8 +135,8 @@ describe('db-session', () => {
     await db.transaction(async (tx) => {
       await bindTenantToDbSession(tx, TENANT_ID);
       await tx.execute(
-        sql`INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-            VALUES (${TENANT_ID}, 101, '{"k":"v"}'::jsonb)`,
+        sql`INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+            VALUES (${TENANT_ID}, 'tenant', 101, '{"k":"v"}'::jsonb)`,
       );
     });
 
@@ -175,8 +175,8 @@ describe('db-session', () => {
       try {
         await withTenantDbClient(pool, TENANT_ID, async (tx) => {
           await tx.execute(
-            sql`INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-                VALUES (${TENANT_ID}, ${VERSION}, '{"forced":"rollback"}'::jsonb)`,
+            sql`INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+                VALUES (${TENANT_ID}, 'tenant', ${VERSION}, '{"forced":"rollback"}'::jsonb)`,
           );
           throw new Error('forced rollback');
         });
@@ -255,8 +255,8 @@ describe('db-session', () => {
       const VERSION = 7778;
       const result = await withTenantDbClient(pool, TENANT_ID, async (tx) => {
         await tx.execute(
-          sql`INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-              VALUES (${TENANT_ID}, ${VERSION}, '{"k":"v-via-with-tenant-db-client"}'::jsonb)`,
+          sql`INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+              VALUES (${TENANT_ID}, 'tenant', ${VERSION}, '{"k":"v-via-with-tenant-db-client"}'::jsonb)`,
         );
         const r = await tx.execute<{ count: string }>(
           sql`SELECT count(*)::text AS count FROM tenant_config_version

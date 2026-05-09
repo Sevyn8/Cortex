@@ -315,6 +315,40 @@ Public API takes a `Queryable` interface (Q-NEW-F03B-5; productization-critical 
 - `docs/planning/f03-slice-A-scope.md` (SD-locked decisions, especially Q-NEW-F03A-1 `WITH_WRAPPERS` synthesis and SD5 lint scope)
 - `packages/temporal-query/src/index.ts` (Slice B library; Q-NEW-F03B locks on Queryable, tenantId parameterization, nullable returns, closed-open ranges, diff shape)
 
+## Configuration plane (F04)
+
+`@cortex/config-plane` ships the tenant-facing config layer. Every tenant-scoped setting (theme tokens, i18n, feature flags, screen-registry overrides, hierarchy schema, retention policies, quality rule library, SCD policies, vertical-package selection) lives as versioned config in `tenant_config_version` with a per-namespace shape (`platform.*`, `tenant.*`, `workspace.*`).
+
+**Storage substrate** (Slice A — landed migration 0014): row-per-`(tenant, namespace, version_number)`, append-only chain via `parent_version_id` self-FK, schema-version-pinned via `schema_version` so drafts created against v=1 keep validating against v=1 after v=2 ships. F02 provisioning seeds v=1 rows in the `tenant` namespace.
+
+**Read API** (Slice A): `getConfig<T>(client, tenantId, namespace) → T | null`. Async; cache-hit semantics ship in Slice C. Single-namespace; layered resolution (`workspace → tenant → platform`) ships in Slice C. Schema validation against `(namespace, schema_version)` mandatory — throws `NamespaceSchemaNotRegisteredError` if no schema registered for the row's pinned version.
+
+**Schema registry** (Slice A): `registerNamespaceSchema(namespace, schema, { version })` — call at consumer module init. **Schema version is EXPLICIT on registration**, NOT derived from package version (workspace packages stay at `0.0.0`). A namespace MAY have multiple registered schema versions simultaneously; lookup uses the row's pinned `schema_version`.
+
+**Audit catalog** (Slice A registers; Slice B emits): 6 verbs in `packages/config-plane/src/audit-actions.ts`:
+
+- `CONFIG_DRAFT_CREATED / UPDATED / VALIDATED / DISCARDED` — draft lifecycle (Slice B)
+- `CONFIG_VERSION_PROMOTED / ROLLED_BACK` — version-chain mutations (Slice B)
+
+**`TENANT_CONFIG_VERSION_CREATED` coexistence** (locked at Slice A HOLD #1 per Q-NEW-F04A-10): F02's existing `TENANT_CONFIG_VERSION_CREATED` (substrate-bootstrap event at v=1 provisioning) and F04 Slice B's `CONFIG_VERSION_PROMOTED` (user-driven event at lifecycle promote) coexist — different actors, triggers, contexts. Slice B does NOT deprecate the F02 event.
+
+**Slices** (per `docs/planning/p1.4-f04-configuration-plane-scope.md`):
+
+- A — Storage + Zod registry + read API ✓ (this slice)
+- B — Lifecycle (draft / validate / promote / rollback) — F03 Slice C unblocks at this slice's close per D7
+- C — Layered resolution + caching (in-process LRU + TTL; Redis distributed cache deferred to roadmap §1.12)
+- D — Impact analysis + breaking-change blocker
+- E — Git-sync stub + module wrap-up
+
+**Author-only draft visibility** (Slice B): pre-AC01 implementation uses explicit `created_by_user_id` filter in app code. Post-AC01 upgrades to RLS policy referencing `cortex.current_user_id()`. Documented in Slice B's `config_draft` migration header.
+
+**Cross-refs:**
+
+- `docs/planning/p1.4-f04-configuration-plane-scope.md` (module scope; D1-D14 locks)
+- `docs/planning/f04-slice-A-scope.md` (Slice A scope; sub-decision locks)
+- `services/foundation/migrations/0014_f04_config_namespace_reshape.sql` (substrate reshape)
+- `packages/canonical-schema/src/drizzle/schema.ts` (`tenantConfigVersion` Drizzle definition; F02 reconciliation target)
+
 ## Feature flags
 
 - All new capabilities roll out behind a feature flag (`@cortex/feature-flags`)

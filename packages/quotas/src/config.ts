@@ -37,7 +37,7 @@
  * not a target" framing.
  */
 
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { tenantConfigVersion } from '@cortex/canonical-schema';
 import { DEFAULT_TIER_QUOTAS, type QuotaTier, type ResourceClass } from './types.js';
@@ -60,10 +60,21 @@ export async function getQuotaConfig(
   ctx?: { tenantId?: string; db?: NodePgDatabase<Record<string, never>> },
 ): Promise<bigint> {
   if (ctx?.tenantId !== undefined && ctx.db !== undefined) {
+    // Quotas config lives in the 'tenant' namespace per F04 D1 reshape
+    // (migration 0014). F02 provisioning writes initialConfig with
+    // namespace='tenant'; quotas overrides come from that same row.
+    // F04 Slice C may surface a `tenant.quotas` sub-namespace later;
+    // until then, the F02-shaped `config_json.quotas[resource_class]`
+    // path stays in the 'tenant' namespace.
     const rows = await ctx.db
       .select({ config_json: tenantConfigVersion.config_json })
       .from(tenantConfigVersion)
-      .where(eq(tenantConfigVersion.tenant_id, ctx.tenantId))
+      .where(
+        and(
+          eq(tenantConfigVersion.tenant_id, ctx.tenantId),
+          eq(tenantConfigVersion.namespace, 'tenant'),
+        ),
+      )
       .orderBy(desc(tenantConfigVersion.version_number))
       .limit(1);
 

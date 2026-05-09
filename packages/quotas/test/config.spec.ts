@@ -138,8 +138,10 @@ describe('getQuotaConfig — per-tenant override (ctx supplies tenantId + db)', 
       await client.query('BEGIN');
       await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
       await client.query(
-        `INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-         VALUES ($1, $2, $3::jsonb)`,
+        // namespace='tenant' per F04 D1 reshape (migration 0014); F02
+        // provisioning seeds v=1 in this namespace.
+        `INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+         VALUES ($1, 'tenant', $2, $3::jsonb)`,
         [tenantId, 1, JSON.stringify(configJson)],
       );
       await client.query('COMMIT');
@@ -225,8 +227,9 @@ describe('getQuotaConfig — per-tenant override (ctx supplies tenantId + db)', 
       await client.query('BEGIN');
       await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
       await client.query(
-        `INSERT INTO tenant_config_version (tenant_id, version_number, config_json)
-         VALUES ($1, $2, $3::jsonb)`,
+        // namespace='tenant' per F04 D1 reshape (migration 0014).
+        `INSERT INTO tenant_config_version (tenant_id, namespace, version_number, config_json)
+         VALUES ($1, 'tenant', $2, $3::jsonb)`,
         [tenantId, 2, JSON.stringify({ quotas: { api_calls_per_minute: 200 } })],
       );
       await client.query('COMMIT');

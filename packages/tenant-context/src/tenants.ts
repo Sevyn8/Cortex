@@ -348,6 +348,14 @@ async function create(
         .insert(tenantConfigVersion)
         .values({
           tenant_id: row.id,
+          // F02 provisioning seeds v=1 in the 'tenant' namespace per
+          // F04 D1 reshape (migration 0014). schema_version defaults
+          // to 1 in the column definition; parent_version_id NULL
+          // (genesis row, no parent in the chain). Subsequent writes
+          // go through F04 Slice B's draft/validate/promote/rollback
+          // lifecycle. See docs/planning/p1.4-f04-configuration-
+          // plane-scope.md §0 + Q-NEW-F04A-7 reconciliation note.
+          namespace: 'tenant',
           version_number: 1,
           config_json: parsedInput.initialConfig,
         })

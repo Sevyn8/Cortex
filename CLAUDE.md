@@ -28,10 +28,27 @@ Commit messages MUST NOT include `Co-Authored-By: Claude` or any AI co-author tr
 
 ## Branching & PR
 
-- Trunk-based. Main is always deployable
-- Short-lived branches: `{prompt-id}-{short-desc}` (e.g., `p1.1-f01-multi-tenancy`)
-- PR required to merge to main. At least one human review for non-trivial PRs
-- Solo dev OK to self-review, but use M4 Code Review meta-prompt between sessions
+### Trunk-based with mandatory PR gating
+
+Main is protected. Direct pushes are blocked. All changes — including chores, docs, and trivial fixes — go through a feature branch + PR + CI-green gate. CI is the only gate; no human review required for solo-dev velocity.
+
+### Standard workflow per change
+
+1. `git checkout -b <branch-name>` — branch naming follows existing convention (slice branches as `pX.Y-fNN-slice-Z`, fixes as `fix-<slug>`, chores as `chore-<slug>`).
+2. Local verification — `pnpm vitest run` against compose Postgres. Must pass before push. (Roadmap §4.20 closed 2026-05-09 — `make db:init-test` brings the local stack up; see `## Local development`.)
+3. `git push -u origin <branch-name>`
+4. `gh pr create --fill --base main`
+5. Wait for CI on the PR. Required check: `Run foundation tests against ephemeral Postgres`.
+6. After CI green: `gh pr merge --merge --delete-branch` (or `--squash --delete-branch` for slice-style multi-commit branches that should land as one squashed commit).
+7. Pull main locally: `git checkout main && git pull`.
+
+### Why no admin bypass
+
+Carried red CI on D.6 for 3 slices. The bypass was structural, not procedural — `enforce_admins` was `false`. Closed 2026-05-09 along with §4.20. See `docs/planning/branch-protection-2026-05-09.md` for the audit trail.
+
+### Solo-dev review note
+
+GitHub's PR-author-cannot-approve rule means human review would block on a second seat. Configuration deliberately requires NO human review (`required_approving_review_count: 0`) — CI is sufficient. Two-person review remains a social convention for high-stakes changes (architectural pivots, schema migrations affecting prod data, security-sensitive code). Operator's judgment.
 
 ## Local development
 

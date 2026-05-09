@@ -144,6 +144,18 @@ Updated whenever a deferral is added or revisited.
 - **References:** `packages/audit-events/test/canonicalize.spec.ts` (canonical pattern), `packages/audit-events/test/schemas.spec.ts` (migrated reference).
 - **Owner phase:** Convention captured here; future test authors apply where applicable.
 
+### 1.12 Redis-backed distributed cache for F04 configuration reads
+
+- **Item:** Distributed cache layer for `@cortex/config-plane` resolved blobs. Phase 1 ships in-process LRU per Cloud Run replica with TTL invalidation; promote / rollback invalidate the local replica's cache only.
+- **Current state:** F04 Slice C ships per-process LRU keyed on `(tenant_id, namespace)` with 60s TTL. Single-replica Phase 1 deploy = read-after-write consistency on the in-process LRU is trivial. Multi-replica deploy would see promote-time cache invalidation hit only the local replica; other replicas continue serving stale config until TTL expires (worst-case 60s).
+- **Future options:**
+  1. Redis-backed cache replacing in-process LRU. Compose stack already runs `cortex-dev-redis-1`; wire `@cortex/config-plane` to consume it. Promote / rollback paths explicitly DEL the cache key; other replicas read fresh on next access.
+  2. Pub/Sub-based invalidation broadcast (on promote, publish a `(tenant_id, namespace)` invalidation message; each replica subscribes + invalidates its local LRU). Higher infra cost; doesn't share cache state.
+  3. Tighten TTL aggressively (e.g., 5s) — cheap but doesn't solve the problem, just reduces the staleness window.
+- **Triggers:** First observed multi-replica cache divergence — e.g., a feature-flag toggle visible inconsistently across Cloud Run replicas, OR a tenant theme change that takes >1s to propagate to all replicas. Phase 1 single-replica deploy doesn't experience this; trigger fires when Cloud Run scaling kicks in.
+- **References:** `docs/planning/p1.4-f04-configuration-plane-scope.md` §1 D10 (in-process LRU lock for Phase 1) + §5 Risk register (multi-replica scaling trigger). F04 Slice C ships the in-process implementation; this entry tracks the upgrade path.
+- **Owner phase:** Operator-driven post-Phase-1 multi-replica deploy; first traffic-divergence observation.
+
 ---
 
 ## 2. Operational triggers

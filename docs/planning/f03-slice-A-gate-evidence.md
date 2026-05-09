@@ -63,3 +63,9 @@ F03 module-row stays unchecked per D4 (per-slice rows; flips at all-4-slices ✓
 - F03 Slice B start (next session): `@cortex/temporal-query` package; library-only per Q-NEW-F03B-1 → D3 (tRPC handlers + SQL views deferred to first-consumer; tRPC lands in `@cortex/temporal-query/trpc` secondary export, SQL views land per-table at consuming F-/D-series migration).
 - Operator-driven recovery still pending (carried from D.4–D.6 close): re-attach billing on staging+prod per roadmap §2.5a → apply 5 accumulated TF bundles.
 - Roadmap §4.20 (local DB credentials reconciliation) carries forward — Slice A also hit it; chose not to side-quest fix per scope discipline.
+
+## §6 Historical exception — `Co-Authored-By: Claude` trailer in commit `2d3782e`
+
+**Recorded 2026-05-09** at F03 Slice B HOLD-#3 turn. Commit `2d3782e` (this Slice A squash) contains a `Co-Authored-By: Claude <noreply@anthropic.com>` trailer. Subsequent CLAUDE.md change (commit `3c9a730` — `chore(claude): standing rule — no Co-Authored-By trailer`) prohibits this trailer going forward.
+
+Per operator's explicit instruction at the Slice B HOLD-#3 turn: leave the Slice A trailer artifact in main's history. **No force-push.** Rationale: rewriting public main history in a 2-seat repo for a single-line commit-body trailer is not worth the coordination cost; the new CLAUDE.md rule stops the drift going forward. This note is the record-of-exception for future sessions reading the audit trail.

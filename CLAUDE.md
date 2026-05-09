@@ -240,6 +240,18 @@ SELECT cortex.backfill_bitemporal('public', 'tablename', 'business_key_col');
 
 Idempotent — re-running on an already-backfilled table is a no-op. Currently zero legacy tables in the codebase need this; the helper future-proofs reclassification (a bookkeeping table that becomes domain) and external imports.
 
+**Querying bi-temporal data** — use `@cortex/temporal-query` (F03 Slice B). Five composable functions over `cortex.at_time_t`:
+
+- `asOf<T>(client, tenantId, table, id, asOfBusinessTs, asOfSystemTs?) → BiTemporalRow<T> | null`
+- `currentState<T>(client, tenantId, table, id) → BiTemporalRow<T> | null`
+- `history<T>(client, tenantId, table, id) → BiTemporalRow<T>[]`
+- `between<T>(client, tenantId, table, id, from, to, asOfSystemTs?) → BiTemporalRow<T>[]` — closed-open `[from, to)`
+- `diff<T>(client, tenantId, table, id, t1, t2) → { before, after, changedColumns }`
+
+Public API takes a `Queryable` interface (Q-NEW-F03B-5; productization-critical lock) — `pg.Pool`, `pg.PoolClient`, drizzle's underlying client, and test mocks all satisfy it. `tenantId` passed as a query parameter on every call (Q-NEW-F03B-6); RLS stays as defense-in-depth backstop. Returns are nullable for single-row functions (`null` on no match) and `T[]` (never `null`) for collection functions. Closed-open ranges throughout (matches `tstzrange` convention end-to-end). tRPC handlers + SQL views deferred to first-consumer per Q-NEW-F03B-1; tRPC will land in `@cortex/temporal-query/trpc` secondary export, SQL views land per-table at the consuming F-/D-series migration's site.
+
+**Table-name validation:** the `table` argument to all 5 functions must match `/^[a-z][a-z0-9_]{0,62}$/` — snake*case identifier, 1–63 chars (Postgres `NAMEDATALEN-1` limit). Lowercase first char, then `[a-z0-9*]`. **Generic regex, NOT an allowlist** of known bi-temporal tables — no maintenance surface as new bi-temporal tables land. Names that don't match throw at the call site (`temporal-query: invalid table name ...`). Table names cannot be parameterized in Postgres prepared statements; the regex is the SQL-injection guard.
+
 **Cross-refs:**
 
 - ADR-DB-001 (primary contract; recipe rationale + alternatives rejected — especially Alternative 4 (4-scalar columns) and Alternative 5 (named retrieval funcs as platform primitives))
@@ -247,6 +259,7 @@ Idempotent — re-running on an already-backfilled table is a no-op. Currently z
 - Migration 0006 (ms-precision quantum) — JS-Date round-trip safe.
 - `docs/planning/f03-temporal-data-engine-scope.md` (multi-phase close timeline; tracks Slice C / D deferrals to F04 / D04)
 - `docs/planning/f03-slice-A-scope.md` (SD-locked decisions, especially Q-NEW-F03A-1 `WITH_WRAPPERS` synthesis and SD5 lint scope)
+- `packages/temporal-query/src/index.ts` (Slice B library; Q-NEW-F03B locks on Queryable, tenantId parameterization, nullable returns, closed-open ranges, diff shape)
 
 ## Feature flags
 

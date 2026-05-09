@@ -4,7 +4,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
-import { getTestPool } from './helpers/db.js';
+import { getPool as getTestPool } from '@cortex/test-db-harness';
 
 const TABLE = '_test_bitemporal_tenants';
 

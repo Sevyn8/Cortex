@@ -422,6 +422,28 @@ importers:
         specifier: 'catalog:'
         version: 2.1.9(@types/node@22.19.17)
 
+  packages/temporal-query:
+    dependencies:
+      '@cortex/canonical-schema':
+        specifier: workspace:*
+        version: link:../canonical-schema
+    devDependencies:
+      '@cortex/test-db-harness':
+        specifier: workspace:*
+        version: link:../test-db-harness
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+      vitest:
+        specifier: 'catalog:'
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/tenant-context:
     dependencies:
       '@cortex/audit-events':
@@ -455,6 +477,9 @@ importers:
       '@cortex/observability':
         specifier: workspace:*
         version: link:../observability
+      '@cortex/test-db-harness':
+        specifier: workspace:*
+        version: link:../test-db-harness
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
@@ -464,6 +489,22 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 2.1.9(@types/node@22.19.17)
+
+  packages/test-db-harness:
+    dependencies:
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.37.0(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.20.0)
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
 
   packages/widgets: {}
 
@@ -520,6 +561,9 @@ importers:
         specifier: 'catalog:'
         version: 8.20.0
     devDependencies:
+      '@cortex/test-db-harness':
+        specifier: workspace:*
+        version: link:../../packages/test-db-harness
       '@types/pg':
         specifier: 'catalog:'
         version: 8.20.0

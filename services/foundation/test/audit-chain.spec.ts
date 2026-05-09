@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { withTenantContext, withoutTenantContext } from '@cortex/canonical-schema/rls-test';
-import { getTestPool } from './helpers/db.js';
+import { getPool as getTestPool } from '@cortex/test-db-harness';
 
 const TENANT_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const TENANT_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';

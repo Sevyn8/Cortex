@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool, PoolClient } from 'pg';
 import { withTenantContext } from '@cortex/canonical-schema/rls-test';
-import { getTestPool } from './helpers/db.js';
+import { getPool as getTestPool } from '@cortex/test-db-harness';
 
 const RUN_TAG = randomUUID().slice(0, 8);
 const TENANT_A_ID = randomUUID();

@@ -1,5 +1,5 @@
 {
-  "name": "@cortex/tenant-context",
+  "name": "@cortex/temporal-query",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -21,21 +21,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cortex/audit-events": "workspace:*",
-    "@cortex/blob-storage": "workspace:*",
-    "@cortex/canonical-schema": "workspace:*",
-    "@cortex/secrets": "workspace:*",
-    "@google-cloud/storage": "catalog:",
-    "@google-cloud/tasks": "catalog:",
-    "drizzle-orm": "catalog:",
-    "pg": "catalog:",
-    "zod": "catalog:"
+    "@cortex/canonical-schema": "workspace:*"
   },
   "devDependencies": {
-    "@cortex/observability": "workspace:*",
     "@cortex/test-db-harness": "workspace:*",
-    "vitest": "catalog:",
+    "@types/node": "^22.0.0",
     "@types/pg": "catalog:",
-    "@types/node": "^22.0.0"
+    "pg": "catalog:",
+    "vitest": "catalog:"
   }
 }

@@ -8,7 +8,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
-import { getTestPool } from './helpers/db.js';
+import { getPool as getTestPool } from '@cortex/test-db-harness';
 
 describe('bootstrap_admin (migration 0005)', () => {
   let pool: Pool;

@@ -2,14 +2,23 @@ import { execSync } from 'node:child_process';
 import { Pool } from 'pg';
 
 /**
- * Creates a pg Pool from PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE env vars.
- * Defaults: 127.0.0.1:5432 / postgres / cortex. If PGPASSWORD is unset, falls
- * back to fetching the dev break-glass secret via gcloud (laptop convenience).
+ * Build a `pg.Pool` from PG* env vars (PGHOST/PGPORT/PGUSER/PGPASSWORD/
+ * PGDATABASE). If PGPASSWORD is unset, falls back to fetching the dev
+ * break-glass secret via `gcloud` for laptop convenience. Probes the
+ * host:port via /dev/tcp to fail fast with a clear message if Postgres
+ * isn't reachable.
  *
- * Callers must ensure Postgres is reachable on the target host:port
- * (laptop: make db-proxy-dev; CI: postgres service container).
+ * Callers must ensure Postgres is reachable on the target host:port:
+ *   - laptop: `make db-proxy-dev` (cloud-sql-proxy on private IP per
+ *     ADR-INFRA-005).
+ *   - CI: postgres service container per `.github/workflows/ci.yaml`.
+ *   - elsewhere: PGHOST/PGPORT pointing at a reachable instance.
+ *
+ * Local-DB credentials reconciliation tracked at future-roadmap §4.20
+ * (carried across F02 D.4 / D.5 / D.4.5 / D.6 / F03 Slice A); CI's
+ * ephemeral Postgres service container is the canonical exercise path.
  */
-export function getTestPool(): Pool {
+export function getPool(): Pool {
   const password =
     process.env.PGPASSWORD ??
     execSync(
@@ -22,8 +31,7 @@ export function getTestPool(): Pool {
   const host = process.env.PGHOST ?? '127.0.0.1';
   const port = Number(process.env.PGPORT ?? 5432);
 
-  // Sanity-check: is Postgres actually reachable on host:port?
-  // Bash's /dev/tcp pseudo-device lets us probe without extra deps.
+  // Reachability probe via Bash's /dev/tcp pseudo-device. No extra deps.
   try {
     execSync(`timeout 2 bash -c 'echo > /dev/tcp/${host}/${port}'`, {
       stdio: 'pipe',

@@ -14,8 +14,12 @@
     "pg": "catalog:"
   },
   "devDependencies": {
+    "@cortex/audit-events": "workspace:*",
+    "@cortex/config-plane": "workspace:*",
+    "@cortex/temporal-query": "workspace:*",
     "@cortex/test-db-harness": "workspace:*",
     "@types/pg": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }

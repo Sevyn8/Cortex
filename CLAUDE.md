@@ -231,6 +231,25 @@ Deep rationale lives in ADR-DB-001, DB-002, DB-003.
 - Set `ALTER TABLE <t> FORCE ROW LEVEL SECURITY` in `beforeAll`, pair with `NO FORCE` in `afterAll`. Real Phase 1 tables do NOT need FORCE in production (F01 middleware never runs as superuser).
 - Use `withTenantContext(pool, tenantId, fn)` / `withoutTenantContext(pool, fn)` from `@cortex/canonical-schema/rls-test` to set / unset tenant context inside a test transaction. The helpers use `set_config` under the hood for the reason in the "Session variables" section above.
 
+### Reshaping tenant-scoped substrate tables
+
+When migrating a tenant-scoped table from monolithic-per-tenant to per-(tenant, namespace) (or any analogous "split a single row into per-key rows"), pre-enumerate the reconciliation surface workspace-wide. **Three classes** to grep:
+
+1. **INSERT sites** (raw SQL + Drizzle `insert(...)`) — every writer needs the new column.
+2. **SELECT sites that returned "the only row" or "the latest row"** per tenant — they now need namespace filters to preserve semantics. **This class fails quietly** at planning time; a `INSERT INTO <table>` grep won't find it because it's a SELECT.
+3. **Drizzle ORM calls** (`from(...)`, `insert(...)`, `update(...)`) — raw-SQL grep misses these.
+
+```bash
+grep -rn "INSERT INTO <table>\|FROM <table>" workspace
+grep -rn "insert(<drizzleTableName>)\|from(<drizzleTableName>)" workspace
+```
+
+Pre-push verification for substrate-table reshape commits MUST be `pnpm vitest run` **workspace-wide**, not a scoped subset. Read-class failures only surface when fixtures from other namespaces exist; CI is the fallback if local skips them.
+
+Pad reshape-reconciliation estimates to 2× the source-file-only estimate. Slice A's 1-hr A.6 estimate landed at ~1.5 hr after counting the test-fixture surface (+~30 min) and the CI-caught read-class fix (+~30 min).
+
+Reference: `docs/planning/p1.4-f04-configuration-plane-scope.md` §5 Risk Register (Slice A's reconciliation discovery, including the quotas reads class missed by the original grep).
+
 ### Bi-temporal table convention `[F03 Slice A]`
 
 When a tenant-scoped table is a domain entity (retains valid-time + transaction-time history per ADR-DB-001), use the bi-temporal pattern. When it's bookkeeping (queue, counter, lookup, append-only audit log), it isn't bi-temporal.

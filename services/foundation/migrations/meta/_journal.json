@@ -99,6 +99,13 @@
       "when": 1778330865283,
       "tag": "0014_f04_config_namespace_reshape",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1778334379605,
+      "tag": "0015_f04_config_draft_table",
+      "breakpoints": true
     }
   ]
 }

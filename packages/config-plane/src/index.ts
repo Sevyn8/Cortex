@@ -39,7 +39,35 @@ export { CONFIG_AUDIT_ACTIONS, type ConfigAuditAction } from './audit-actions.js
 export {
   registerNamespaceSchema,
   getNamespaceSchema,
+  getLatestRegisteredVersion,
   resetSchemaRegistry,
+  NamespaceSchemaConflictError,
   type RegisteredSchemaEntry,
 } from './schema-registry.js';
 export { getConfig, NamespaceSchemaNotRegisteredError } from './get-config.js';
+export { actorSchema, type Actor } from './types.js';
+export {
+  createDraft,
+  updateDraft,
+  validateDraft,
+  promoteDraft,
+  rollbackVersion,
+  discardDraft,
+  DraftConcurrencyError,
+  DraftNotFoundError,
+  SchemaNotRegisteredError,
+  PromoteValidationError,
+  PromoteConcurrencyError,
+  RollbackAtGenesisError,
+  RollbackNoVersionError,
+  RollbackConcurrencyError,
+  type CreateDraftParams,
+  type UpdateDraftParams,
+  type ValidateDraftParams,
+  type ValidateDraftResult,
+  type PromoteDraftParams,
+  type PromoteDraftResult,
+  type RollbackVersionParams,
+  type RollbackVersionResult,
+  type DiscardDraftParams,
+} from './lifecycle.js';

@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   NamespaceSchemaConflictError,
+  getLatestRegisteredVersion,
   getNamespaceSchema,
   registerNamespaceSchema,
   resetSchemaRegistry,
@@ -68,6 +69,20 @@ describe('schema-registry — registerNamespaceSchema + getNamespaceSchema', () 
     expect(() => registerNamespaceSchema('platform.theme', v1other, { version: 1 })).toThrow(
       /already registered/,
     );
+  });
+
+  it('getLatestRegisteredVersion returns the highest registered version for a namespace', () => {
+    const v1 = z.object({ a: z.string() });
+    const v2 = z.object({ a: z.string(), b: z.string() });
+    const v3 = z.object({ a: z.string(), b: z.string(), c: z.string() });
+    registerNamespaceSchema('platform.theme', v1, { version: 1 });
+    registerNamespaceSchema('platform.theme', v3, { version: 3 });
+    registerNamespaceSchema('platform.theme', v2, { version: 2 });
+    expect(getLatestRegisteredVersion('platform.theme')).toBe(3);
+  });
+
+  it('getLatestRegisteredVersion throws when namespace has no registered schema', () => {
+    expect(() => getLatestRegisteredVersion('platform.unknown')).toThrow(/no schema registered/);
   });
 
   it('isolates namespaces — `platform.theme` and `tenant.theme` are distinct keys', () => {

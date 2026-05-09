@@ -423,6 +423,17 @@ F02 Slice A sub-phases 5.2 / 5.3 / 5.4. References in companion docs
 (quotas-compute-placement-convention.md, this roadmap) updated to point
 at the convention doc Appendix A.
 
+### 4.18 Scheduled key-rotation enqueuer (Cloud Scheduler → key-rotation-queue)
+
+- **Item:** Cloud Scheduler job firing on a periodic cadence, enqueuing tasks onto `key-rotation-queue` for tenants due for rotation per ADR-LIFECYCLE-001's 90-day default.
+- **Current state:** `tenants.rotateKeys` is reachable only via two synchronous call sites — the on-demand HTTP endpoint `POST /v1/tenants/:id/rotate-keys` (D.3) and the worker handler at `POST /v1/_workers/key-rotation` (D.2). Nothing currently enqueues scheduled rotation tasks. `key-rotation-queue` exists per env (D.4 TF — `module.cloud_tasks_key_rotation_queue` in `environments/{dev,staging,prod}/main.tf`); the queue + worker handler + dispatch pattern (OIDC + snake_case wire per convention §7.4.0) are all in place. The scheduled enqueuer is the missing third leg.
+- **Future options:**
+  1. `google_cloud_scheduler_job` per env, daily, hitting an internal "compute the set of tenants due for rotation" endpoint that dispatches to `key-rotation-queue` for each. Reuses the D.4.5-fixed `dispatchCloudTask` OIDC-token pattern; no new ADRs anticipated.
+  2. Cloud Run Jobs cron-style instead of Cloud Scheduler — heavier; redundant with Cloud Scheduler's existing role in the workspace's planned ops surface.
+- **Triggers:** When the 90-day rotation cadence (ADR-LIFECYCLE-001 §6) becomes a Phase 1 compliance requirement — e.g., a DPA explicitly demanding documented key-rotation cadence, OR a customer asks. Not currently blocking any sub-phase.
+- **References:** ADR-LIFECYCLE-001 §1 (rotation flow) + §6 (90-day default cadence), `docs/architecture/tenant-lifecycle-convention.md` §7.4.1 (key-rotation worker + dispatch pattern), `infra/terraform/modules/cloud-tasks-queue/` (queue substrate from Slice A), `docs/planning/d4.5-gate-evidence.md` (Cloud Tasks → Cloud Run dispatch proven end-to-end). Effort estimate: 3–5 hr (Cloud Scheduler TF + small enqueuer logic + integration test). Surfaced in F02-D.4.5 close manifest "Forward — scheduled key-rotation enqueuer (out of D.4.5 scope)".
+- **Owner phase:** Operator-driven; gated by trigger above.
+
 ---
 
 ## 5. First-consumer-driven

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cortex Feature Flags — Admin Stub (P1.6)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      P1.6 Slice C — Phase 1 Admin UI stub (per build-prompt §P1.6
+      line 1227). NO interactivity beyond fetch + render — SCR-04
+      ships the full admin UI in Phase 2 with React + bundler +
+      mutation routes (toggle / promote / rollback). This stub is
+      throwaway by design.
+
+      Run instructions:
+        1. Start `apps/feature-flags-api` locally (e.g.,
+           `cd apps/feature-flags-api && pnpm dev`).
+        2. Open this HTML file in a browser (`file://` URL works).
+        3. Fill in tenant id + base URL; click Refresh.
+
+      Tenant id + base URL + user id persist in localStorage so a
+      page reload preserves the operator's settings. Last-fetch
+      timestamp shown for transparency about cache freshness.
+    -->
+    <style>
+      :root {
+        --fg: #1a1a1a;
+        --bg: #fafafa;
+        --border: #ddd;
+        --accent: #0070f3;
+        --muted: #666;
+        --table-stripe: #f5f5f5;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        max-width: 960px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        font-size: 1.25rem;
+        margin: 0 0 0.5rem;
+      }
+      .subtitle {
+        color: var(--muted);
+        font-size: 0.875rem;
+        margin: 0 0 1.5rem;
+      }
+      fieldset {
+        border: 1px solid var(--border);
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      label {
+        display: block;
+        margin: 0.5rem 0;
+        font-size: 0.875rem;
+      }
+      input[type='text'] {
+        width: 100%;
+        padding: 0.4rem;
+        font-family: ui-monospace, monospace;
+        font-size: 0.875rem;
+        border: 1px solid var(--border);
+        box-sizing: border-box;
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border: 0;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        background: var(--muted);
+        cursor: not-allowed;
+      }
+      .status {
+        font-size: 0.875rem;
+        color: var(--muted);
+        margin: 0.75rem 0;
+      }
+      .error {
+        color: #c00;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+      }
+      th {
+        background: var(--table-stripe);
+        font-weight: 600;
+      }
+      td.flag-key {
+        font-family: ui-monospace, monospace;
+      }
+      td.flag-type {
+        color: var(--muted);
+      }
+      td.flag-value-true {
+        color: #060;
+        font-weight: 600;
+      }
+      td.flag-value-false {
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Cortex Feature Flags — Admin Stub (P1.6)</h1>
+    <p class="subtitle">
+      Phase 1 read-only stub. SCR-04 will replace with the full admin UI in Phase 2.
+    </p>
+
+    <fieldset>
+      <legend>Connection</legend>
+      <label>
+        Base URL
+        <input type="text" id="baseUrl" placeholder="http://localhost:8080" />
+      </label>
+      <label>
+        Tenant ID (UUID)
+        <input type="text" id="tenantId" placeholder="00000000-0000-0000-0000-000000000000" />
+      </label>
+      <label>
+        User ID (optional; participates in percentage-rollout bucket)
+        <input type="text" id="userId" placeholder="(leave empty for anonymous)" />
+      </label>
+      <button id="refresh" type="button">Refresh</button>
+    </fieldset>
+
+    <p class="status" id="status">Idle.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Flag</th>
+          <th>Type</th>
+          <th>Value</th>
+        </tr>
+      </thead>
+      <tbody id="flags-body"></tbody>
+    </table>
+
+    <script>
+      // Persist user inputs across page reloads.
+      const STORAGE_KEY = 'cortex.feature-flags-admin-stub';
+      const baseUrlInput = document.getElementById('baseUrl');
+      const tenantIdInput = document.getElementById('tenantId');
+      const userIdInput = document.getElementById('userId');
+      const refreshButton = document.getElementById('refresh');
+      const statusEl = document.getElementById('status');
+      const flagsBody = document.getElementById('flags-body');
+
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        if (saved.baseUrl) baseUrlInput.value = saved.baseUrl;
+        if (saved.tenantId) tenantIdInput.value = saved.tenantId;
+        if (saved.userId) userIdInput.value = saved.userId;
+      } catch {
+        // localStorage unavailable / parse error — silent fallback.
+      }
+
+      function save() {
+        try {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              baseUrl: baseUrlInput.value,
+              tenantId: tenantIdInput.value,
+              userId: userIdInput.value,
+            }),
+          );
+        } catch {
+          // Persistence is best-effort.
+        }
+      }
+
+      function setStatus(text, isError) {
+        statusEl.textContent = text;
+        statusEl.classList.toggle('error', !!isError);
+      }
+
+      function renderFlags(flags) {
+        flagsBody.innerHTML = '';
+        const keys = Object.keys(flags).sort();
+        for (const key of keys) {
+          const { type, value } = flags[key];
+          const tr = document.createElement('tr');
+          const tdKey = document.createElement('td');
+          tdKey.className = 'flag-key';
+          tdKey.textContent = key;
+          const tdType = document.createElement('td');
+          tdType.className = 'flag-type';
+          tdType.textContent = type;
+          const tdValue = document.createElement('td');
+          tdValue.textContent = String(value);
+          tdValue.className = value === true ? 'flag-value-true' : value === false ? 'flag-value-false' : '';
+          tr.appendChild(tdKey);
+          tr.appendChild(tdType);
+          tr.appendChild(tdValue);
+          flagsBody.appendChild(tr);
+        }
+      }
+
+      async function refresh() {
+        const baseUrl = baseUrlInput.value.replace(/\/+$/, '');
+        const tenantId = tenantIdInput.value.trim();
+        const userId = userIdInput.value.trim();
+        if (!baseUrl || !tenantId) {
+          setStatus('Base URL and Tenant ID are required.', true);
+          return;
+        }
+        save();
+        refreshButton.disabled = true;
+        setStatus('Fetching…');
+        try {
+          const url = userId
+            ? `${baseUrl}/v1/feature-flags?userId=${encodeURIComponent(userId)}`
+            : `${baseUrl}/v1/feature-flags`;
+          const response = await fetch(url, {
+            headers: {
+              'x-cortex-tenant-id': tenantId,
+              accept: 'application/json',
+            },
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const body = await response.json();
+          renderFlags(body.flags || {});
+          const ts = new Date().toLocaleTimeString();
+          const count = Object.keys(body.flags || {}).length;
+          setStatus(`Fetched ${count} flag(s) at ${ts}.`);
+        } catch (err) {
+          setStatus(`Fetch failed: ${err.message}`, true);
+        } finally {
+          refreshButton.disabled = false;
+        }
+      }
+
+      refreshButton.addEventListener('click', () => {
+        void refresh();
+      });
+    </script>
+  </body>
+</html>

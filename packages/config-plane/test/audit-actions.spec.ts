@@ -8,8 +8,11 @@ import { describe, expect, it } from 'vitest';
 import { CONFIG_AUDIT_ACTIONS, type ConfigAuditAction } from '../src/audit-actions.js';
 
 describe('@cortex/config-plane audit-actions catalog', () => {
-  it('registers exactly 6 verbs per F04 D11 lock', () => {
-    expect(CONFIG_AUDIT_ACTIONS).toHaveLength(6);
+  it('registers exactly 7 verbs per F04 D11 lock + Slice D Q-NEW-F04D-7', () => {
+    // 6 verbs from D11 (Slice A registered, Slice B emits) + 1 verb
+    // added by Slice D (CONFIG_PROMOTE_BLOCKED, REJECT semantic, emits
+    // from promoteDraft outer catch in a separate transaction).
+    expect(CONFIG_AUDIT_ACTIONS).toHaveLength(7);
   });
 
   it('names follow the registerAuditActions regex (UPPERCASE_SNAKE_CASE, ≤ 64 chars)', () => {
@@ -19,7 +22,7 @@ describe('@cortex/config-plane audit-actions catalog', () => {
     }
   });
 
-  it('includes all 6 expected action names', () => {
+  it('includes all 7 expected action names', () => {
     const names = CONFIG_AUDIT_ACTIONS.map((a) => a.name).sort();
     expect(names).toEqual(
       [
@@ -27,13 +30,14 @@ describe('@cortex/config-plane audit-actions catalog', () => {
         'CONFIG_DRAFT_DISCARDED',
         'CONFIG_DRAFT_UPDATED',
         'CONFIG_DRAFT_VALIDATED',
+        'CONFIG_PROMOTE_BLOCKED',
         'CONFIG_VERSION_PROMOTED',
         'CONFIG_VERSION_ROLLED_BACK',
       ].sort(),
     );
   });
 
-  it('verbs match the F04 D11 lock semantics', () => {
+  it('verbs match the F04 D11 + D Q-NEW-F04D-7 lock semantics', () => {
     const verbByName: Record<string, string> = {};
     for (const action of CONFIG_AUDIT_ACTIONS) {
       verbByName[action.name] = action.verb;
@@ -44,6 +48,8 @@ describe('@cortex/config-plane audit-actions catalog', () => {
     expect(verbByName.CONFIG_DRAFT_DISCARDED).toBe('DELETE');
     expect(verbByName.CONFIG_VERSION_PROMOTED).toBe('CREATE');
     expect(verbByName.CONFIG_VERSION_ROLLED_BACK).toBe('CREATE');
+    // Slice D — quotas/rate-limit precedent for REJECT.
+    expect(verbByName.CONFIG_PROMOTE_BLOCKED).toBe('REJECT');
   });
 
   it('ConfigAuditAction type covers every catalog name (compile-time check)', () => {

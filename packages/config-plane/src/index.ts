@@ -6,7 +6,7 @@
  * `tenant_config_version` substrate (reshape landed in migration 0014
  * per F04 Slice A).
  *
- * Slices shipped through C:
+ * Slices shipped through D:
  *   - Slice A: storage substrate (`tenant_config_version` reshape +
  *     6-verb audit catalog + `registerNamespaceSchema` + `getConfig`)
  *   - Slice B: lifecycle helpers (createDraft / updateDraft /
@@ -16,9 +16,14 @@
  *     default; `registerConfigConsumer` thin wrapper records the
  *     resolver default + TTL; lifecycle invalidates cache on
  *     promote/rollback)
+ *   - Slice D: impact analysis + breaking-change blocker
+ *     (`analyzeImpact` walks `(current, draft)` JSON diff + intersects
+ *     consumer keyPaths + detects schema-version drift; promoteDraft
+ *     accepts `confirmBreakingChanges?: true`; `ImpactBlockedError`
+ *     carries the report; CONFIG_PROMOTE_BLOCKED audit row commits in
+ *     a separate transaction from the rolled-back attempt)
  *
- * Slice D ships impact analysis. Slice E ships git-sync stub +
- * module close.
+ * Slice E ships git-sync stub + module close.
  *
  * Public API takes the same `Queryable` seam shape as `@cortex/
  * temporal-query` (drizzle's NodePgDatabase, pg.Pool, pg.PoolClient
@@ -60,6 +65,7 @@ export {
   SchemaNotRegisteredError,
   PromoteValidationError,
   PromoteConcurrencyError,
+  ImpactBlockedError,
   RollbackAtGenesisError,
   RollbackNoVersionError,
   RollbackConcurrencyError,
@@ -83,10 +89,12 @@ export { resolveConfig, invalidateResolverCache } from './resolve.js';
 export {
   registerConfigConsumer,
   getConfigConsumer,
+  getImpactEligibleConsumers,
   resetConsumerRegistry,
   DEFAULT_CONSUMER_TTL_SECONDS,
   type RegisterConfigConsumerParams,
   type ConsumerEntry,
+  type BreakingChangePolicy,
 } from './consumer-registry.js';
 
 // Cache primitives — exposed for advanced callers + tests. Most
@@ -101,3 +109,23 @@ export {
   cacheSize,
   setCacheMaxEntries,
 } from './cache.js';
+
+// ──────────────────────────────────────────────────────────────────────
+// F04 Slice D — impact analysis + breaking-change blocker
+// ──────────────────────────────────────────────────────────────────────
+
+export {
+  analyzeImpact,
+  ImpactAnalysisDraftNotFoundError,
+  diffJson,
+  pathMatchesKeyPath,
+  type ImpactReport,
+  type AffectedConsumer,
+  type BreakingChange,
+  type Warning,
+  type BreakingChangeKind,
+  type DiffChangeKind,
+  type JsonDiffEntry,
+} from './impact-analysis.js';
+
+export { detectSchemaIncompatibilities, type SchemaDriftFindings } from './schema-drift.js';

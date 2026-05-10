@@ -33,7 +33,14 @@
 import './initial-flags.js';
 
 // Eval surface (Slice A's load-bearing API per Q-NEW-FF-A-3 + A-6).
-export { isEnabled, getVariant, type EvalParams } from './eval.js';
+// `evaluateAllFlags` is Slice B's bulk-fetch primitive (Q-NEW-FF-B-2).
+export {
+  isEnabled,
+  getVariant,
+  evaluateAllFlags,
+  type EvalParams,
+  type FlagEvaluation,
+} from './eval.js';
 
 // Registration surface — schemas + consumer-registry helper. Most
 // consumers import only the eval surface; schemas are exposed for
@@ -64,6 +71,16 @@ export { INITIAL_FLAGS, registerInitialFeatureFlags } from './initial-flags.js';
 // Rollout surface — pure helper exposed for tests + bespoke callers
 // that want bucket logic without `isEnabled`.
 export { rolloutBucket } from './rollout.js';
+
+// Slice B — non-React client shim (Q-NEW-FF-B-1 lock (e); calls
+// the `apps/feature-flags-api` HTTP endpoint via configurable fetch
+// + polls + diff-notifies subscribers).
+export {
+  createFeatureFlagsClient,
+  type FeatureFlagsClient,
+  type FeatureFlagsClientOptions,
+  type FlagSubscriber,
+} from './client.js';
 
 // Cache primitives — exposed for advanced callers + tests. Most
 // consumers should rely on `isEnabled` / `getVariant` and let the

@@ -141,6 +141,59 @@ export async function getVariant(
   return flag.default;
 }
 
+/**
+ * Per-flag evaluation result returned by `evaluateAllFlags`. The
+ * union shape mirrors the discriminated-union flag types but flattens
+ * to `(type, value)` pairs because `value` is the post-evaluation
+ * result (boolean for boolean+percentage, string for variant) — not
+ * the full flag definition.
+ */
+export type FlagEvaluation =
+  | { type: 'boolean'; value: boolean }
+  | { type: 'variant'; value: string }
+  | { type: 'percentage'; value: boolean };
+
+/**
+ * P1.6 Slice B bulk-fetch primitive. Walks every flag in the merged
+ * tier set and returns `{ flagKey: { type, value } }` per Q-NEW-FF-B-2.
+ *
+ * One round through `resolveAllFlags` (cached per-tenant TTL=30s);
+ * per-flag evaluation is in-memory after the merged record is loaded.
+ *
+ * `userId?` participates in `percentage` flag bucket assignment;
+ * `boolean` and `variant` flags ignore it (the latter would consume
+ * userId in Phase 2 attribute-based targeting).
+ */
+export async function evaluateAllFlags(
+  client: Queryable,
+  tenantId: string,
+  userId?: string,
+): Promise<Record<string, FlagEvaluation>> {
+  const flags = await resolveAllFlags(client, tenantId);
+  const out: Record<string, FlagEvaluation> = {};
+  for (const [flagKey, flag] of Object.entries(flags)) {
+    switch (flag.type) {
+      case 'boolean':
+        out[flagKey] = { type: 'boolean', value: flag.default };
+        break;
+      case 'variant':
+        out[flagKey] = { type: 'variant', value: flag.default };
+        break;
+      case 'percentage': {
+        if (userId === undefined) {
+          out[flagKey] = { type: 'percentage', value: flag.default };
+        } else {
+          const bucket = rolloutBucket(userId, flagKey);
+          const value = bucket < flag.rollout_percentage ? !flag.default : flag.default;
+          out[flagKey] = { type: 'percentage', value };
+        }
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 function evaluateBoolean(
   flag: FlagDefinition,
   flagKey: string,

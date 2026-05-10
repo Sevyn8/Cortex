@@ -645,6 +645,33 @@ Impact analysis is OPT-IN: consumers omit `consumerModule` and they don't partic
 - `packages/config-plane/test/impact-analysis.spec.ts` (27 tests — block path's separate-transaction assertion is load-bearing)
 - `docs/future-roadmap.md` §1.15 (audit_event silent-swallow workaround) and §1.16 (single-consumer-per-namespace constraint)
 
+### Git sync stub (Slice E)
+
+F04 Slice E ships the Configuration-as-Code Git-sync API surface as STUBS — Phase 2 deferred per build-prompt §F04 §4. `packages/config-plane/src/git-sync.ts` exports:
+
+- `exportToYaml(ctx: GitSyncContext): Promise<string>` — Phase 2 will export every promoted `tenant_config_version` row for `ctx.tenantId` to a YAML representation suitable for committing to a per-tenant Git repository.
+- `importFromYaml(ctx: GitSyncContext, yaml: string): Promise<void>` — Phase 2 will replay a YAML representation against `tenant_config_version` for `ctx.tenantId`, with each version becoming a draft → validate → promote round-trip per Slice B's lifecycle.
+- `GitSyncNotImplementedError` — dedicated error class for type-narrowing in callers; `name === 'GitSyncNotImplementedError'` works in JSON-serialized contexts where `instanceof` is unreliable.
+- `GitSyncContext` — the per-call context (currently `{ tenantId }`; Phase 2 widens to include Git remote URL + branch + auth material).
+
+Both functions throw `GitSyncNotImplementedError` per Q-NEW-F04E-2 lock. Silent no-op would mask the deferral and create enterprise-customer surprise. Error messages reference roadmap §5.5 + build-prompt §F04 §4.
+
+**Library choice deferred** per Q-NEW-F04E-3 — pinning `simple-git` / `isomorphic-git` / native `execSync` now commits to a future implementation choice prematurely; first Phase 2 consumer drives the choice.
+
+**Async contract pinned**: stubs use `async` even though they only throw, so Phase 2 implementations can `await` consistently when the actual I/O lands. Suppressed `@typescript-eslint/require-await` lint with rationale comments.
+
+### F04 module close
+
+F04 module CLOSED 2026-05-10. Five slices shipped across 8 PRs over 2 days: A (storage substrate, PR #4), B (lifecycle, PR #5), C (resolver + cache, PR #8), D (impact analysis, PR #9), E (git-sync stub + module close, PR #10) — plus PR #6 closing F03 Slice C as a cross-feature pre-promote-safety inside P1.4. F04 is the **first F-module fully closed in the platform's lineage**.
+
+Module-close commit shape per Q-NEW-F04E-5 lock: two-commit composition. Commit 1 `feat(F04-E): git-sync stub` lands the slice (source + tests + slice scope doc). Commit 2 `feat(F04): configuration plane` lands the symbolic module-close summary (gate evidence, status flip, roadmap backref, this CLAUDE.md subsection). Sets the precedent for all future module-close commits in the codebase — F02 didn't land its `feat(F02): tenant lifecycle manager` close commit yet, so F04 establishes the pattern.
+
+**Gate evidence:** `docs/planning/f04-gate-evidence.md` captures build-prompt acceptance × evidence; D1-D14 module locks honored across all 5 slices; per-slice phase summary; cross-feature impact (F03 module status + downstream queue); PASS-by-construction note for the sub-10ms p99 acceptance criterion.
+
+**Downstream queue unblocked:** P1.5 F05 Schema Evolution; P1.6 Feature Flags (`@cortex/feature-flags` is the named first consumer per D6); D04 quality rule library; UX01 theme tokens; IC01 vertical-package selection; IC02 i18n + locale; AC02 hierarchy schema; PR06 retention policies. Each becomes operator-selectable post-merge.
+
+**F03 module-row remains unchecked.** F03 Slice C closed inside P1.4 (PR #6); F03 Slice D ("Late-arriving data") remains DEFERRED (blocked by D04 + S01 + SCR-08). F03's full module close lags F04's — readers shouldn't expect F03 ✓ to follow F04 ✓ in `status.md`.
+
 ## SCD policies (F03 Slice C)
 
 `@cortex/temporal-query` ships the SCD-policy schema; `cortex.cortex_scd_trigger()` (migrations 0016/0017) reads policy from F04's `tenant_config_version` namespace `tenant.scd` and dispatches by per-entity-type config. Default-when-absent = SCD Type 2 (mandatory backward compat per Q-NEW-F03C-4).

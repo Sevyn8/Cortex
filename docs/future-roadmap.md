@@ -569,10 +569,10 @@ at the convention doc Appendix A.
 ### 5.5 Configuration-as-Code Git sync (F04)
 
 - **Item:** Bidirectional YAML export/import for tenant configurations
-- **Current state:** API stubbed in F04 scope; no actual Git sync.
-- **Future options:** Push tenant configs to per-tenant Git repos; webhook-driven sync on commit.
+- **Current state:** API STUB landed in F04 Slice E (PR #10) — `packages/config-plane/src/git-sync.ts` exports `exportToYaml(ctx)` / `importFromYaml(ctx, yaml)` / `GitSyncNotImplementedError` / `GitSyncContext`. Both functions throw `GitSyncNotImplementedError` per Q-NEW-F04E-2 lock with messages referencing Phase 2 + this §5.5 entry. No I/O, no library pin (deferred to first Phase 2 consumer per Q-NEW-F04E-3).
+- **Future options:** Push tenant configs to per-tenant Git repos; webhook-driven sync on commit. Library candidates: `simple-git` (subprocess), `isomorphic-git` (pure JS, browser-compatible), native `execSync`. YAML schema choice (lossless vs human-friendly) deferred per Q-NEW-F04E-1.
 - **Triggers:** "Enterprise only, deferred to Phase 2" per F04 build prompt §4.
-- **References:** Build prompts §F04 §4.
+- **References:** Build prompts §F04 §4; `packages/config-plane/src/git-sync.ts` (the stub); `docs/planning/f04-slice-E-scope.md` (Slice E scope + locks); `docs/planning/f04-gate-evidence.md` §1 row 4 (module-close commit).
 - **Owner phase:** Phase 2.
 
 ### 5.6 `Equals<X, Y>` compile-time type-witness helper extraction

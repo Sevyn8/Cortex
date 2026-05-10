@@ -1,15 +1,34 @@
 /**
- * F04 Slice C — consumer registry for `registerConfigConsumer` per
- * Q-NEW-F04C-6 (thin-wrapper over `registerNamespaceSchema`).
+ * F04 Slice C / Slice D — consumer registry for `registerConfigConsumer`.
  *
- * Records per-consumer metadata that the resolver consults at
- * lookup time:
+ * Slice C (Q-NEW-F04C-6) introduced the registry as a thin wrapper
+ * over `registerNamespaceSchema` recording resolver-relevant metadata:
  *   - `defaultValue` — in-code default returned when no DB row
  *     exists at any tier (Q-NEW-F04C-2 third tier; necessary
  *     because F04 D14 substrate is per-tenant only and can't store
  *     cross-tenant defaults).
  *   - `ttl` — per-consumer cache TTL override (Q-NEW-F04C-3;
  *     defaults to 60s when omitted).
+ *
+ * Slice D (Q-NEW-F04D-4) extends the registry IN-PLACE with optional
+ * impact-relevant metadata for breaking-change detection:
+ *   - `consumerModule` — which module / feature consumes this
+ *     namespace. Surfaces in `ImpactReport.affected_consumers[].consumer_module`
+ *     so a config author can see what they're about to break.
+ *   - `breakingChangePolicy` — `'warn'` (default behavior; surfaces in
+ *     warnings) or `'block'` (surfaces as a `policy_block` breaking
+ *     change in the report; requires `confirmBreakingChanges: true`
+ *     on `promoteDraft` to override).
+ *   - `keyPaths` — sub-namespace key-paths the consumer cares about.
+ *     When omitted, the consumer is namespace-level (any change touches
+ *     it; over-blocks). When provided, impact is narrowed to changes
+ *     intersecting these paths (Q-NEW-F04D-5).
+ *
+ * **Impact analysis is OPT-IN.** Consumers that omit the impact fields
+ * still register schema + resolver-cache metadata but DO NOT participate
+ * in impact reports. This is the intended posture per Q-NEW-F04D-4 —
+ * consumers who care about breaking-change protection register the
+ * metadata explicitly.
  *
  * **Logical namespace** (the registration arg) is the tier-naked
  * name — e.g., `'theme'`, `'scd'`, `'i18n'`. The resolver walks
@@ -19,17 +38,31 @@
  * row validates identically.
  *
  * Backward compat: `registerNamespaceSchema` (Slice A primitive)
- * remains available for callers who don't want the resolver/cache
- * machinery (e.g., F03 Slice C's `tenant.scd` registration; the
- * trigger reads via raw SQL, not via `getConfig`/`resolveConfig`).
- * Migration of existing direct callers is voluntary and operator-
- * deferred.
+ * remains available for callers who don't want the resolver/cache/
+ * impact machinery (e.g., F03 Slice C's `tenant.scd` registration;
+ * the trigger reads via raw SQL, not via `getConfig` /
+ * `resolveConfig`). Such consumers are NOT in the impact-analysis
+ * surface — that's the intended posture per Q-NEW-F04D-4. Migration
+ * of existing direct callers to `registerConfigConsumer` is voluntary
+ * and operator-deferred (tracked as a future-roadmap candidate for
+ * `tenant.scd` if SCD-policy consumers ever want impact protection).
  */
 
 import type { ZodType } from 'zod';
 import { registerNamespaceSchema } from './schema-registry.js';
 
 export const DEFAULT_CONSUMER_TTL_SECONDS = 60 as const;
+
+/**
+ * Breaking-change policy per consumer (Q-NEW-F04D-4 / D-2 axis 3):
+ *   - `'warn'` (default if `consumerModule` provided) — impact-analysis
+ *     surfaces this consumer in `affected_consumers` when changes
+ *     intersect its keyPaths, but does NOT block promote on its own.
+ *   - `'block'` — any change intersecting the consumer's keyPaths
+ *     surfaces as a `policy_block` breaking change. Promote requires
+ *     `confirmBreakingChanges: true` to override.
+ */
+export type BreakingChangePolicy = 'warn' | 'block';
 
 export interface RegisterConfigConsumerParams<T> {
   /**
@@ -53,6 +86,34 @@ export interface RegisterConfigConsumerParams<T> {
   defaultValue: T | null;
   /** Optional cache TTL override in seconds. Defaults to 60. */
   ttl?: number;
+  /**
+   * Slice D impact-analysis metadata (OPT-IN). Identifies which
+   * module / feature consumes this namespace. Surfaces in
+   * `ImpactReport.affected_consumers[].consumer_module`. Consumers
+   * that omit this field are not in the impact surface — they
+   * still register schema + resolver-cache metadata, but
+   * `analyzeImpact` skips them.
+   */
+  consumerModule?: string;
+  /**
+   * Slice D impact-analysis metadata (OPT-IN). Defaults to `'warn'`
+   * if `consumerModule` is provided. Has no effect without
+   * `consumerModule` (impact-skipped). See `BreakingChangePolicy`.
+   */
+  breakingChangePolicy?: BreakingChangePolicy;
+  /**
+   * Slice D impact-analysis metadata (OPT-IN; Q-NEW-F04D-5). Sub-
+   * namespace key-paths the consumer cares about. When omitted but
+   * `consumerModule` IS provided, the consumer is namespace-level
+   * (any change to the namespace touches it). When provided, impact
+   * is narrowed to changes intersecting these paths.
+   *
+   * Path syntax matches `dot-notation` JSON addressing — e.g.,
+   * `'primary_color'`, `'palette.brand'`, `'sections.0.title'`.
+   * Array indices are stringified; wildcards are NOT supported in
+   * Phase 1 (deferred to first-consumer-driven).
+   */
+  keyPaths?: string[];
 }
 
 export interface ConsumerEntry<T = unknown> {
@@ -60,6 +121,12 @@ export interface ConsumerEntry<T = unknown> {
   schemaVersion: number;
   defaultValue: T | null;
   ttlSeconds: number;
+  /** Slice D impact-analysis metadata. `undefined` ⇒ consumer is impact-skipped. */
+  consumerModule?: string;
+  /** Slice D impact-analysis metadata. Defaults to `'warn'` when `consumerModule` is set. */
+  breakingChangePolicy?: BreakingChangePolicy;
+  /** Slice D impact-analysis metadata. `undefined` OR `[]` ⇒ namespace-level. */
+  keyPaths?: string[];
 }
 
 const consumers = new Map<string, ConsumerEntry>();
@@ -89,11 +156,20 @@ export function registerConfigConsumer<T>(
     version: params.schemaVersion,
   });
 
+  // Slice D impact-analysis metadata. Per Q-NEW-F04D-4: opt-in.
+  // When `consumerModule` is omitted, the consumer is impact-skipped
+  // (the resolver still uses the entry; `analyzeImpact` ignores it).
+  // When `consumerModule` is provided, default policy is `'warn'`.
   const entry: ConsumerEntry<T> = {
     namespace: params.namespace,
     schemaVersion: params.schemaVersion,
     defaultValue: params.defaultValue,
     ttlSeconds,
+    ...(params.consumerModule !== undefined && {
+      consumerModule: params.consumerModule,
+      breakingChangePolicy: params.breakingChangePolicy ?? 'warn',
+      ...(params.keyPaths !== undefined && { keyPaths: params.keyPaths }),
+    }),
   };
   consumers.set(params.namespace, entry as ConsumerEntry);
   return entry;
@@ -106,6 +182,28 @@ export function registerConfigConsumer<T>(
  */
 export function getConfigConsumer<T = unknown>(namespace: string): ConsumerEntry<T> | undefined {
   return consumers.get(namespace) as ConsumerEntry<T> | undefined;
+}
+
+/**
+ * Slice D — list all impact-eligible consumers for a logical namespace.
+ *
+ * "Impact-eligible" means the consumer registered with
+ * `consumerModule` set (per Q-NEW-F04D-4 opt-in posture). Consumers
+ * registered without `consumerModule` are excluded.
+ *
+ * Phase 1 supports a single registered consumer per logical namespace
+ * (the registry's underlying Map is keyed on namespace alone, so the
+ * second `registerConfigConsumer` call for the same namespace
+ * overwrites the first). Returning an array preserves API forward-
+ * compat: when multi-consumer-per-namespace registration ships
+ * (deferred until a first consumer needs it), this helper's signature
+ * doesn't change. For Phase 1, the returned array has length 0 or 1.
+ */
+export function getImpactEligibleConsumers(namespace: string): ConsumerEntry[] {
+  const entry = consumers.get(namespace);
+  if (entry === undefined) return [];
+  if (entry.consumerModule === undefined) return [];
+  return [entry];
 }
 
 /**

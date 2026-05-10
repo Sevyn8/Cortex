@@ -26,6 +26,32 @@
 
 Commit messages MUST NOT include `Co-Authored-By: Claude` or any AI co-author trailer unless the operator explicitly requests one in the current turn. Default to no trailer. This applies to all squash bodies, single commits, and amended commits without exception.
 
+### WIP commits
+
+When a slice breaks across sessions, stage progress as a WIP commit on the slice branch (do not push). The WIP commit squashes away at HOLD #3 squash composition.
+
+Commit shape: `chore(<scope>): wip <description>`
+
+- Type MUST be one of the commitlint-allowed types (`feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `ops` / `perf` / `style` / `build` / `ci` / `revert`). `wip` is NOT an allowed type and will be rejected by commitlint with `type-enum`.
+- Subject body MUST be lowercase even for module IDs (`D.1-D.4` fails `subject-case`; `d.1-d.4` passes).
+- Body documents the WIP state (what's done, what's pending, self-verify status — pre-existing-tests passing, typecheck clean, etc.).
+- DO NOT push the WIP commit; it lives on the local slice branch only and squashes into the final `feat(...)` at HOLD #3 composition.
+
+Example:
+
+```
+chore(f04-d): wip d.1-d.4 impact analysis substrate + lifecycle wiring
+
+Mid-build WIP commit at HOLD #2 per operator session-break.
+Will be squashed into the final feat(F04-D) commit at HOLD #3
+composition. Working tree state is verifiable:
+  - 89/89 config-plane tests passing
+  - typecheck across 30 packages clean
+  ...
+```
+
+Lesson surfaced PR #N (Slice D HOLD #2): operator's draft used `wip(...)` as the type and uppercase `D.1-D.4` in the subject — both rejected by commitlint. The fix retained body verbatim with type=`chore` + lowercase subject.
+
 ## Branching & PR
 
 ### Trunk-based with mandatory PR gating
@@ -67,6 +93,21 @@ Local test runs target the compose Postgres in `infra/dev/docker-compose.yml`. I
 ### Why `PGPASSWORD` is mandatory
 
 `@cortex/test-db-harness`'s `getPool()` throws if `PGPASSWORD` is unset rather than fetching from a gcloud secret as a fallback. The fallback (removed in §4.20 closure) silently fetched the **dev Cloud SQL** break-glass password and tried it against the **local docker** container — which never matched. Fail-fast with a clear error beats silent setup drift.
+
+### Pre-push test verification env-loading
+
+The test-db-harness reads `PG*` env vars from `process.env` directly (`PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE`). It does NOT auto-load `.env.local` — vitest runs without env unless the shell has them set. Running `pnpm test` from a fresh shell without env produces clean "PGPASSWORD not set" errors and tests skip at file-level `beforeAll`.
+
+Local pre-push verification pattern:
+
+```bash
+set -a && source .env.local && set +a
+(cd packages/<pkg> && pnpm test --run --no-file-parallelism)
+```
+
+`set -a` / `set +a` auto-exports every variable assigned between them, so plain `KEY=value` lines in `.env.local` become exported `process.env` entries. Without this bracket, tests skip silently.
+
+CI doesn't need this — `.github/workflows/ci.yaml`'s `services` block sets env vars directly on the GHA runner.
 
 ## Audit events
 
@@ -224,6 +265,56 @@ Deep rationale lives in ADR-DB-001, DB-002, DB-003.
 - `audit_event` enforces append-only via a `BEFORE INSERT OR UPDATE OR DELETE` trigger. UPDATE/DELETE raise SQLSTATE `2F002` regardless of role. See ADR-DB-003 §4.
 - **TRUNCATE bypasses ROW triggers** — Postgres fires STATEMENT-level triggers on TRUNCATE, not per-row ones. Production service roles must not hold `TRUNCATE` privilege on `audit_event`; dev test setup uses TRUNCATE deliberately for idempotency.
 - If absolute append-only is ever required end-to-end, add a `BEFORE TRUNCATE` STATEMENT trigger raising `2F002`.
+
+### `audit_event` row shape
+
+`audit_event` rows wrap event metadata in a `payload` jsonb column (NOT a top-level `after_state` column). Test queries reading audit metadata access via:
+
+```sql
+SELECT payload -> 'after_state' ->> 'field' AS field
+FROM audit_event WHERE ...
+```
+
+The payload jsonb's typical shape:
+
+```json
+{
+  "before_state": { ... },
+  "after_state": { ... },
+  ... action-specific fields the emitter populated
+}
+```
+
+When asserting test expectations on audit metadata, query the payload path directly. Don't assume top-level columns. The actual `audit_event` columns are: `event_id`, `tenant_id`, `actor_type`, `actor_id`, `actor_description`, `action`, `resource`, `payload`, `occurred_at`, `prev_hash`, `curr_hash`, `inserted_at` — only `payload` carries the structured emit data.
+
+### `audit_event` cleanup limitations
+
+`audit_event` has the append-only trigger above that rejects DELETE with SQLSTATE `2F002`. Helpers like `cleanupConfigPlaneState`'s `DELETE FROM audit_event` wrap their query in `.catch(() => undefined)` and silently swallow the failure — so audit rows leak across tests within a session.
+
+Test fixtures must compensate by being defensive in their audit assertions:
+
+- Filter by `tenant_id` AND a test-unique payload field (e.g., `payload -> 'after_state' ->> 'from_draft_id' = $draftId`) to scope queries to the current test's emissions.
+- Use `ORDER BY occurred_at DESC LIMIT 1` for "most recent" reads; this naturally returns the current test's row even when older runs left rows for the same tenant.
+- For "no rows should exist" assertions, ALWAYS combine `WHERE tenant_id = $1 AND <test-unique field>` — a bare action-name filter will surface false positives from prior tests' rows.
+
+Not filtering this way will surface false positives. Tracked at roadmap §1.15 (cleanup-helper improvement candidates).
+
+### Multi-tenant test isolation via RLS
+
+Multi-tenant isolation tests should EXPLOIT the RLS policy rather than fabricating isolation:
+
+```ts
+// Bind tenant B's context; query data created by tenant A
+await inTenant(db, tenantB, async (tx) => {
+  // Tenant A's drafts/configs are RLS-filtered out.
+  // Asserting "not found" naturally validates isolation.
+  await expect(analyzeImpact(tx, tenantB, draftIdFromTenantA)).rejects.toThrow(
+    ImpactAnalysisDraftNotFoundError,
+  );
+});
+```
+
+RLS does the isolation work; the test verifies the policy enforces it. Canonical multi-tenant test pattern; surface for any future module's tests. F04 Slice D's `impact-analysis.spec.ts` shows the pattern in `analyzeImpact — end-to-end > multi-tenant isolation` test.
 
 ### Testing RLS-protected tables
 
@@ -484,6 +575,75 @@ resolveConfig(client, tenantId, 'theme')
 - `packages/config-plane/src/consumer-registry.ts` (registerConfigConsumer)
 - `packages/config-plane/src/lifecycle.ts` (`invalidateResolverCacheForLiteralNamespace` + the 2 post-commit call sites)
 - `docs/future-roadmap.md` §1.12 (Redis migration; multi-replica path)
+
+### Impact analysis (Slice D)
+
+F04 Slice D ships breaking-change detection + promote-blocking for config changes. `analyzeImpact(db, tenantId, draftId)` runs against a draft pre-promote and surfaces a structured `ImpactReport` covering three orthogonal breaking-change axes:
+
+- **`key_removed`** — a key any registered consumer cares about was removed from the config. Detected via structural JSON diff between `draft.draft_json` and the current latest version's `config_json`.
+- **`schema_incompatible`** — a consumer pinned at schema v=N, but the data shape has shifted such that v=N's schema would reject it. Detected via Zod parse against the consumer's pinned schema version.
+- **`policy_block`** — the consumer registered with `breakingChangePolicy: 'block'` and any keyPath of theirs was touched. Detected via consumer-keyPath × diff-path intersection.
+
+**Override path:** callers pass `confirmBreakingChanges: true` to `promoteDraft`. Override emits a `CONFIG_VERSION_PROMOTED` audit row with enriched `after_state` metadata (`breaking_changes_overridden: true` + `affected_consumers` + `breaking_change_kinds`).
+
+**Block path:** caller doesn't pass override; `promoteDraft` throws `ImpactBlockedError` carrying the report. `CONFIG_PROMOTE_BLOCKED` audit row emits in a SEPARATE transaction (the attempt's transaction rolled back when the throw fired; audit must survive the rollback).
+
+### Audit-on-error in separate transaction
+
+When auditing a REJECT-type event whose originating transaction rolled back, emit the audit in a fresh transaction. Pattern:
+
+```ts
+} catch (err) {
+  if (err instanceof ImpactBlockedError) {
+    // The attempt's transaction rolled back. Audit must
+    // survive the rollback to record the rejection.
+    await db.transaction(async (tx) => {
+      await emitAuditEvent(tx, { ... });
+    });
+    throw err;
+  }
+}
+```
+
+DO NOT consolidate audit emission into the rolled-back transaction — the audit row would roll back too, defeating the purpose. This pattern applies to any REJECT-type event on a doomed transaction (current consumer: F04 Slice D's `CONFIG_PROMOTE_BLOCKED`; the load-bearing test in `impact-analysis.spec.ts` asserts the audit row exists post-rollback).
+
+### Bidirectional path matching for impact analysis
+
+Consumer keyPaths and diff paths match in either direction:
+
+- Consumer registers `['theme','colors']`, diff hits `['theme','colors','primary']` → match (broader registered → narrower change).
+- Consumer registers `['theme','colors','primary']`, diff hits `['theme','colors']` → match (narrower registered → broader change subsumes the specific path).
+
+One-way matching would miss half the cases. The implementation is `pathMatchesKeyPath` in `impact-analysis.ts`; bidirectional is the contract, not an implementation detail.
+
+### Dual catch-site behavior — two CONFIG_PROMOTE_BLOCKED rows per call on retry
+
+`promoteDraft` can throw `ImpactBlockedError` on either the first attempt OR the retry-on-23505 second attempt (the retry path is for `PromoteConcurrencyError`, but `analyzeImpact` re-runs each attempt and may throw `ImpactBlockedError` independently). Each attempt's emission represents a real moment; auditing both is honest. Two `CONFIG_PROMOTE_BLOCKED` rows in a single user-call indicates a retry path; each row's `after_state` captures the impact at that attempt's moment (which may differ if a concurrent promote happened between attempts).
+
+### Two-seam DB API design
+
+- `getConfig` / `resolveConfig` retain the `Queryable` interface (narrow, single-read API) — caller passes `pg.PoolClient` or drizzle's via `withTenantContext`.
+- `analyzeImpact` + lifecycle helpers use `NodePgDatabase` directly (lifecycle-shaped, transactional, multi-query API).
+
+Two seams coexist by design. Don't speculatively unify — the surfaces have different requirements (read-narrow vs lifecycle-transactional).
+
+### `registerConfigConsumer` vs `registerNamespaceSchema`
+
+Two registration entry points by design:
+
+- **`registerNamespaceSchema`** (Slice A primitive): minimal; for callers that don't need resolver/cache/impact (e.g., F03 Slice C's `tenant.scd`, where the trigger reads via raw SQL and the schema only validates draft data at promote-time).
+- **`registerConfigConsumer`** (Slice C + extended Slice D): wraps `registerNamespaceSchema` + adds resolver/cache (`defaultValue`, `ttl`) + adds impact-analysis fields (`consumerModule`, `breakingChangePolicy`, `keyPaths`).
+
+Impact analysis is OPT-IN: consumers omit `consumerModule` and they don't participate in impact reports. `registerNamespaceSchema` callers automatically don't participate. The `getImpactEligibleConsumers(namespace)` helper filters the registry to entries where `consumerModule !== undefined`.
+
+**Cross-refs:**
+
+- `docs/planning/f04-slice-D-scope.md` (Slice D scope; Q-NEW-F04D-1 through D-8 locks)
+- `packages/config-plane/src/impact-analysis.ts` (`analyzeImpact`, `diffJson`, `pathMatchesKeyPath`)
+- `packages/config-plane/src/schema-drift.ts` (`detectSchemaIncompatibilities`)
+- `packages/config-plane/src/lifecycle.ts` (`emitImpactBlockedAudit` + `confirmBreakingChanges` wiring)
+- `packages/config-plane/test/impact-analysis.spec.ts` (27 tests — block path's separate-transaction assertion is load-bearing)
+- `docs/future-roadmap.md` §1.15 (audit_event silent-swallow workaround) and §1.16 (single-consumer-per-namespace constraint)
 
 ## SCD policies (F03 Slice C)
 

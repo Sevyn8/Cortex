@@ -16,6 +16,13 @@
  * Slice B EMITS via the lifecycle paths (createDraft / updateDraft /
  * validateDraft / discardDraft / promoteDraft / rollbackVersion).
  *
+ * Slice D adds a 7th verb (`CONFIG_PROMOTE_BLOCKED`) per Q-NEW-F04D-7:
+ * REJECT semantic, mirrors the quotas/rate-limit precedent. Emits when
+ * `promoteDraft` rejects a breaking-change attempt without an explicit
+ * `confirmBreakingChanges` override. Critically, this audit row lands
+ * in a SEPARATE transaction from the rolled-back promote attempt —
+ * rationale captured at the call site in `lifecycle.ts`.
+ *
  * Note on `TENANT_CONFIG_VERSION_CREATED` coexistence (per
  * Q-NEW-F04A-10 lock): F02's existing `TENANT_CONFIG_VERSION_CREATED`
  * (in `@cortex/tenant-context`'s `TENANT_AUDIT_ACTIONS`) emits at v=1
@@ -44,6 +51,12 @@ export const CONFIG_AUDIT_ACTIONS = registerAuditActions([
   // append-only chain per D2).
   { name: 'CONFIG_VERSION_PROMOTED', verb: 'CREATE' },
   { name: 'CONFIG_VERSION_ROLLED_BACK', verb: 'CREATE' },
+  // Slice D — promote rejected by impact analysis (Q-NEW-F04D-7).
+  // REJECT semantic matches the quotas/rate-limit precedent. Emitted
+  // in a fresh transaction from outside attemptPromote (see
+  // promoteDraft outer catch in lifecycle.ts) so the audit row commits
+  // even though the originating promote rolled back.
+  { name: 'CONFIG_PROMOTE_BLOCKED', verb: 'REJECT' },
 ] as const);
 
 /**

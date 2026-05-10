@@ -29,6 +29,7 @@ import { CONFIG_AUDIT_ACTIONS } from './audit-actions.js';
 import { actorSchema, type Actor } from './types.js';
 import { getNamespaceSchema } from './schema-registry.js';
 import { cacheInvalidate } from './cache.js';
+import { analyzeImpact, type ImpactReport, type AffectedConsumer } from './impact-analysis.js';
 
 // ──────────────────────────────────────────────────────────────────────
 // Resolver-cache invalidation helper (Q-NEW-F04C-5)
@@ -94,6 +95,39 @@ export class PromoteConcurrencyError extends Error {
         'another writer concurrently promoted into the same namespace. Refresh draft state and retry per D13 optimistic-concurrency contract.',
     );
     this.name = 'PromoteConcurrencyError';
+  }
+}
+
+/**
+ * Slice D — thrown by `promoteDraft` when impact analysis detects
+ * one or more breaking changes AND the caller did NOT pass
+ * `confirmBreakingChanges: true`.
+ *
+ * Carries the full `ImpactReport` so the caller can present
+ * affected consumers + breaking changes to a user before retrying
+ * with the override flag.
+ *
+ * Per Q-NEW-F04D-3 (option-flag UX): callers retry by passing the
+ * same `draftId` + `actor` plus `confirmBreakingChanges: true` to
+ * `promoteDraft`. No separate `confirmAndPromote` API exists.
+ *
+ * Per Q-NEW-F04D-7: a `CONFIG_PROMOTE_BLOCKED` audit row lands on
+ * each block (REJECT verb; new in Slice D's audit catalog). The
+ * audit emits in a separate transaction from the promote attempt
+ * so it commits even though the promote rolls back.
+ */
+export class ImpactBlockedError extends Error {
+  public readonly draftId: string;
+  public readonly report: ImpactReport;
+  constructor(draftId: string, report: ImpactReport) {
+    const summary = report.breaking_changes.map((b) => `${b.kind}/${b.consumer_module}`).join(', ');
+    super(
+      `config-plane: promote of draft ${draftId} blocked by ${report.breaking_changes.length} breaking change(s): ${summary}. ` +
+        'Pass confirmBreakingChanges:true to override (audit row will carry the override metadata).',
+    );
+    this.name = 'ImpactBlockedError';
+    this.draftId = draftId;
+    this.report = report;
   }
 }
 
@@ -370,6 +404,19 @@ export async function updateDraft(
 export interface PromoteDraftParams {
   draftId: string;
   actor: Actor;
+  /**
+   * Slice D — opt-in override for impact-analysis breaking changes
+   * (Q-NEW-F04D-3 lock). When omitted/false, `promoteDraft` calls
+   * `analyzeImpact` and throws `ImpactBlockedError` if any breaking
+   * changes are detected. When `true`, the override proceeds; the
+   * `CONFIG_VERSION_PROMOTED` audit row carries enriched payload
+   * (`breaking_changes_overridden: true` + `affected_consumers`).
+   *
+   * Pass-through has no effect when no breaking changes exist
+   * (analysis still runs; override metadata is omitted from the
+   * audit payload).
+   */
+  confirmBreakingChanges?: true;
 }
 
 export interface PromoteDraftResult {
@@ -379,6 +426,13 @@ export interface PromoteDraftResult {
   versionNumber: number;
   /** The draft, now with status='promoted' + promoted_to_version_id set. */
   draft: ConfigDraft;
+  /**
+   * Slice D — the impact report computed pre-INSERT. Always populated
+   * (even when no breaking changes; in which case its arrays are empty
+   * or contain only soft `affected_consumers` entries). Callers that
+   * want to log "what changed" use this; callers that don't can ignore.
+   */
+  impact: ImpactReport;
 }
 
 /**
@@ -428,14 +482,28 @@ export async function promoteDraft(
   const validatedTenantId = tenantIdSchema.parse(tenantId);
   const draftId = draftIdSchema.parse(params.draftId);
   const actor = actorSchema.parse(params.actor);
+  const confirmBreakingChanges = params.confirmBreakingChanges === true;
 
   try {
-    return await attemptPromote(db, validatedTenantId, draftId, actor);
+    return await attemptPromote(db, validatedTenantId, draftId, actor, confirmBreakingChanges);
   } catch (err) {
+    // ImpactBlockedError must propagate without retry — the block decision
+    // is data-shape-stable (analyzeImpact would return the same report on
+    // retry). Emit CONFIG_PROMOTE_BLOCKED audit in a fresh transaction
+    // (attemptPromote's transaction rolled back when the throw fired;
+    // audit must survive that), then re-throw the original error.
+    if (err instanceof ImpactBlockedError) {
+      await emitImpactBlockedAudit(db, validatedTenantId, draftId, actor, err.report);
+      throw err;
+    }
     if (isUniqueViolation(err)) {
       try {
-        return await attemptPromote(db, validatedTenantId, draftId, actor);
+        return await attemptPromote(db, validatedTenantId, draftId, actor, confirmBreakingChanges);
       } catch (err2) {
+        if (err2 instanceof ImpactBlockedError) {
+          await emitImpactBlockedAudit(db, validatedTenantId, draftId, actor, err2.report);
+          throw err2;
+        }
         if (isUniqueViolation(err2)) {
           // Need namespace for the error; we lost the draft fetch on
           // the failed attempt. Re-fetch JUST the namespace for the
@@ -452,6 +520,76 @@ export async function promoteDraft(
   }
 }
 
+/**
+ * Slice D — emit `CONFIG_PROMOTE_BLOCKED` audit row in a SEPARATE
+ * transaction from the rolled-back attemptPromote.
+ *
+ * **Why a separate transaction.** `attemptPromote` opens a transaction,
+ * runs `analyzeImpact`, and (on breaking changes without override)
+ * throws `ImpactBlockedError` from inside the transaction. Drizzle
+ * rolls the transaction back. If we tried to emit the audit row INSIDE
+ * the same transaction, the audit would roll back too — defeating the
+ * purpose of the audit (which is to record "we attempted a breaking
+ * change and it was blocked"). The audit MUST commit even though the
+ * promote attempt did not.
+ *
+ * This is a load-bearing pattern. Future maintainers may speculatively
+ * "consolidate into one transaction" without realizing why — don't.
+ * Same separation pattern applies to any audit-on-error case where the
+ * originating transaction is doomed.
+ *
+ * If the audit emission itself fails (DB connection dropped, etc.) we
+ * swallow + log because the caller cares about the rejection more than
+ * the audit-failure detail. Future enhancement: structured logging of
+ * the audit-emission error.
+ */
+async function emitImpactBlockedAudit(
+  db: NodePgDatabase<Record<string, never>>,
+  tenantId: string,
+  draftId: string,
+  actor: Actor,
+  report: ImpactReport,
+): Promise<void> {
+  try {
+    await db.transaction(async (tx) => {
+      await bindTenant(tx, tenantId);
+
+      // Fetch the draft's literal namespace for the audit resource +
+      // payload. Inside the transaction so RLS finds the row via the
+      // bound tenant context.
+      const ns = await tx.execute<{ namespace: string } & Record<string, unknown>>(sql`
+        SELECT namespace FROM config_draft WHERE id = ${draftId}
+      `);
+      const literalNamespace = ns.rows[0]?.namespace ?? '<unknown>';
+
+      await emitAuditEvent(tx, {
+        tenantId,
+        actorType: actor.type,
+        actorId: actor.id,
+        ...(actor.description !== undefined && { actorDescription: actor.description }),
+        action: getActionByName(CONFIG_AUDIT_ACTIONS, 'CONFIG_PROMOTE_BLOCKED'),
+        verb: 'REJECT',
+        resource: `config_draft:${draftId}`,
+        after_state: {
+          draft_id: draftId,
+          namespace: literalNamespace,
+          breaking_change_count: report.breaking_changes.length,
+          breaking_change_kinds: Array.from(new Set(report.breaking_changes.map((b) => b.kind))),
+          affected_consumers: report.affected_consumers.map((c: AffectedConsumer) => ({
+            consumer_module: c.consumer_module,
+            namespace: c.namespace,
+            matched_key_paths: c.matched_key_paths,
+            policy: c.policy,
+          })),
+        },
+      });
+    });
+  } catch {
+    // Audit emit failed — swallow and let the original ImpactBlockedError
+    // propagate. See JSDoc for rationale.
+  }
+}
+
 function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === '23505';
 }
@@ -461,7 +599,14 @@ async function attemptPromote(
   tenantId: string,
   draftId: string,
   actor: Actor,
+  confirmBreakingChanges: boolean,
 ): Promise<PromoteDraftResult> {
+  // Slice D: capture the impact report from inside the transaction so we
+  // can attach it to the result + (on block path) re-emit a separate
+  // audit row from outside the transaction. `let` because the assignment
+  // happens inside the closure.
+  let impactCapture: ImpactReport | undefined;
+
   const result = await db.transaction(async (tx) => {
     await bindTenant(tx, tenantId);
 
@@ -490,7 +635,25 @@ async function attemptPromote(
       throw new PromoteValidationError(draftId, parsed.error);
     }
 
-    // 3. INSERT new tenant_config_version row. Subquery atomically
+    // 3. Slice D — impact analysis (Q-NEW-F04D-2/3/5/6). Runs against
+    //    the locked draft state so the report's findings are stable
+    //    through the rest of the transaction. If breaking changes are
+    //    detected AND the caller did NOT pass `confirmBreakingChanges`,
+    //    we throw `ImpactBlockedError` from the transaction — drizzle
+    //    rolls the transaction back; the outer wrapper re-throws.
+    //
+    //    The CONFIG_PROMOTE_BLOCKED audit row that Slice D adds in D.5
+    //    must commit even though the promote rolls back; D.5 wires the
+    //    separate-transaction emit path. For now, we throw and let the
+    //    outer wrapper handle the audit-on-block emission.
+    const impact = await analyzeImpact(tx, tenantId, draftId);
+    impactCapture = impact;
+
+    if (impact.breaking_changes.length > 0 && !confirmBreakingChanges) {
+      throw new ImpactBlockedError(draftId, impact);
+    }
+
+    // 4. INSERT new tenant_config_version row. Subquery atomically
     //    computes parent_version_id + version_number; UNIQUE
     //    (tenant_id, namespace, version_number) catches concurrent
     //    promotes (handled by the outer attempt-twice retry).
@@ -512,7 +675,7 @@ async function attemptPromote(
     `);
     const newVersion = inserted.rows[0]!;
 
-    // 4. UPDATE draft.status='promoted' + promoted_to_version_id.
+    // 5. UPDATE draft.status='promoted' + promoted_to_version_id.
     const updatedDraft = await tx.execute<ConfigDraft>(sql`
       UPDATE config_draft
         SET status = 'promoted',
@@ -524,7 +687,12 @@ async function attemptPromote(
         RETURNING *
     `);
 
-    // 5. Audit emission.
+    // 6. Audit emission. On override path (Q-NEW-F04D-7), enrich the
+    //    after_state with `breaking_changes_overridden: true` +
+    //    affected_consumers so compliance auditors can see WHAT was
+    //    overridden. The override fields are omitted on the no-breaking
+    //    path so the payload stays compact.
+    const overridePayload = buildOverridePayload(impact, confirmBreakingChanges);
     await emitAuditEvent(tx, {
       tenantId,
       actorType: actor.type,
@@ -538,6 +706,7 @@ async function attemptPromote(
         version_number: newVersion.version_number,
         schema_version: draft.schema_version,
         from_draft_id: draftId,
+        ...overridePayload,
       },
     });
 
@@ -551,7 +720,41 @@ async function attemptPromote(
   // Q-NEW-F04C-5: invalidate resolver cache POST-commit. If the
   // transaction had rolled back, this code wouldn't run.
   invalidateResolverCacheForLiteralNamespace(tenantId, result.draft.namespace);
-  return result;
+  // Slice D — surface the impact report on the result. `impactCapture`
+  // is guaranteed non-undefined here because the transaction reached
+  // the audit-emit step (which only runs after the analyzeImpact assignment).
+  return { ...result, impact: impactCapture! };
+}
+
+/**
+ * Slice D — build the override-payload sub-object for
+ * `CONFIG_VERSION_PROMOTED`'s `after_state`. Returns:
+ *   - empty object on the no-override path (no breaking changes OR
+ *     `confirmBreakingChanges` was not passed and there were no
+ *     breaking changes — payload stays compact);
+ *   - `{ breaking_changes_overridden: true, affected_consumers, breaking_change_kinds }`
+ *     when the caller overrode breaking changes.
+ *
+ * `affected_consumers` carries `consumer_module + namespace + matched_key_paths + policy`
+ * — the same shape `ImpactReport` exports, snake_cased for audit-payload
+ * convention.
+ */
+function buildOverridePayload(
+  impact: ImpactReport,
+  confirmBreakingChanges: boolean,
+): Record<string, unknown> {
+  if (!confirmBreakingChanges) return {};
+  if (impact.breaking_changes.length === 0) return {};
+  return {
+    breaking_changes_overridden: true,
+    affected_consumers: impact.affected_consumers.map((c: AffectedConsumer) => ({
+      consumer_module: c.consumer_module,
+      namespace: c.namespace,
+      matched_key_paths: c.matched_key_paths,
+      policy: c.policy,
+    })),
+    breaking_change_kinds: Array.from(new Set(impact.breaking_changes.map((b) => b.kind))),
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────

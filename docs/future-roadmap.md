@@ -213,6 +213,13 @@ Updated whenever a deferral is added or revisited.
 - **References:** `packages/config-plane/src/consumer-registry.ts` (`getImpactEligibleConsumers` JSDoc; the `Map` keyed on namespace); `packages/config-plane/test/impact-analysis.spec.ts` (multi-axis-not-multi-consumer test framing).
 - **Owner phase:** Operator-driven; first-consumer-driven per the ADR-DB-001 deferral precedent.
 
+### 1.17 Access control module discipline (deferred portability)
+
+- **Decision (2026-05-10).** AC01-AC04 ship Cortex-internal in Phase 2 with disciplined module boundaries. The rule: AC's core domain logic in `packages/access-control/src/` MUST NOT import from `@cortex/*` packages. Cortex-specific integrations (F02 audit emission, F04 config reads, F03 history queries, RLS context binding) live in adapter modules under `services/access-control-service/` or similar.
+- **Rationale.** Hypothetical-optionality (Nike-bespoke / cross-product) doesn't justify full ports-and-adapters formalization now. Module discipline preserves ~80% of future extraction value at ~5% cost.
+- **Triggers for revisit.** (a) Real customer asks for Cortex-less deployment; (b) Second Sevyn8 product line needs AC standalone; (c) DPDP/DPDPA compliance work in AC03/AC04 reveals cross-product reuse.
+- **Effort if extracted later.** Bounded — write new adapters, swap Cortex-specific ones. Plausible 1-2 week refactor IF module discipline stayed clean.
+
 ---
 
 ## 2. Operational triggers

@@ -6,7 +6,7 @@
  * `tenant_config_version` substrate (reshape landed in migration 0014
  * per F04 Slice A).
  *
- * Slices shipped through D:
+ * Slices shipped through E (module CLOSED 2026-05-10):
  *   - Slice A: storage substrate (`tenant_config_version` reshape +
  *     6-verb audit catalog + `registerNamespaceSchema` + `getConfig`)
  *   - Slice B: lifecycle helpers (createDraft / updateDraft /
@@ -22,8 +22,10 @@
  *     accepts `confirmBreakingChanges?: true`; `ImpactBlockedError`
  *     carries the report; CONFIG_PROMOTE_BLOCKED audit row commits in
  *     a separate transaction from the rolled-back attempt)
- *
- * Slice E ships git-sync stub + module close.
+ *   - Slice E: git-sync stub (Configuration-as-Code; Phase 2 deferred).
+ *     `exportToYaml` / `importFromYaml` throw `GitSyncNotImplementedError`
+ *     per Q-NEW-F04E-2 lock; YAML schema + library choice deferred
+ *     to first-Phase-2-consumer. Module-close marker.
  *
  * Public API takes the same `Queryable` seam shape as `@cortex/
  * temporal-query` (drizzle's NodePgDatabase, pg.Pool, pg.PoolClient
@@ -129,3 +131,14 @@ export {
 } from './impact-analysis.js';
 
 export { detectSchemaIncompatibilities, type SchemaDriftFindings } from './schema-drift.js';
+
+// ──────────────────────────────────────────────────────────────────────
+// F04 Slice E — git-sync stub (Phase 2 deferred); module-close marker
+// ──────────────────────────────────────────────────────────────────────
+
+export {
+  exportToYaml,
+  importFromYaml,
+  GitSyncNotImplementedError,
+  type GitSyncContext,
+} from './git-sync.js';

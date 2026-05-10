@@ -321,6 +321,7 @@ RLS does the isolation work; the test verifies the policy enforces it. Canonical
 - Vitest runs as `postgres` (superuser). By default, table owners bypass RLS — policy tests would silently pass without enforcing anything.
 - Set `ALTER TABLE <t> FORCE ROW LEVEL SECURITY` in `beforeAll`, pair with `NO FORCE` in `afterAll`. Real Phase 1 tables do NOT need FORCE in production (F01 middleware never runs as superuser).
 - Use `withTenantContext(pool, tenantId, fn)` / `withoutTenantContext(pool, fn)` from `@cortex/canonical-schema/rls-test` to set / unset tenant context inside a test transaction. The helpers use `set_config` under the hood for the reason in the "Session variables" section above.
+- **TypeScript inference threshold note.** In type-heavy spec files (e.g., 20+ `withTenantContext` call sites + complex fixture types), TypeScript inference may fall back to `any` for the `tx` parameter on later lambdas after a cumulative-complexity threshold — earlier identical patterns succeed, later ones don't. Workaround: explicit `(tx: PoolClient) => ...` annotation (import `type { PoolClient } from 'pg'`). Surfaced in P1.6 Slice A `packages/feature-flags/test/eval.spec.ts`.
 
 ### Test-fixture tables need explicit GRANTs
 

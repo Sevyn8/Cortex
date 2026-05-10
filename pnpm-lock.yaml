@@ -342,6 +342,34 @@ importers:
         specifier: 'catalog:'
         version: 2.1.9(@types/node@22.19.17)
 
+  packages/feature-flags:
+    dependencies:
+      '@cortex/config-plane':
+        specifier: workspace:*
+        version: link:../config-plane
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      '@cortex/canonical-schema':
+        specifier: workspace:*
+        version: link:../canonical-schema
+      '@cortex/test-db-harness':
+        specifier: workspace:*
+        version: link:../test-db-harness
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
+      vitest:
+        specifier: 'catalog:'
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/observability:
     dependencies:
       '@opentelemetry/api':

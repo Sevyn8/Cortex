@@ -1,0 +1,35 @@
+{
+  "name": "@cortex/feature-flags",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/config-plane": "workspace:*",
+    "pg": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cortex/canonical-schema": "workspace:*",
+    "@cortex/test-db-harness": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

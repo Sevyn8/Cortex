@@ -45,6 +45,11 @@
  *            docs/planning/f04-slice-C-scope.md (Slice C)
  */
 export { CONFIG_AUDIT_ACTIONS, type ConfigAuditAction } from './audit-actions.js';
+// Queryable seam — re-exported for downstream consumers (P1.6 onward)
+// so they can import everything F04-shaped from `@cortex/config-plane`
+// rather than reaching into `@cortex/temporal-query` for the same shape.
+// Originating precedent: Q-NEW-F03B-5 (temporal-query); F04 mirrors.
+export type { Queryable } from './queryable.js';
 export {
   registerNamespaceSchema,
   getNamespaceSchema,

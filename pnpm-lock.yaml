@@ -114,6 +114,49 @@ importers:
         specifier: ^8.15.0
         version: 8.58.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3)
 
+  apps/feature-flags-api:
+    dependencies:
+      '@cortex/feature-flags':
+        specifier: workspace:*
+        version: link:../../packages/feature-flags
+      '@cortex/tenant-context':
+        specifier: workspace:*
+        version: link:../../packages/tenant-context
+      '@hono/zod-validator':
+        specifier: ^0.7.0
+        version: 0.7.6(hono@4.12.15)(zod@3.25.76)
+      hono:
+        specifier: ^4.12.0
+        version: 4.12.15
+      hono-problem-details:
+        specifier: ^0.5.0
+        version: 0.5.0(@hono/zod-validator@0.7.6(hono@4.12.15)(zod@3.25.76))(hono@4.12.15)(zod@3.25.76)
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      '@cortex/canonical-schema':
+        specifier: workspace:*
+        version: link:../../packages/canonical-schema
+      '@cortex/config-plane':
+        specifier: workspace:*
+        version: link:../../packages/config-plane
+      '@cortex/test-db-harness':
+        specifier: workspace:*
+        version: link:../../packages/test-db-harness
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.20.0
+      vitest:
+        specifier: 'catalog:'
+        version: 2.1.9(@types/node@22.19.17)
+
   apps/tenant-lifecycle-api:
     dependencies:
       '@cortex/audit-events':

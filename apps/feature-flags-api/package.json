@@ -1,0 +1,30 @@
+{
+  "name": "@cortex/feature-flags-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "P1.6 Slice B HTTP surface — Hono `GET /v1/feature-flags` + admin UI stub (Slice C).",
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cortex/feature-flags": "workspace:*",
+    "@cortex/tenant-context": "workspace:*",
+    "@hono/zod-validator": "^0.7.0",
+    "hono": "^4.12.0",
+    "hono-problem-details": "^0.5.0",
+    "pg": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cortex/canonical-schema": "workspace:*",
+    "@cortex/config-plane": "workspace:*",
+    "@cortex/test-db-harness": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

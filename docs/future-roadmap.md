@@ -234,6 +234,19 @@ Updated whenever a deferral is added or revisited.
 - **References.** `packages/feature-flags/src/eval.ts` (current per-key merge implementation); `packages/config-plane/src/{cache,resolve}.ts` (F04 substrate the abstraction would extend); `docs/planning/feature-flags-slice-A-scope.md` (Q-NEW-FF-A-6 lock).
 - **Owner phase.** Operator-driven; first-consumer-driven extraction per ADR-DB-001 deferral precedent.
 
+### 1.19 `runWithBoundTenantClient` extraction trigger
+
+- **Symptom.** `apps/feature-flags-api/`'s route handler inlines the RLS-bound transaction pattern (`set_config('app.tenant_id')` + manual transaction over `PoolClient`) because F02's `withTenantDbClient` uses drizzle tx (doesn't structurally satisfy the `Queryable` seam used by `@cortex/feature-flags`'s `evaluateAllFlags`).
+- **Surfaced in.** P1.6 Slice B (PR #15 — TBD); see `apps/feature-flags-api/src/routes/v1/feature-flags.ts`.
+- **Trigger condition.** When a SECOND app-level service needs the same RLS-bound-PoolClient-transaction pattern. Likely candidates: AC01 admin endpoints, D04 quality-rule admin, or any future `apps/<workload>-api/` consuming Queryable-shaped substrate.
+- **Fix candidates.**
+  - **(a)** Extract `runWithBoundTenantClient` to `@cortex/tenant-context` as production-named sibling of the test-only `withTenantContext` (currently exported from `@cortex/canonical-schema/rls-test`).
+  - **(b)** Generalize F02's `withTenantDbClient` to support both drizzle tx AND `Queryable` callbacks via overloaded signatures.
+  - **(c)** Both — separate helpers for distinct seams (drizzle tx vs raw `PoolClient`); names reflect the shape the caller wants.
+- **Effort estimate.** 1-2 hr extraction + integration test + P1.6 + future-second-consumer migration.
+- **References.** `apps/feature-flags-api/src/routes/v1/feature-flags.ts` (the inlined helper); `packages/tenant-context/src/db-session.ts` (F02's `withTenantDbClient` precedent); `packages/canonical-schema/src/rls-test.ts` (the test-only `withTenantContext` cousin).
+- **Owner phase.** Operator-driven; first-consumer-driven extraction per ADR-DB-001 deferral precedent.
+
 ---
 
 ## 2. Operational triggers

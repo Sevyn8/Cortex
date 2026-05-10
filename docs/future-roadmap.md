@@ -220,6 +220,20 @@ Updated whenever a deferral is added or revisited.
 - **Triggers for revisit.** (a) Real customer asks for Cortex-less deployment; (b) Second Sevyn8 product line needs AC standalone; (c) DPDP/DPDPA compliance work in AC03/AC04 reveals cross-product reuse.
 - **Effort if extracted later.** Bounded — write new adapters, swap Cortex-specific ones. Plausible 1-2 week refactor IF module discipline stayed clean.
 
+### 1.18 Per-key tier-walk abstraction in `@cortex/config-plane`
+
+- **Symptom.** F04 Slice C's `resolveConfig` walks tiers but returns the FIRST non-null tier's whole-namespace JSON — no per-key merging. Consumers whose namespace stores a record (key → value), like P1.6's `feature-flags` namespace storing `{ flagKey: definition }`, need per-key tier precedence (tenant override > platform default > consumer default) to avoid forcing tenant configs to redundantly carry every flag. P1.6 Slice A implements this merge in its own `eval.ts` plus a private per-process LRU mirroring F04's `cache.ts` pattern (~30 LOC).
+- **Surfaced in.** P1.6 Slice A HOLD #1 investigation (Q-NEW-FF-A-6 finding); load-bearing decision for the slice.
+- **Current state.** P1.6 ships its own per-key merge + LRU. F04 cache and P1.6 cache are independent — F04's lifecycle-time invalidation does NOT reach P1.6 (the invalidation API is private to `@cortex/config-plane`). P1.6's TTL=30s passive expiry satisfies criterion 1 (30s propagation).
+- **Fix candidates.**
+  - **(a)** Extract P1.6's per-key merge logic into `@cortex/config-plane` as a new `resolveRecordConfig(client, tenantId, namespace) → Promise<Record<string, T>>` API that walks tiers + merges per-key + caches. Future consumers with record-shaped namespaces (UX01 theme tokens, IC02 i18n bundles, AC02 hierarchy schema) reuse it.
+  - **(b)** Expose F04's cache-invalidation surface to downstream consumers — let P1.6 register a callback that fires on `feature-flags` namespace promote/rollback. Reduces P1.6's TTL-bounded staleness from 30s to sub-second.
+  - **(c)** Defer until second consumer hits the same per-key merge pattern (matches ADR-DB-001 deferral precedent). P1.6 Slice A's ~30 LOC isn't load-bearing enough to justify abstraction now.
+- **Trigger.** Second consumer adopting record-shaped namespaces with per-key tier precedence (likely UX01 or IC02 in Phase 2 / N≥2 trigger).
+- **Effort estimate.** 2-4 hr to extract + migrate P1.6 + ship the new API. Candidate (a) is the cleanest abstraction; (b) is additive but smaller.
+- **References.** `packages/feature-flags/src/eval.ts` (current per-key merge implementation); `packages/config-plane/src/{cache,resolve}.ts` (F04 substrate the abstraction would extend); `docs/planning/feature-flags-slice-A-scope.md` (Q-NEW-FF-A-6 lock).
+- **Owner phase.** Operator-driven; first-consumer-driven extraction per ADR-DB-001 deferral precedent.
+
 ---
 
 ## 2. Operational triggers

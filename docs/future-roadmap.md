@@ -186,6 +186,33 @@ Updated whenever a deferral is added or revisited.
 - **References:** `services/foundation/migrations/0006_bi_temporal_ms_truncation.sql` (the no-µs-gap invariant); `services/foundation/migrations/0017_f03_scd_types_3_4_6.sql` (current trigger using `date_trunc('ms', now())`); `services/foundation/test/scd-policy-trigger.spec.ts` (test-fix workaround at `eaf6bf0`); `docs/planning/f03-slice-C-scope.md` (Slice C close).
 - **Owner phase:** Operator-driven; design ADR + implementation triggered by production signal or automation-density inflection.
 
+### 1.15 `cleanupConfigPlaneState` audit_event silent-swallow
+
+- **Symptom.** `cleanupConfigPlaneState`'s `DELETE FROM audit_event` hits the `audit_event` append-only trigger (SQLSTATE `2F002`). The helper's `.catch(() => undefined)` silently swallows the failure. Tests leak audit rows across runs; "no rows should exist" assertions surface false positives from prior tests' emissions for the same tenant.
+- **Workaround.** Test fixtures defensively filter by tenant + a test-unique payload field (e.g., `payload -> 'after_state' ->> 'from_draft_id' = $draftId`) + recency to scope queries to the current test's emissions. Documented in CLAUDE.md `### audit_event cleanup limitations` (under `## Database conventions`).
+- **Surfaced in.** F04 Slice D test development (PR #N — TBD; squash composition pending HOLD #3).
+- **Fix candidates.**
+  - **(a)** Helper logs a warning on DELETE failure (visible, not silent). Cheapest; doesn't fix the leak but makes it observable.
+  - **(b)** Helper uses TRUNCATE instead of DELETE (bypasses ROW triggers — Postgres fires STATEMENT-level on TRUNCATE). Requires `test_user` to hold TRUNCATE privilege on `audit_event`; production roles MUST NOT (per existing `### Append-only tables` posture). Schema-privilege analysis required.
+  - **(c)** Test-mode flag that disables the append-only trigger via `SET LOCAL` during cleanup, re-enables after. Requires careful trigger design + bash-script integration.
+- **Trigger.** When test isolation failures cause flaky CI runs OR when test count crosses a threshold making defensive-filter burden meaningful (current: 27 Slice D tests × ~1 audit-row-per-test averages ~30 rows leaked per test run; manageable at this scale).
+- **Effort estimate.** 1-2 hr investigation + fix + test; candidate (a) is cheapest; candidate (b) requires schema-privilege analysis.
+- **References:** `packages/config-plane/test/_utils/cleanup.ts` (the silent-swallow site); `packages/config-plane/test/impact-analysis.spec.ts` (the load-bearing block-path test that worked around the leak via `from_draft_id` filtering); CLAUDE.md `### audit_event cleanup limitations`.
+- **Owner phase:** Operator-driven; address when test-flake or audit-leak discovery becomes operationally noisy.
+
+### 1.16 Single-consumer-per-namespace registry constraint
+
+- **Symptom.** F04's consumer registry is keyed by namespace alone (one consumer per namespace). Calling `registerConfigConsumer` for an existing namespace OVERWRITES the prior registration (the underlying `Map<string, ConsumerEntry>` `.set()` is overwrite-semantic). Phase 2 use cases (e.g., a frontend widget AND a backend service both reading `tenant.theme` for impact-analysis purposes) will need multi-consumer-per-namespace.
+- **Surfaced in.** F04 Slice D test design — multi-consumer-aggregation tests had to be reframed as single-consumer-multi-axis (one consumer with `key_removed` + `schema_incompatible` + `policy_block` simultaneously). The architectural framing is documented in `getImpactEligibleConsumers`'s JSDoc: "Phase 1 supports a single registered consumer per logical namespace ... Returning an array preserves API forward-compat: when multi-consumer-per-namespace registration ships ... this helper's signature doesn't change."
+- **Fix candidates.**
+  - **(a)** Change registry shape to keyed by `(namespace, consumerModule)` tuple; multiple consumers per namespace coexist. Requires reconciling the existing single-key API surface.
+  - **(b)** Keep namespace-keyed but add a `registerAdditionalConsumer(namespace, consumer)` helper that appends to a list per namespace. Backward-compat preserves single-consumer flow; opt-in extension for multi.
+  - **(c)** Defer until first consumer hits the constraint with a concrete second-consumer use case (matches ADR-DB-001's deferral pattern).
+- **Trigger.** First Phase 2 consumer asks for multi-consumer-per-namespace. Likely candidates: when both an admin UI and a runtime worker both register against the same namespace for impact-analysis purposes.
+- **Effort estimate.** 2-4 hr API change + migration of existing Phase 1 consumers + test updates. Candidate (b) is cheapest; (a) is structurally cleaner but more invasive.
+- **References:** `packages/config-plane/src/consumer-registry.ts` (`getImpactEligibleConsumers` JSDoc; the `Map` keyed on namespace); `packages/config-plane/test/impact-analysis.spec.ts` (multi-axis-not-multi-consumer test framing).
+- **Owner phase:** Operator-driven; first-consumer-driven per the ADR-DB-001 deferral precedent.
+
 ---
 
 ## 2. Operational triggers

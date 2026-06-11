@@ -16,13 +16,13 @@
 
 ### `tenant.scd` namespace + hardcoded Type 2 fallback
 
-Per Q-NEW-F03C-2 lock: SCD policies live in F04's `tenant.scd` namespace. **No `platform.scd`** — F04's substrate is per-tenant only (D14 ships `platform → tenant` resolution but both tiers are per-tenant rows; no cross-tenant slot exists for a platform-default row). The trigger's hardcoded Type 2 default IS the cross-tenant default.
+Per Q-NEW-F03C-2 lock: SCD policies live in F04's `tenant.scd` namespace. **No `platform.scd`** - F04's substrate is per-tenant only (D14 ships `platform → tenant` resolution but both tiers are per-tenant rows; no cross-tenant slot exists for a platform-default row). The trigger's hardcoded Type 2 default IS the cross-tenant default.
 
 **Forward-compat exit criterion:** if future F04 substrate work adds NULL-`tenant_id` support OR a separate `platform_config` table + RLS carve-out, the trigger's hardcoded Type 2 fallback can be replaced with a DB-driven default lookup. Slice C's trigger keeps the default-path isolated and replaceable for that future work.
 
 ### "Trigger trusts validated JSONB" anti-pattern
 
-The trigger does NOT re-validate JSONB shape on every UPDATE/DELETE. Zod validation runs at promote-time via F04 lifecycle (`promoteDraft` defensively re-validates per Q-NEW-F04B-6). Once promoted, the JSONB in `tenant_config_version` is trusted — the trigger reads `entity_policy ->> 'type'` directly without re-checking shape.
+The trigger does NOT re-validate JSONB shape on every UPDATE/DELETE. Zod validation runs at promote-time via F04 lifecycle (`promoteDraft` defensively re-validates per Q-NEW-F04B-6). Once promoted, the JSONB in `tenant_config_version` is trusted - the trigger reads `entity_policy ->> 'type'` directly without re-checking shape.
 
 **Anti-pattern:** bypassing F04 lifecycle to mutate `tenant_config_version` directly via raw SQL. The trigger will read whatever's there and may dispatch to a malformed code path. **Always go through `createDraft → validateDraft → promoteDraft` for SCD policy changes.**
 
@@ -34,7 +34,7 @@ The trigger's policy lookup queries `tenant_config_version` which is RLS-bound (
 
 ### Schema-version mutation rule
 
-Per Q-NEW-F03C-7e: schema versions registered via `registerNamespaceSchema(namespace, schema, { version })` **can be mutated in-place when no production drafts pin to them**. Bump the version only when (a) active drafts exist that would invalidate against the new shape, OR (b) the change would invalidate registered consumers. Slice C C.3's tightening of Types 3/4/6 from placeholder to locked shapes was an in-place v=1 mutation — safe because zero production drafts currently pin to v=1.
+Per Q-NEW-F03C-7e: schema versions registered via `registerNamespaceSchema(namespace, schema, { version })` **can be mutated in-place when no production drafts pin to them**. Bump the version only when (a) active drafts exist that would invalidate against the new shape, OR (b) the change would invalidate registered consumers. Slice C C.3's tightening of Types 3/4/6 from placeholder to locked shapes was an in-place v=1 mutation - safe because zero production drafts currently pin to v=1.
 
 This rule applies workspace-wide; F04's `registerNamespaceSchema` precedent (`@cortex/config-plane/src/schema-registry.ts`) governs the registry, but the mutation policy is owned at the slice-author level.
 
@@ -50,15 +50,15 @@ Caller-managed = consumer's migration creates the sibling columns / history tabl
 
 ### Future-notes
 
-- **Type 7 (multi-column previous-value-only)** — canonical SCD has 5 types (1, 2, 3, 4, 6); Type 5 is a deprecated label. A hypothetical Type 7 = multi-column previous-value capture WITHOUT row rotation (Type 3 across multiple columns). Ship if a first consumer needs multi-column previous-value tracking without row history (currently Type 6 covers this case but couples to row rotation). First-consumer-driven per ADR-DB-001 deferral pattern.
-- **F04 `validateDraft` Type 4 history-table existence check** — cross-module enhancement; would let promote fail-fast at lifecycle-time instead of trigger raising at first UPDATE. Implementation: F03 Slice C registers a validate-hook with `@cortex/config-plane`; hook is called from `validateDraft` for `tenant.scd` namespace drafts.
-- **Cross-tenant DB-driven default** — F04 substrate work to support NULL `tenant_id` + RLS carve-out, OR a separate `platform_config` table. Would replace the trigger's hardcoded Type 2 fallback with a DB-driven default. Tracked in slice scope doc as forward-compat exit criterion.
+- **Type 7 (multi-column previous-value-only)** - canonical SCD has 5 types (1, 2, 3, 4, 6); Type 5 is a deprecated label. A hypothetical Type 7 = multi-column previous-value capture WITHOUT row rotation (Type 3 across multiple columns). Ship if a first consumer needs multi-column previous-value tracking without row history (currently Type 6 covers this case but couples to row rotation). First-consumer-driven per ADR-DB-001 deferral pattern.
+- **F04 `validateDraft` Type 4 history-table existence check** - cross-module enhancement; would let promote fail-fast at lifecycle-time instead of trigger raising at first UPDATE. Implementation: F03 Slice C registers a validate-hook with `@cortex/config-plane`; hook is called from `validateDraft` for `tenant.scd` namespace drafts.
+- **Cross-tenant DB-driven default** - F04 substrate work to support NULL `tenant_id` + RLS carve-out, OR a separate `platform_config` table. Would replace the trigger's hardcoded Type 2 fallback with a DB-driven default. Tracked in slice scope doc as forward-compat exit criterion.
 
 **Cross-refs:**
 
 - `docs/planning/f03-slice-C-scope.md` (Slice C scope; Q-NEW-F03C-1-7 locks)
 - `docs/planning/f03-temporal-data-engine-scope.md` (F03 module scope; multi-phase close timeline)
-- `services/foundation/migrations/0016_f03_scd_policy_aware_trigger.sql` (trigger rewrite — Types 1/2 + stubs)
+- `services/foundation/migrations/0016_f03_scd_policy_aware_trigger.sql` (trigger rewrite - Types 1/2 + stubs)
 - `services/foundation/migrations/0017_f03_scd_types_3_4_6.sql` (full Types 3/4/6 implementations)
 - `packages/temporal-query/src/scd-policy.ts` (Zod schema + namespace registration)
 - `services/foundation/test/scd-policy-trigger.spec.ts` (16 per-type behavior tests + F04 lifecycle integration)

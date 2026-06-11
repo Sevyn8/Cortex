@@ -8,7 +8,7 @@ Commit shape: `chore(<scope>): wip <description>`
 
 - Type MUST be one of the commitlint-allowed types (`feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `ops` / `perf` / `style` / `build` / `ci` / `revert`). `wip` is NOT an allowed type and will be rejected by commitlint with `type-enum`.
 - Subject body MUST be lowercase even for module IDs (`D.1-D.4` fails `subject-case`; `d.1-d.4` passes).
-- Body documents the WIP state (what's done, what's pending, self-verify status — pre-existing-tests passing, typecheck clean, etc.).
+- Body documents the WIP state (what's done, what's pending, self-verify status - pre-existing-tests passing, typecheck clean, etc.).
 - DO NOT push the WIP commit; it lives on the local slice branch only and squashes into the final `feat(...)` at HOLD #3 composition.
 
 Example:
@@ -24,4 +24,4 @@ composition. Working tree state is verifiable:
   ...
 ```
 
-Lesson surfaced PR #N (Slice D HOLD #2): operator's draft used `wip(...)` as the type and uppercase `D.1-D.4` in the subject — both rejected by commitlint. The fix retained body verbatim with type=`chore` + lowercase subject.
+Lesson surfaced PR #N (Slice D HOLD #2): operator's draft used `wip(...)` as the type and uppercase `D.1-D.4` in the subject - both rejected by commitlint. The fix retained body verbatim with type=`chore` + lowercase subject.

@@ -23,12 +23,14 @@ Co-founded by Seema Prasad Avasarala.
 Seema's documents share a distinctive voice. Follow these principles in all output:
 
 ### Tone
+
 - **Confident, not boastful.** State capabilities as facts. No superlatives ("best-in-class", "world-leading"). No marketing fluff.
 - **Technical depth with strategic clarity.** Every technical detail should connect to a business outcome. Never technical for its own sake.
 - **Direct and lean.** Short sentences. No filler paragraphs. Every sentence earns its place.
 - **Builder's voice.** Written by someone who has built the thing, not by someone describing it from outside.
 
 ### Structure
+
 - Lead with the problem or opportunity, not with Sevyn8.
 - Use comparison tables to make arguments concrete (Cloud vs Edge, Before vs After, Current vs Evolved).
 - Use numbered sections with clear hierarchy.
@@ -36,6 +38,7 @@ Seema's documents share a distinctive voice. Follow these principles in all outp
 - Internal documents are leaner — skip the formalities, get to the argument.
 
 ### Words to use
+
 - "Intelligence layer", "decisioning", "compounding learning", "fleet orchestration"
 - "Invisible Intelligence" (for in-store recognition — staff never reveals the technology)
 - "Hardware-agnostic", "SoC-agnostic", "edge-native"
@@ -43,12 +46,14 @@ Seema's documents share a distinctive voice. Follow these principles in all outp
 - "The Android of Edge AI" (sparingly, in positioning contexts)
 
 ### Words to avoid
+
 - "Cutting-edge", "revolutionary", "game-changing", "disruptive"
 - "Leverage", "synergy", "holistic"
 - "Solution" as a standalone noun (say what the solution actually is)
 - "AI-powered" as a generic modifier (be specific about which AI does what)
 
 ### Formatting
+
 - Dark navy + accent green palette for slide decks and branded documents.
 - Tables over bullet points when comparing options.
 - Diagrams and architecture visuals over long prose when explaining systems.
@@ -61,6 +66,7 @@ Seema's documents share a distinctive voice. Follow these principles in all outp
 These four relationships form one value chain. Body Shop is the gate for everything else.
 
 ### 1. The Body Shop India (Quest Retail) — Demand Proof Point
+
 - **Status:** Principally agreed POC. ₹19L, 12 weeks, 3 stores.
 - **Solution:** Know Your Skin (browser PWA skin analysis via Face++) + In-store recognition (ArcFace edge matching) + Cortex intelligence.
 - **Production URL:** https://know-your-skin-rho.vercel.app/
@@ -68,20 +74,24 @@ These four relationships form one value chain. Body Shop is the gate for everyth
 - **Documents produced:** Multiple proposal iterations, React demo app, 200+ SKU product knowledge base.
 
 ### 2. Display Data (Ithina) — Channel Partner
+
 - **Solution:** Ithina strategic intelligence platform. React Native HHT app + DIS Phase 1.
 - **Architecture:** ROOS path + Direct/ScanLink path. Kafka event bus. 4 AI agents (PAC, Promotion, Planogram, Perishable).
 - **Pricing:** Phase 1 at ₹15L / USD 16,870.
 
 ### 3. VMukti — Infrastructure/Distribution Partner
+
 - **Context:** 18-year VMS company, 900+ deployments, 142K+ cameras, STQC-certified VMS.
 - **Five partnership models:** Edge AI licensing, STQC chipset rescue (Ambicam), joint retail, brownfield upgrade, white-label for govt tenders.
 - **Key economics:** ~51% 3-year TCO savings edge vs cloud. PoC at ₹15-25L NRE.
 - **Strategic value:** Distribution, hardware validation, government credibility, first domino for CP Plus/Matrix/Prama/Sparsh.
 
 ### 4. Nash Industries — OEM Hardware Partner
+
 - Hardware company manufacturing edge boxes. Sevyn8 provides intelligence layer.
 
 ### 5. Swiss Re (via Ensuredit brand) — Reinsurance Vertical
+
 - **Brand:** Ensuredit Technologies Private Limited (not Sevyn8-branded).
 - **Solution:** Cortex for reinsurance — bordereaux auto-mapping, SOV processing, entity resolution across cedants, accumulation monitoring, loss event response.
 - **Key example:** Tokyo Tower resolved across 5 cedants in 5 formats.
@@ -92,6 +102,7 @@ These four relationships form one value chain. Body Shop is the gate for everyth
 ## Platform Architecture Reference
 
 ### Cortex (Cloud Intelligence Platform)
+
 - Multi-tenant, multi-industry on GCP (Cloud SQL, BigQuery, GCS, Pub/Sub, GKE Autopilot).
 - 61 modules, 17 architectural layers, 5 deployment phases, 360 functional requirements.
 - PostgreSQL 15+ primary DB, bi-temporal columns on every table, row-level security.
@@ -100,6 +111,7 @@ These four relationships form one value chain. Body Shop is the gate for everyth
 - White-label ready. DPDP & GDPR compliant.
 
 ### DIS (Data Ingestion Service)
+
 - 10-state machine, 7-stage pipeline.
 - Bronze/Silver/Gold medallion architecture.
 - GCP-native: Eventarc, Cloud Run, Cloud Tasks.
@@ -107,6 +119,7 @@ These four relationships form one value chain. Body Shop is the gate for everyth
 - Handles 1.5M daily events.
 
 ### Edge Hardware
+
 - Three tiers: Nano, Pro, Cluster.
 - Recommended: AGX Orin HUB + Hailo worker nodes.
 - TPM 2.0, Secure Element, hardware crypto.
@@ -140,6 +153,7 @@ Post April 1, 2026 STQC mandate: Chinese vendors (HiSilicon/Ingenic chipsets) lo
 When asked to produce Sevyn8 work, follow these patterns:
 
 ### Proposals & Client Documents
+
 1. Read this skill fully before writing.
 2. Match the voice and structure described above.
 3. Always include: clear problem statement, concrete economics (tables with numbers), phased engagement structure, what Sevyn8 expects from the partner.
@@ -147,30 +161,36 @@ When asked to produce Sevyn8 work, follow these patterns:
 5. Mark as CONFIDENTIAL where appropriate.
 
 ### Pitch Deck Content
+
 1. Dark navy + accent green palette.
 2. 9-slide structure: Why AI at Edge → Why Now → TAM/SAM/SOM → Solution → GTM Strategy → Financials → Use of Funds → Team → Ask.
 3. TAM/SAM/SOM: $48.6B → $7.2B → $850M.
 4. Never show Sevyn8 as a camera company. Always show as platform/intelligence layer.
 
 ### Technical Specifications
+
 1. Use module IDs (F01, D01, I01, etc.) consistent with the master spec.
 2. Include functional requirement numbering (F01-FR-001 pattern).
 3. Always specify: Phase, Complexity, Dependencies, Depended On By.
 4. Bi-temporal columns on every data table. RLS on every tenant-scoped table.
 
 ### Emails & Communications
+
 1. Brief, direct, no pleasantries beyond one line.
 2. Lead with what you need from the recipient or what you're delivering.
 3. Close with a specific next step and timeline.
 
 ### Internal Strategy Documents
+
 1. State the recommendation upfront.
 2. Provide the reasoning, not just the conclusion.
 3. Include what was considered and rejected.
 4. End with specific next actions.
 
 ### File Organisation
+
 When organising Sevyn8 files, use this structure:
+
 ```
 sevyn8/
 ├── clients/

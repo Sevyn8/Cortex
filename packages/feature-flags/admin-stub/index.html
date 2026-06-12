@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -204,7 +204,8 @@
           tdType.textContent = type;
           const tdValue = document.createElement('td');
           tdValue.textContent = String(value);
-          tdValue.className = value === true ? 'flag-value-true' : value === false ? 'flag-value-false' : '';
+          tdValue.className =
+            value === true ? 'flag-value-true' : value === false ? 'flag-value-false' : '';
           tr.appendChild(tdKey);
           tr.appendChild(tdType);
           tr.appendChild(tdValue);

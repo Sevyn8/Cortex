@@ -307,7 +307,7 @@ The substrate is clean. The architectural choice for domains is therefore a _for
 
 - Each domain has table-scoped indexes that match its access pattern (IoT time-series indexes, retail business-key indexes, logistics geospatial indexes).
 - Storage migrations per-domain are tractable: when smart-home telemetry outgrows OLTP Postgres, only `smarthome_*` tables move (to TimescaleDB or a separate Postgres, with a connection-string switch in the smart-home service).
-- Investor / partnership questions answer cleanly: _"all our retail tables are prefixed `retail_`; here's the list."_
+- Investor / partnership questions answer cleanly: _"all our retail tables are prefixed `retail_`; here's the list."\_
 - Tenant separation (RLS) still applies — domain separation is _additive_, not _substitutive_.
 
 **Con:**

@@ -16,6 +16,8 @@ Swimlanes:
 
 Repos (logical name equals actual repo): Cortex equals `Cortex` (this repo; Amit's new TS platform services, salvaged packages, edge; tagged v2-final first); DIS equals `ithina-retail-dis` (Amit); CM equals `ithina-retail-admin-backend` plus its companions `ithina-retail-admin-infra` and `admin-frontend` (Sanjeev); contracts equals a repo not yet created, stood up in Phase R (shared, language-neutral). CODEOWNERS per repo enforces the swimlanes. Repo-naming reconciliation and the full actual-to-logical map are tracked in reconciliation.md section 7.
 
+Infrastructure model: three layers (foundation, then per-product services, then cross-product contracts), applied in the order foundation, CM, DIS, platform services (see docs/runbooks/deploy-order.md). The cross-product topology is an open decision in ADR-INFRA-008 (Proposed): one common platform project, or keep the three isolated projects plus a thin shared-services project for the spine, or keep three projects with the spine in DIS; the choice is joint with Sanjeev at GR and weighs isolation against convenience ahead of the BFSI review. Regardless of option, repos stay separate with CODEOWNERS and cross-stack consumption is by name, never terraform_remote_state. Today the three products are separate per-product projects (see docs/architecture/infra-shared-resource-register.md).
+
 UI collision rule: Amit owns onboarding, dashboards, and queue screens; Sanjeev owns admin, compliance, and audit screens; shared components only via the archetype library.
 
 ## 2. Phase plan

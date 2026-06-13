@@ -201,3 +201,5 @@ DIS's own README expands the acronym as "Data Integration System", while some Se
 ### 7.5 Pre-v3 docs queued for Phase R
 
 `docs/future-roadmap.md` (104 KB) and `docs/deviations.md` predate v3 and are queued for reconciliation against `docs/spec/v3/plan.md` during Phase R. Until that reconciliation lands, where they conflict with the v3 package, the v3 package governs.
+
+`docs/integrations/roos-interface.md` is stale per ADR-SCOPE-010: it frames Cortex as a Kafka consumer of ROOS under the superseded ADR-SCOPE-009 (and still lists ADR-SCOPE-009 as its Governing ADR). Phase R disposition: retire it, or rewrite it as a DIS front-door contract with the Governing ADR updated to ADR-SCOPE-010.

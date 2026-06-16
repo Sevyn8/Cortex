@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+
+/*
+ * Theme tokens as CSS variables (per CLAUDE.md: Tailwind 4 with CSS vars for
+ * theming). Dark navy plus accent green base palette. Tenant theme tokens
+ * (resolution order engine, then pack, then tenant per V3-UX01-FR-001) layer
+ * over these later; expanded into the design-system token set in a later prompt.
+ */
+@theme {
+  --color-navy-900: #0a1628;
+  --color-navy-700: #16243b;
+  --color-accent-green: #3ddc97;
+}
+
+:root {
+  --background: var(--color-navy-900);
+  --foreground: #e6edf5;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}

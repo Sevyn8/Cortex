@@ -1,12 +1,13 @@
-# CODEOWNERS — Cortex monorepo
+# CODEOWNERS, Cortex monorepo
 #
 # Swimlanes (docs/spec/v3 plan.md): Cortex (this repo, TS) is Amit's value
 # swimlane. Identity, RBAC vocabulary, RLS, the action ledger, the policy gate,
 # and the canonical contracts are Customer Master's (Sanjeev) and live in their
 # own repo / the contracts repo, not here.
-#
-# NOTE: confirm the exact owner handle/team slug for @Sevyn8/cortex.
 
 # CAC app surfaces (insurance vertical; ADR-CAC-001)
-/packages/cac-types/            @Sevyn8/cortex
-/apps/admin-console/app/cac/    @Sevyn8/cortex
+/packages/cac-types/            @amitboni
+/apps/admin-console/app/cac/    @amitboni
+
+# CAC v3 spec docs
+/docs/spec/v3/cac/insurance-cac-funnel-stages.md    @amitboni

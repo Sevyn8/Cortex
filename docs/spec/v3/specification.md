@@ -264,7 +264,7 @@ ED01 and ED02 v2.2 FRs apply within the Cortex repo. V3-ED-FR-001 Edge deploymen
 ### 12.2 V3-INS Insurance Distribution pack v0.1. NEW. Phase 2.
 
 V3-INS-FR-001 Canonical entities (Tier 2 over the core ontology): Lead, Quote, Proposal, Policy, InsurerFeedRecord, Interaction (call, message, visit), Campaign, Agent or Telecaller (referencing CM identities), with PII classification per field.
-V3-INS-FR-002 Funnel stages: lead received, contacted, qualified, quoted, proposal submitted, payment, issued; stage transitions are spine facts enabling funnel analytics.
+V3-INS-FR-002 Funnel stages (ratified 8-stage model, defined canonically in docs/spec/v3/cac/insurance-cac-funnel-stages.md): impression, click, lead, contact, qualified, quote, policy, retained at 13 months (derived); stage transitions are spine facts enabling funnel analytics. This supersedes the prior 7-stage list (lead received, contacted, qualified, quoted, proposal submitted, payment, issued); see ADR-CAC-002. The stage list is pack content (Tier 2), not engine code (invariant 2); shared types carry only the neutral stage shape.
 V3-INS-FR-003 KPI definitions SHALL include: CAC equals attributable acquisition spend divided by issued policies, computed per channel, campaign, product, and period; junk-lead rate; speed-to-lead; quote-to-issue conversion; renewal rate placeholder.
 V3-INS-FR-004 Quarantine rules: invalid mobile, duplicate within configurable window, blacklist, malformed insurer rows; each rule testable against fixtures.
 V3-INS-FR-005 Scoring rules v1 (A06 format): source quality, product intent, recency, contactability, callback request; weights tenant-tunable within pack bounds.

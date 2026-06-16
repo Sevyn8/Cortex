@@ -1,0 +1,41 @@
+name: ci-cac
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cac-gate:
+    name: Gate CAC packages (build, typecheck, lint, format)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm exec turbo run build --filter=@cortex/cac-types --filter=@cortex/admin-console
+
+      - name: Typecheck
+        run: pnpm exec turbo run typecheck --filter=@cortex/cac-types --filter=@cortex/admin-console
+
+      - name: Lint
+        run: pnpm exec turbo run lint --filter=@cortex/cac-types --filter=@cortex/admin-console
+
+      - name: Format check
+        run: pnpm exec prettier --check packages/cac-types apps/admin-console

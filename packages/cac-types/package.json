@@ -1,0 +1,31 @@
+{
+  "name": "@cortex/cac-types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CAC funnel, measurement, and insurance-pack (V3-INS) domain types, plus the contracts-generated types seam.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./generated": {
+      "types": "./dist/generated/index.d.ts",
+      "default": "./dist/generated/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "echo \"no tests yet\" && exit 0"
+  }
+}

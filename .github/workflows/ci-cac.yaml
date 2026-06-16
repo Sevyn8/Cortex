@@ -29,13 +29,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm exec turbo run build --filter=@cortex/cac-types --filter=@cortex/admin-console
+        run: pnpm exec turbo run build --filter=@cortex/cac-types --filter=@cortex/funnel-economics --filter=@cortex/admin-console
 
       - name: Typecheck
-        run: pnpm exec turbo run typecheck --filter=@cortex/cac-types --filter=@cortex/admin-console
+        run: pnpm exec turbo run typecheck --filter=@cortex/cac-types --filter=@cortex/funnel-economics --filter=@cortex/admin-console
 
       - name: Lint
-        run: pnpm exec turbo run lint --filter=@cortex/cac-types --filter=@cortex/admin-console
+        run: pnpm exec turbo run lint --filter=@cortex/cac-types --filter=@cortex/funnel-economics --filter=@cortex/admin-console
+
+      - name: Test
+        run: pnpm exec turbo run test --filter=@cortex/funnel-economics
 
       - name: Format check
-        run: pnpm exec prettier --check packages/cac-types apps/admin-console
+        run: pnpm exec prettier --check packages/cac-types packages/funnel-economics apps/admin-console

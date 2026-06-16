@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   cac-gate:
-    name: Gate CAC packages (build, typecheck, lint, test, format)
+    name: Gate CAC packages (build, typecheck, lint, format)
     runs-on: ubuntu-latest
 
     steps:

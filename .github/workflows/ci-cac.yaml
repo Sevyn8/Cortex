@@ -3,10 +3,6 @@ name: ci-cac
 on:
   pull_request:
     branches: [main]
-    paths:
-      - packages/cac-types/**
-      - apps/admin-console/**
-      - .github/workflows/**
 
 permissions:
   contents: read

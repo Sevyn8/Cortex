@@ -14,12 +14,6 @@
  * For `allocated`/`fixed` lines the `stage` is nominal (the primitive spreads by
  * basis, not by the assigned stage); the three section-2 cross-stage overhead
  * lines (C059, C060, C084) are spread across all stages this way.
- *
- * Field naming: `leakageFlag` is camelCase here because it is inherited from the
- * shared `CostLineInput` type in @cortex/funnel-economics. The neutral pack
- * contract is snake_case, so it serializes to `leakage_flag`. Normalizing it at
- * source would mean diverging from the shared type, so it stays as-is until the
- * shared type is changed (a separate, scoped change to @cortex/funnel-economics).
  */
 import type { CostLineInput } from '@cortex/funnel-economics';
 
@@ -35,10 +29,10 @@ export const INSURANCE_COST_ONTOLOGY: CostLineAssignment[] = [
   { id: 'C011', stage: 'impression', mode: 'allocated', basis: 'equal' },
   { id: 'C015', stage: 'impression', mode: 'direct' },
   { id: 'C017', stage: 'impression', mode: 'allocated', basis: 'equal' },
-  { id: 'C073', stage: 'impression', mode: 'allocated', basis: 'equal', leakageFlag: true },
-  { id: 'C078', stage: 'impression', mode: 'direct', leakageFlag: true },
-  { id: 'C079', stage: 'impression', mode: 'direct', leakageFlag: true },
-  { id: 'C080', stage: 'impression', mode: 'direct', leakageFlag: true },
+  { id: 'C073', stage: 'impression', mode: 'allocated', basis: 'equal', leakage_flag: true },
+  { id: 'C078', stage: 'impression', mode: 'direct', leakage_flag: true },
+  { id: 'C079', stage: 'impression', mode: 'direct', leakage_flag: true },
+  { id: 'C080', stage: 'impression', mode: 'direct', leakage_flag: true },
 
   // Stage 2: Click (direct plus allocated)
   { id: 'C001', stage: 'click', mode: 'direct' },
@@ -54,8 +48,8 @@ export const INSURANCE_COST_ONTOLOGY: CostLineAssignment[] = [
   { id: 'C018', stage: 'click', mode: 'allocated', basis: 'equal' },
   { id: 'C020', stage: 'click', mode: 'fixed', basis: 'equal' },
   { id: 'C021', stage: 'click', mode: 'fixed', basis: 'equal' },
-  { id: 'C070', stage: 'click', mode: 'direct', leakageFlag: true },
-  { id: 'C072', stage: 'click', mode: 'allocated', basis: 'equal', leakageFlag: true },
+  { id: 'C070', stage: 'click', mode: 'direct', leakage_flag: true },
+  { id: 'C072', stage: 'click', mode: 'allocated', basis: 'equal', leakage_flag: true },
 
   // Stage 3: Lead (per leads)
   { id: 'C008', stage: 'lead', mode: 'direct' },
@@ -68,18 +62,18 @@ export const INSURANCE_COST_ONTOLOGY: CostLineAssignment[] = [
   { id: 'C042', stage: 'lead', mode: 'direct' },
   { id: 'C043', stage: 'lead', mode: 'direct' },
   { id: 'C055', stage: 'lead', mode: 'fixed', basis: 'equal' },
-  { id: 'C085', stage: 'lead', mode: 'direct', leakageFlag: true },
+  { id: 'C085', stage: 'lead', mode: 'direct', leakage_flag: true },
 
   // Stage 4: Contact (per leads)
   { id: 'C028', stage: 'contact', mode: 'direct' },
   { id: 'C075', stage: 'contact', mode: 'direct' },
 
   // Stage 5: Qualified (per qualified)
-  { id: 'C046', stage: 'qualified', mode: 'direct', leakageFlag: true },
+  { id: 'C046', stage: 'qualified', mode: 'direct', leakage_flag: true },
   { id: 'C047', stage: 'qualified', mode: 'direct' },
   { id: 'C048', stage: 'qualified', mode: 'direct' },
   { id: 'C049', stage: 'qualified', mode: 'fixed', basis: 'equal' },
-  { id: 'C056', stage: 'qualified', mode: 'direct', leakageFlag: true },
+  { id: 'C056', stage: 'qualified', mode: 'direct', leakage_flag: true },
 
   // Stage 6: Quote (per qualified or per quote)
   { id: 'C029', stage: 'quote', mode: 'direct' },
@@ -100,12 +94,12 @@ export const INSURANCE_COST_ONTOLOGY: CostLineAssignment[] = [
   { id: 'C062', stage: 'policy', mode: 'direct' },
   { id: 'C063', stage: 'policy', mode: 'direct' },
   { id: 'C076', stage: 'policy', mode: 'fixed', basis: 'equal' },
-  { id: 'C077', stage: 'policy', mode: 'direct', leakageFlag: true },
+  { id: 'C077', stage: 'policy', mode: 'direct', leakage_flag: true },
 
   // Stage 8: Retained at 13m (per retained customers)
-  { id: 'C052', stage: 'retained_13m', mode: 'fixed', basis: 'equal', leakageFlag: true },
-  { id: 'C071', stage: 'retained_13m', mode: 'direct', leakageFlag: true },
-  { id: 'C074', stage: 'retained_13m', mode: 'direct', leakageFlag: true },
+  { id: 'C052', stage: 'retained_13m', mode: 'fixed', basis: 'equal', leakage_flag: true },
+  { id: 'C071', stage: 'retained_13m', mode: 'direct', leakage_flag: true },
+  { id: 'C074', stage: 'retained_13m', mode: 'direct', leakage_flag: true },
 
   // Section 2: cross-stage overhead, spread across all stages (stage nominal)
   { id: 'C059', stage: 'impression', mode: 'fixed', basis: 'equal' },

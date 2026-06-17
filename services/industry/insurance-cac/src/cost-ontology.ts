@@ -14,6 +14,12 @@
  * For `allocated`/`fixed` lines the `stage` is nominal (the primitive spreads by
  * basis, not by the assigned stage); the three section-2 cross-stage overhead
  * lines (C059, C060, C084) are spread across all stages this way.
+ *
+ * Field naming: `leakageFlag` is camelCase here because it is inherited from the
+ * shared `CostLineInput` type in @cortex/funnel-economics. The neutral pack
+ * contract is snake_case, so it serializes to `leakage_flag`. Normalizing it at
+ * source would mean diverging from the shared type, so it stays as-is until the
+ * shared type is changed (a separate, scoped change to @cortex/funnel-economics).
  */
 import type { CostLineInput } from '@cortex/funnel-economics';
 

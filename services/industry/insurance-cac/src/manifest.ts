@@ -14,7 +14,7 @@ export const packManifestSchema = z
   .object({
     id: z.string().min(1),
     version: z.string().regex(/^\d+\.\d+\.\d+$/, 'version must be SemVer (V3-PACK-FR-002)'),
-    engineCompat: z.string().min(1),
+    engine_compat: z.string().min(1),
     signature: z
       .object({
         signed: z.boolean(),
@@ -29,7 +29,7 @@ export const PACK_MANIFEST = {
   id: 'insurance-cac',
   version: '0.1.0',
   /** SemVer range of compatible engines. Provisional until the engine-compat contract is fixed. */
-  engineCompat: '>=0.1.0 <0.2.0',
+  engine_compat: '>=0.1.0 <0.2.0',
   signature: {
     signed: false,
     algorithm: null,

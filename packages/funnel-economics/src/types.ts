@@ -30,7 +30,7 @@ export interface CostLineInput extends Partial<GroupingDimensions> {
   mode: AllocationMode;
   /** Required when `mode` is `allocated` or `fixed`. */
   basis?: AllocationBasis;
-  leakageFlag?: boolean;
+  leakage_flag?: boolean;
 }
 
 /**

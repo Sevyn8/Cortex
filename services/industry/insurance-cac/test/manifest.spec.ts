@@ -10,8 +10,8 @@ describe('pack manifest carries the required V3-PACK-FR-001 skeleton fields', ()
     const m = validateManifest();
     expect(m.id).toBe('insurance-cac');
     expect(m.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(typeof m.engineCompat).toBe('string');
-    expect(m.engineCompat.length).toBeGreaterThan(0);
+    expect(typeof m.engine_compat).toBe('string');
+    expect(m.engine_compat.length).toBeGreaterThan(0);
     expect(PACK_MANIFEST.signature.signed).toBe(false);
   });
 
@@ -23,7 +23,7 @@ describe('pack manifest carries the required V3-PACK-FR-001 skeleton fields', ()
     const withoutSignature: Record<string, unknown> = {
       id: PACK_MANIFEST.id,
       version: PACK_MANIFEST.version,
-      engineCompat: PACK_MANIFEST.engineCompat,
+      engine_compat: PACK_MANIFEST.engine_compat,
     };
     expect(() => packManifestSchema.parse(withoutSignature)).toThrow();
   });

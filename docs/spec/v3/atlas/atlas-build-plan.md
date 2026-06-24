@@ -26,7 +26,7 @@ Acceptance: author retail's IR by transcribing the live `dis-canonical` models; 
 Goal: DIS can host more than one vertical's canonical tables. Generalize the sink lookup from model-to-table to (vertical, template_type)-to-table; create and target the `canonical_<vertical>` schema namespace; the streaming consumer and daily-compute write to the right namespace for a tenant's vertical.
 Lands in: DIS.
 Depends on: A1 (the generator emits the namespaced DDL). The tenant-to-vertical resolution can be stubbed until A5.
-Acceptance: retail continues to ingest unchanged with its tables now addressed as `canonical_retail.*`; a second empty namespace can be created from a generated migration without touching retail.
+Acceptance: retail continues to ingest unchanged in its existing `canonical.*` namespace (no rename); a second namespace `canonical_<vertical>.*` can be created from a generated migration without touching retail.
 
 ### A3. Inference (CSVs to draft IR)
 

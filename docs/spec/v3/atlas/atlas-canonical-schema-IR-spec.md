@@ -163,6 +163,6 @@ tables:
 2. CM role vocabulary (`atlas:schema:publish`) and the home of the tenant-to-vertical binding. Sanjeev.
 3. Finding 4: the per-vertical entity-key identity-mirror counterpart in CM. Hard gate for the first new vertical. Sanjeev.
 4. Inference approach (LLM-assisted header union plus type inference) and how much trust it carries, given the curated layer always requires ratify.
-5. Header-file representativeness: how many and how representative the exports must be, and how to treat a field present in some exports but not others.
+5. Header-file representativeness: how many and how representative the exports must be, and how to treat a field present in some exports but not others. Recorded rule for A3 (v0): union headers across the sample CSVs; a field present in some but not all files is proposed nullable with mandatory left to ratify; per-field presence (N-of-M files) and the sample size (file count, rows profiled per column) are recorded in provenance so a thin one-file inference is visibly distinguishable from a well-grounded one; no hard minimum file count in v0.
 6. `system_profile` versioning: how a mixin change (the separate platform-level path) interacts with already-published per-vertical versions.
 7. Labels activation: confirm `display_name`/`description`/`section` are authored-then-ratified in A4, with retail's existing labels standing until then.

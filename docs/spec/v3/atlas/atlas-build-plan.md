@@ -32,6 +32,7 @@ Acceptance: retail continues to ingest unchanged in its existing `canonical.*` n
 
 Goal: propose a draft IR from example exports. Header union across the sample files plus type and length inference, LLM-assisted, with the curated layer (keys, mandatory, enums, PII) flagged for ratify rather than decided.
 Lands in: Cortex / Atlas.
+Hosts physically in cortex-dis (dis-ui-server inference plus tools/codegen for the draft-IR schema), with logical ownership in Cortex/Atlas, mirroring the A1 generator. A3 uses the existing DIS Vertex generative boundary (the dis-ui-server `_call_model` seam), not the Cortex A05 gateway; the A05 guardrail is a Cortex construct and does not bind DIS.
 Depends on: the IR shape only; sequenced after A1 so the consumer of a ratified IR exists.
 Acceptance: feed retail's example exports; the proposed IR is close to the hand-authored retail IR (measured by diff), with every curated item flagged and every value stamped `origin: inferred`.
 

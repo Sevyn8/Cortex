@@ -38,10 +38,10 @@ Acceptance: feed retail's example exports; the proposed IR is close to the hand-
 
 ### A4. Override editor and the console surfaces
 
-Goal: the Atlas console: registry, upload, the editable ratify grid (with add and delete, editable enum and natural key, the human-override marker), published detail, evolve, and the publish receipt, plus the DIS sidebar entry (Super Admin only). Publish freezes the IR and triggers A1 generation.
-Lands in: Cortex / Atlas (surfaces), DIS sidebar wiring.
-Depends on: A1 (generation on publish), A3 (a draft to edit).
-Acceptance: a Super Admin uploads exports, edits the inferred schema, every edit flips the value to `origin: human`, publish freezes an immutable version and produces the artifacts, and the receipt shows the result.
+Goal: the Atlas console: registry, upload, the editable ratify grid (with add and delete, editable enum and natural key, the human-override marker), published detail, evolve, and the publish receipt, plus the DIS sidebar entry (Super Admin only). Publish freezes the ratified IR as an immutable versioned artifact and writes the publish audit event; it does not synchronously generate code or run a migration.
+Lands in: physically services/dis-ui (the single DIS SPA) for the console surfaces, with the BFF endpoints in services/dis-ui-server; logical ownership stays Cortex/Atlas, mirroring the A1/A3 hosting precedent. NOT a separate Cortex frontend (that would violate dis-ui's single-SPA, one-backend invariant). The DIS sidebar Atlas entry is Super Admin only.
+Depends on: A1 (generation over the frozen IR), A3 (a draft to edit).
+Acceptance: a Super Admin uploads exports, edits the inferred schema, every edit flips the value to `origin: human`, publish freezes an immutable version and writes the publish audit event, and the receipt shows the result. A1 generation runs out-of-band over the frozen IR through the normal branch/PR/migration gate (it is not a synchronous side effect of the publish request).
 
 ### A5. CM gate and tenant-to-vertical binding (Sanjeev swimlane)
 

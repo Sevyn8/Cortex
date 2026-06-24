@@ -91,7 +91,7 @@ Two protections hold: the system profile (section 4) is read-only; and the Super
 
 From one IR, the generator deterministically emits: the `dis-canonical`-equivalent Pydantic models (closed, `extra="forbid"`, referencing the shared constrained-type aliases and enums); the `dis_validation` provenance partition for the vertical (the five-way classification, so the boot drift check passes); the Postgres DDL; the forward-only Alembic migration (reproducing the target-safety guard idiom from versions 0001 to 0012); and the field-catalog inputs. Where labels are authored (A4), the generator emits them too; until then retail's existing hand-authored labels stand.
 
-Physical storage is a separate `canonical_<vertical>` schema namespace per vertical (ADR decision 3). The one pipeline generalization is widening the sink lookup from model-to-table to (vertical, template_type)-to-table.
+Physical storage is a per-vertical schema namespace. The legacy retail vertical keeps the existing `canonical.*` namespace (it predates this scheme); every new vertical is born into `canonical_<vertical>.*` (for example `canonical_pharma.*`). The namespace is declared data per vertical (retail's namespace = `canonical`), not computed by suffixing, so the historical exception lives in one legible place. The one pipeline generalization is widening the sink lookup from model-to-table to (vertical, template_type)-to-table, resolving through the declared namespace.
 
 This is the introspection-driven codegen `dis-canonical` records as deferred (`tools/codegen`, not yet existing), reframed as header-driven and per-vertical, and it is hosted in `cortex-dis/tools/codegen` (ADR-ATLAS-001 decision 2 as amended), with logical ownership in Cortex/Atlas and the frozen IR document as the cross-repo contract.
 
@@ -130,7 +130,7 @@ tables:
   - key: store_sku_current_position
     template_type: snapshot
     semantics: merge_upsert
-    sink: canonical_retail.store_sku_current_position
+    sink: canonical.store_sku_current_position
     natural_key: [store_id, sku_id, sku_variant, sku_lot_batch]
     fields:
       - { name: id,                   type: uuid, nullable: false, default: "uuidv7()",

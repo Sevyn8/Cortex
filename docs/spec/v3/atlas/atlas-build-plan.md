@@ -43,6 +43,12 @@ Lands in: physically services/dis-ui (the single DIS SPA) for the console surfac
 Depends on: A1 (generation over the frozen IR), A3 (a draft to edit).
 Acceptance: a Super Admin uploads exports, edits the inferred schema, every edit flips the value to `origin: human`, publish freezes an immutable version and writes the publish audit event, and the receipt shows the result. A1 generation runs out-of-band over the frozen IR through the normal branch/PR/migration gate (it is not a synchronous side effect of the publish request).
 
+Open items (deferred). These are A4 status/open items recorded with the phase (distinct from the v0 capability deferrals at the bottom of this plan). Each names what un-parks it.
+
+- A4-D1 (interim auth, unverified end to end). dis-ui auth is interim stub-token only and unverified end to end. Local dev-login is non-functional (the baked `VITE_STUB_TOKEN_*` values are unpopulated) and the super-admin persona has no token slot in `DevLogin.tsx` (a dead button). This is NOT being fixed as interim scaffolding; Auth0 replaces the stub-token mechanism. `verifyToken.ts` is the HMAC-to-JWKS swap seam (decisions.md D25). When Auth0 lands, the Atlas console super-admin gate (`atlas:schema:publish`) is exercised through the real flow for the first time.
+- A4-D2 (no manual end-to-end walkthrough). No manual end-to-end walkthrough of the Atlas console (upload, infer, ratify, publish against the live stack) was performed. Correctness is enforced and tested server-side (PR1 handler tests, PR2 integration tests including the immutability trigger, PR3a list tests) and the UI affordance and boundary are component-tested; the wired UI loop is unverified pending Auth0-enabled manual testing (un-parked with A4-D1).
+- A4-D3 (frontend CI gap). The foundation gate is Python only (ruff plus pytest, no-DB); the dis-ui tests (`pnpm test` / `pnpm tsc` / `pnpm lint`) do not run in CI. Frontend PRs merge on local `pnpm test` alone. Candidate fix: a dis-ui CI job alongside foundation, the same way foundation was stood up before A2.
+
 ### A5. CM gate and tenant-to-vertical binding (Sanjeev swimlane)
 
 Goal: the `atlas:schema:publish` Super Admin role and route guard, the audit-ledger publish event, and the tenant-to-vertical binding that onboarding reads.

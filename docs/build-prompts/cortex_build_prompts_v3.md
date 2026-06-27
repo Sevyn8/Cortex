@@ -73,7 +73,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 
 ### Third-party providers
 
-- [ ] WorkOS account created (or accept deferred setup for Week 4)
+- [ ] Auth0 account created (or accept deferred setup for Week 4)
 - [ ] Anthropic API key procured for A05 LLM Gateway usage
 - [ ] Email provider chosen (Resend recommended for Phase 1)
 - [ ] Artifact storage plan — Google Artifact Registry (same GCP project)
@@ -94,7 +94,7 @@ Work through this list BEFORE pasting M1 into Claude Code. Every box ticked = yo
 ### Legal / compliance
 
 - [ ] DPA between Sevyn8 and Display Data drafted (can sign during build, MUST sign before production)
-- [ ] Sub-processor list at T-0 documented (GCP, Anthropic, WorkOS, Resend, etc.)
+- [ ] Sub-processor list at T-0 documented (GCP, Anthropic, Auth0, Resend, etc.)
 - [ ] DPDP compliance posture documented
 
 Once every box is ticked, paste M1 into Claude Code, then P0.1.
@@ -103,13 +103,13 @@ Once every box is ticked, paste M1 into Claude Code, then P0.1.
 
 # Architectural decisions — baked defaults
 
-The v1 prompts left several choices open ("Auth0 or WorkOS"). This v2 bakes in specific defaults. Deviate only with an ADR capturing why.
+The v1 prompts left several choices open ("Auth0 or WorkOS"). This v2 bakes in specific defaults. Deviate only with an ADR capturing why. (Auth provider: resolved to Auth0 by ADR-STACK-001, superseding the WorkOS default below.)
 
 ### Stack
 
 | Decision             | Default                                                  | Rationale                                                                         |
 | -------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **Auth provider**    | WorkOS                                                   | B2B multi-tenant focus; Enterprise SSO first-class; simpler DX than Auth0         |
+| **Auth provider**    | Auth0                                                    | CM is the Auth0-based identity SSOT; one identity authority                       |
 | **Monorepo tool**    | Turborepo                                                | Faster, less ceremony; re-evaluate Nx at Phase 2 if repo complexity grows         |
 | **ORM**              | Drizzle                                                  | TypeScript-first, bi-temporal column friendly, avoids Prisma's migration friction |
 | **CSS framework**    | Tailwind 4                                               | Pin to v4.x; use CSS vars exclusively for tenant theming                          |
@@ -387,7 +387,7 @@ The following must be the content of `/CLAUDE.md` after P0.1 completes:
 
 ## Stack constraints
 
-- Auth: WorkOS (not Auth0, not self-hosted)
+- Auth: Auth0 (not self-hosted; CM is the identity SSOT, ADR-STACK-001)
 - ORM: Drizzle (not Prisma, not raw pg)
 - Monorepo: Turborepo (not Nx)
 - CSS: Tailwind 4 with CSS vars for theming
@@ -790,7 +790,7 @@ Three apps under /apps/ — previously scaffolded as .gitkeep in P0.1, now popul
 /apps/mcp-admin-ops/
 — Sevyn8-only MCP server, cross-tenant capable, privileged
 — Consumers: Sevyn8 CSMs + engineers (via Claude Code or similar)
-— Auth: WorkOS SSO + Super Admin role enforcement (stub until AC01 lands)
+— Auth: Auth0 SSO + Super Admin role enforcement (stub until AC01 lands)
 — Trust model: ADR-MCP-004 (stub at P0.8)
 — CRITICAL: Network ingress restricted to Sevyn8 VPC; no public endpoint
 
@@ -884,14 +884,14 @@ AC01 will not be built yet, but we need a documented, repeatable way to create t
 
 /scripts/bootstrap/
 create-super-admin.ts
-— Prompts for email, name, initial password (dev/staging only; production uses WorkOS SSO from day one)
+— Prompts for email, name, initial password (dev/staging only; production uses Auth0 SSO from day one)
 — Writes to a bootstrap_admin table (migration created here)
 — Once AC01 is built, this row is promoted to a real users row via migration
 — Idempotent (safe to re-run)
 
 Also:
 
-- Document the production Super Admin process: WorkOS SSO with an initial user specified via environment variable, validated on AC01 first run
+- Document the production Super Admin process: Auth0 SSO with an initial user specified via environment variable, validated on AC01 first run
 - Document emergency break-glass procedure at /docs/runbooks/super-admin-bootstrap.md
 
 Acceptance:
@@ -1280,7 +1280,7 @@ Scope per AC01-FR-001 through AC01-FR-NNN:
    - Column-level PII masking: policies can return a masking directive
 
 3. Authentication
-   - OAuth2 + OIDC (self-hosted via Auth0 or WorkOS for Enterprise tenants)
+   - OAuth2 + OIDC (via Auth0 for Enterprise tenants)
    - JWT issuance with tenant_id, user_id, roles, scopes claims
    - Session management, refresh token rotation
    - MFA enforcement (TOTP + WebAuthn)
@@ -4239,7 +4239,7 @@ Last updated: [YYYY-MM-DD]
 - [ ] Pro or Max plan active
 - [ ] GitHub org + repo set up
 - [ ] GCP org + billing + projects
-- [ ] WorkOS account created
+- [ ] Auth0 account created
 - [ ] Resend account created
 - [ ] Anthropic API key for A05 procured
 - [ ] Ithina contacts confirmed (HHT, POS, training data)
@@ -4403,7 +4403,7 @@ Every decision below is baked into the v2 prompts. Override only with ADR captur
 
 | ID            | Decision        | Choice                       | Baked into prompt                                                                                                                                                 |
 | ------------- | --------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ADR-STACK-001 | Auth provider   | WorkOS                       | P2.1, CLAUDE.md                                                                                                                                                   |
+| ADR-STACK-001 | Auth provider   | Auth0                        | P2.1, CLAUDE.md                                                                                                                                                   |
 | ADR-STACK-002 | Monorepo tool   | Turborepo                    | P0.1, CLAUDE.md                                                                                                                                                   |
 | ADR-STACK-003 | ORM             | Drizzle                      | P0.4, CLAUDE.md                                                                                                                                                   |
 | ADR-STACK-004 | CSS framework   | Tailwind 4                   | P6.2                                                                                                                                                              |
@@ -4461,7 +4461,7 @@ Even with all the above addressed, expect these to surface during build. Awarene
 
 3. **Ithina readiness.** The HHT app, POS file format, training data may not all be ready when you reach P11.2. Fallback plan: synthetic data from P10.6 harness carries Phase 1 to "technically validated"; real data integration gated on Ithina's timelines.
 
-4. **WorkOS integration time.** Enterprise SSO setup has its own multi-week onboarding. Start this out-of-band in Week 1 so it's ready when you reach P2.1.
+4. **Auth0 integration time.** Enterprise SSO setup has its own multi-week onboarding. Start this out-of-band in Week 1 so it's ready when you reach P2.1.
 
 5. **Model training time for YOLO fine-tune.** Not code work, but hours of compute and days of iteration. If Ithina's annotated data isn't immediately available, agents run with baseline accuracy until retraining catches up. Flag to stakeholders.
 

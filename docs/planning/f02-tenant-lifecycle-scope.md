@@ -223,7 +223,7 @@ Per D9 lock. F02 spec mentions workspaces; correct ownership is AC02. Convention
 
 - **Cloud Tasks queue config (Q-OPEN-1):** `provisioning-queue` with exponential backoff (Cloud Tasks default 30s → 5min → 30min cap), max 5 attempts, concurrency cap of 10 per queue (each provisioning is 5–30 min; >10 risks DB connection exhaustion). `taskId = 'provisioning-{tenant_id}'` for built-in dedup.
 - **IC01 vertical-package seed (Q-OPEN-4):** Provisioning seeds `tenant_config_version` v=1 with empty `config_json: {}`. IC01 (P5.2) swaps to vertical-package seed when shipped. Hardcoding Display Data's vertical seed rejected: couples F02 to a specific tenant.
-- **Initial admin invite (Q-OPEN-5):** Provisioning emits `TENANT_PROVISIONED` audit event with tenant metadata; W01 (when shipped) consumes for invite. F02 does not block on W01 or WorkOS.
+- **Initial admin invite (Q-OPEN-5):** Provisioning emits `TENANT_PROVISIONED` audit event with tenant metadata; W01 (when shipped) consumes for invite. F02 does not block on W01 or Auth0.
 - **Enterprise Cloud SQL manual approval gate (Q-OPEN-6):** Provisioning for `tier='ENTERPRISE'` creates the `tenant` row with `status='REQUESTED'` and waits. An admin marks `tenant.dedicated_db_approved=true` via the control plane (HTTP API in Slice D; for Slice A, direct DB update by a Sevyn8 operator). Provisioning continues from REQUESTED → PROVISIONING → READY only after approval. Cost rationale: each Cloud SQL instance is $50–200/month; auto-provisioning on every Enterprise signup is operationally risky at low volume. Convention doc §9 documents the pattern + upgrade path (when Enterprise volume hits ~10/month, automate).
 
 **Three stub swaps:**
@@ -345,7 +345,7 @@ tenant_id-only dedup means a failed provisioning blocks resubmission for the sam
 
 ### 4. W01 admin-invite event consumer (Q-OPEN-5; future)
 
-F02 emits `TENANT_PROVISIONED` audit event on provisioning success. W01 (Tenant Onboarding Wizard) is the intended consumer — reads the event, creates the initial admin invite via WorkOS. F02 does not block on W01.
+F02 emits `TENANT_PROVISIONED` audit event on provisioning success. W01 (Tenant Onboarding Wizard) is the intended consumer — reads the event, creates the initial admin invite via Auth0. F02 does not block on W01.
 
 **Tracking:** Roadmap entry for W01 to subscribe to `TENANT_PROVISIONED` events when W01 ships.
 

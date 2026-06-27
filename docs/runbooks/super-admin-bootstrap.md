@@ -2,7 +2,7 @@
 
 Procedure for creating the first Super Admin identity per environment. Dev
 and staging run a local CLI that writes a `bootstrap_admin` row and stores
-the initial password in Secret Manager. Production uses WorkOS SSO — no
+the initial password in Secret Manager. Production uses Auth0 SSO — no
 password, no CLI.
 
 Authoritative: P0.9 build prompt (`docs/build-prompts/cortex_build_prompts_v3.md:851`)
@@ -16,7 +16,7 @@ Authoritative: P0.9 build prompt (`docs/build-prompts/cortex_build_prompts_v3.md
   row present are idempotent no-ops (see "Idempotency + what the script
   refuses" below).
 - **Production**: never via this script. See
-  [Production procedure](#production-procedure-workos-sso).
+  [Production procedure](#production-procedure-auth0-sso).
 
 ## Prerequisites
 
@@ -66,7 +66,7 @@ Next steps:
   - See /docs/runbooks/super-admin-bootstrap.md#post-ac01-promotion.
 ```
 
-## Production procedure (WorkOS SSO)
+## Production procedure (Auth0 SSO)
 
 Production does **not** run this CLI. The bootstrap path:
 
@@ -75,12 +75,12 @@ Production does **not** run this CLI. The bootstrap path:
    CORTEX_SUPER_ADMIN_EMAIL=<initial-admin@sevyn8.com>
    ```
 2. On AC01 first-run (P2.1 onward), AC01:
-   - Looks up the WorkOS user matching that email (creating it via the
-     WorkOS admin API if it doesn't exist yet)
+   - Looks up the Auth0 user matching that email (creating it via the
+     Auth0 Management API if it doesn't exist yet)
    - Assigns the `SUPER_ADMIN` platform role
    - Emits an audit event under the synthesized bootstrap tenant
 3. No initial password ever lives in prod Secret Manager. Authentication is
-   WorkOS SSO (SAML or OIDC, tenant-configured).
+   Auth0 SSO (SAML or OIDC, tenant-configured).
 
 The `cortex-auth-super-admin-initial-prod` secret is intentionally **not**
 provisioned in Terraform. If you need to override this (e.g., for a
@@ -89,7 +89,7 @@ first and adjust `infra/terraform/environments/prod/main.tf`.
 
 ## Emergency break-glass
 
-Scenarios: WorkOS is compromised, AC01 has a bug that locks out every
+Scenarios: Auth0 is compromised, AC01 has a bug that locks out every
 admin, or a prod deploy of AC01 never set `CORTEX_SUPER_ADMIN_EMAIL`.
 
 **This is a deliberate, audited procedure — not a casual flow.**
@@ -105,7 +105,7 @@ admin, or a prod deploy of AC01 never set `CORTEX_SUPER_ADMIN_EMAIL`.
    - Inserts a bootstrap-shaped row and relies on AC01's promotion flow, OR
    - Directly creates the `users` + `user_role_assignment(SUPER_ADMIN)`
      rows per AC01 schema.
-5. Post-incident: rotate WorkOS API credentials, rotate the bootstrap
+5. Post-incident: rotate Auth0 API credentials, rotate the bootstrap
    secret versions, reset AC01 role assignments as needed, file a
    post-mortem ADR.
 

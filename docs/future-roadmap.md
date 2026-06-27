@@ -283,7 +283,7 @@ Updated whenever a deferral is added or revisited.
 ### 2.4 VPC egress hardening
 
 - **Item:** Replace TCP:443→0.0.0.0/0 firewall rule with IP-allowlist or egress proxy
-- **Current state:** Open egress on TCP:443 (only outbound path for Anthropic, Resend, WorkOS — all dynamic-IP APIs). NAT logs every outbound, but allowlist hardening deferred.
+- **Current state:** Open egress on TCP:443 (only outbound path for Anthropic, Resend, Auth0 — all dynamic-IP APIs). NAT logs every outbound, but allowlist hardening deferred.
 - **Future options:**
   1. Egress proxy (Squid or similar) terminating outbound TLS, with per-destination allowlist.
   2. Per-destination static routes via Service Connect (where APIs offer it).

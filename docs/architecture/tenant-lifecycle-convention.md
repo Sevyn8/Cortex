@@ -781,7 +781,7 @@ event-sourced, push-style (per planning-doc Drift 3 + Drift 4).
 
 | Consumer                          | Trigger                 | Action on `TENANT_SUSPENDED`                                                                     |
 | --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
-| **AC01** (Agent Control 01, P2.1) | Subscribes when shipped | Revoke active sessions for the suspended tenant. WorkOS session-revoke RPC keyed on `tenant_id`. |
+| **AC01** (Agent Control 01, P2.1) | Subscribes when shipped | Revoke active sessions for the suspended tenant. Auth0 session-revoke RPC keyed on `tenant_id`.  |
 | **S15** (Smart device pause)      | Subscribes when shipped | Halt outbound device commands; flush in-flight queue.                                            |
 | **S17** (Outbound stop)           | Subscribes when shipped | Drain in-flight egress; pause new sends.                                                         |
 
@@ -2342,7 +2342,7 @@ acceptance evidence; the spec is the automation-ready form.
   `/v1/tenants/*` endpoint. The §7.6 endpoint-table "Scope" column
   (`open²` vs `super-admin`) is the seam, but the actual gate stays
   the Phase-1 placeholder (`defaultSuperAdminGuard` no-op + Cloud
-  Run invoker IAM floor). AC01 (P2.1) replaces both with WorkOS
+  Run invoker IAM floor). AC01 (P2.1) replaces both with Auth0
   role membership checks.
 - **`allUsers` removal** — the Cortex Cloud Run service was never
   configured with `--allow-unauthenticated` in any env. There's no
@@ -2366,10 +2366,10 @@ without wiring this — operator-runnable (the
 `CORTEX_INTEGRATION_TESTS=1` flag) is sufficient for Phase 1.
 
 AC01 layers per-method authz on top of D.5's invoker floor. Cloud
-Run IAM stays as the platform-level deny; per-method WorkOS-role
+Run IAM stays as the platform-level deny; per-method Auth0-role
 checks gate inside the app. The two compose: a request needs both
 (a) a token from a member of the invoker allowlist AND (b) the
-right WorkOS role for the route's required permission.
+right Auth0 role for the route's required permission.
 
 ### 7.8 Forensic queries `[F02-D.6]`
 
@@ -2777,8 +2777,8 @@ $1 AND scope IN ('record', 'data_class') AND released_at IS NULL`
 
 - Per Q-OPEN-5: Slice A emits `TENANT_PROVISIONED` audit event;
   W01 (Tenant Onboarding Wizard) is the intended consumer — reads
-  the event, creates the initial admin invite via WorkOS.
-- F02 does not block on W01 or WorkOS — pure event-sourcing
+  the event, creates the initial admin invite via Auth0.
+- F02 does not block on W01 or Auth0 — pure event-sourcing
   pattern. W01 ship subscribes (initially via `audit_event` poll;
   Pub/Sub fan-out per roadmap §4.12 when that ships).
 

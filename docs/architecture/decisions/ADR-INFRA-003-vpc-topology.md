@@ -74,7 +74,7 @@ Specifically:
 Every egress that leaves the VPC passes through Cloud NAT. Three reasons:
 
 1. **Logging for compliance.** Cloud NAT logs every outbound connection with source subnet, dest IP, port, time. Required for audit evidence in Enterprise-tier compliance reviews.
-2. **Predictable external IPs.** Upstream APIs (Anthropic, Resend, WorkOS, future Kafka producers) may require IP allowlisting. NAT gives each VPC a stable set of NAT IPs to provide to upstream allowlists.
+2. **Predictable external IPs.** Upstream APIs (Anthropic, Resend, Auth0, future Kafka producers) may require IP allowlisting. NAT gives each VPC a stable set of NAT IPs to provide to upstream allowlists.
 3. **Defense in depth.** NAT-only egress means workloads cannot accidentally receive inbound traffic from the internet — any public-IP config leak is self-contained because the VPC has no public-IP resources by default.
 
 Configuration: `nat_ip_allocate_option = "AUTO_ONLY"` (auto-allocated IPs; switch to manual only when a specific upstream needs a pre-declared IP), `source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"`, `min_ports_per_vm = 64`, `log_config { enable = true, filter = "ALL" }`.
@@ -93,7 +93,7 @@ Five rules per VPC — intentionally minimal:
 
 - **Rule 1 overrides GCP's implicit `allow-all-egress` at priority 65535.** The default-deny is not a no-op.
 - **Rule 2 uses the `restricted.googleapis.com` and `private.googleapis.com` ranges** — Google API traffic takes the Private Google Access path, avoiding NAT and egress cost.
-- **Rule 3 is the open-internet hardening gap.** TCP:443 to `0.0.0.0/0` is the only outbound path to third-party APIs (Anthropic, Resend, WorkOS — all with dynamic IPs). Marked in code with a `TODO(P11.x)` comment enumerating hardening options (egress proxy, per-destination routing, Service Connect).
+- **Rule 3 is the open-internet hardening gap.** TCP:443 to `0.0.0.0/0` is the only outbound path to third-party APIs (Anthropic, Resend, Auth0 — all with dynamic IPs). Marked in code with a `TODO(P11.x)` comment enumerating hardening options (egress proxy, per-destination routing, Service Connect).
 - **Rule 4 allows VPC-internal traffic.** GCP's implicit ingress deny-all at 65535 handles everything else.
 - **Rule 5 allows VPC-internal egress within the env's /16.** Required for the Serverless VPC Access connector subnet (`10.X.32.0/28`) to reach Cloud SQL private IP (`10.X.240.0/20` PSA range) on TCP:3307 via the Cloud SQL Auth Proxy. Without it, rule 1's default-deny catches connector→PSA traffic before the proxy can establish.
 

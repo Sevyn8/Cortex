@@ -59,7 +59,7 @@ Four or more servers was considered and rejected as over-decomposition. Three se
 | ---------------- | ------------------------------- | ------------------------------------ | --------------------------------- |
 | Network zone     | Cloud (public internet ingress) | Edge (device networks)               | Cloud (Sevyn8 VPC only)           |
 | Trust boundary   | Tenant-scoped, multi-tenant     | Device-scoped, tenant-attributed     | Sevyn8-staff-scoped, cross-tenant |
-| Auth             | OAuth2 via AC01 (per-tenant)    | Device credentials + AC01 delegation | WorkOS SSO + Super Admin role     |
+| Auth             | OAuth2 via AC01 (per-tenant)    | Device credentials + AC01 delegation | Auth0 SSO + Super Admin role      |
 | Rate limits      | Per-tenant, per-user            | Per-device                           | Per-Sevyn8-user                   |
 | Audit            | SCR-20 per-tenant               | SCR-20 per-tenant (device events)    | SCR-20 cross-tenant + PR03 review |
 | Scaling          | High concurrency                | Many low-rate clients                | Low concurrency                   |
@@ -106,7 +106,7 @@ This becomes particularly important for mcp-admin-ops, which by design has cross
 
 ### Neutral
 
-- **Compliance implications.** MCP's OAuth2 flow integrates cleanly with AC01 (WorkOS-backed). Audit-log integration is straightforward. DPDP reviewers receive the same audit artifacts whether access is UI-driven or MCP-driven; the access mode is metadata, not a compliance distinction.
+- **Compliance implications.** MCP's OAuth2 flow integrates cleanly with AC01 (Auth0-backed). Audit-log integration is straightforward. DPDP reviewers receive the same audit artifacts whether access is UI-driven or MCP-driven; the access mode is metadata, not a compliance distinction.
 - **Learning curve.** Engineers unfamiliar with MCP pay a one-time learning cost. No higher than any other protocol adoption.
 
 ## Alternatives considered
@@ -155,7 +155,7 @@ Rejected. While REST + rich OpenAPI documentation is technically sufficient for 
 │                      │                   │                              │
 │  Thin MCP adapter    │  Thin MCP adapter │  Thin MCP adapter            │
 │  - HTTPS + SSE       │  - HTTPS + SSE    │  - HTTPS + SSE (VPC-only)    │
-│  - OAuth2 via AC01   │  - Device creds   │  - WorkOS SSO + Super Admin  │
+│  - OAuth2 via AC01   │  - Device creds   │  - Auth0 SSO + Super Admin   │
 │  - Per-tenant audit  │  - Device audit   │  - Cross-tenant audit + PR03 │
 └──────────────────────┴───────────────────┴──────────────────────────────┘
 ```

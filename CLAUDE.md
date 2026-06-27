@@ -92,7 +92,7 @@ Background on why there is no admin bypass and the solo-dev review posture lives
 
 ## Stack constraints
 
-- Auth: WorkOS (not Auth0, not self-hosted)
+- Auth: Auth0 (not self-hosted; CM is the identity SSOT, ADR-STACK-001)
 - ORM: Drizzle (not Prisma, not raw pg)
 - Monorepo: Turborepo (not Nx)
 - CSS: Tailwind 4 with CSS vars for theming

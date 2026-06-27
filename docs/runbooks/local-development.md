@@ -27,7 +27,7 @@ pnpm --version           # 10.33.x
 ```bash
 cd ~/projects/Cortex
 cp .env.example .env.local
-# Fill in secrets you have (WorkOS, Anthropic, Resend).
+# Fill in secrets you have (Auth0, Anthropic, Resend).
 # Placeholders OK for emulator-only work.
 pnpm install
 make up
